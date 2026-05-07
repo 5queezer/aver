@@ -71,6 +71,8 @@ pub enum PrivacyRejection {
     AwsAccessKey,
     #[error("GitHub personal access token")]
     GitHubPat,
+    #[error("GitHub fine-grained personal access token")]
+    GitHubFineGrainedPat,
 }
 
 pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
@@ -85,6 +87,12 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
         .any(|token| token.starts_with("ghp_") && token.len() >= 40)
     {
         return Err(PrivacyRejection::GitHubPat);
+    }
+    if content
+        .split_whitespace()
+        .any(|token| token.starts_with("github_pat_") && token.len() >= 40)
+    {
+        return Err(PrivacyRejection::GitHubFineGrainedPat);
     }
     Ok(())
 }
