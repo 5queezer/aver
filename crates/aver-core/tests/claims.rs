@@ -282,6 +282,26 @@ fn recall_text_matches_attendee_role_from_attends_query() {
 }
 
 #[test]
+fn recall_text_matches_acronym_claim_from_expanded_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let mcp_id = store
+        .add_claim("protocol", "name", "MCP", "test_session")
+        .unwrap();
+    store
+        .add_claim("protocol", "transport", "HTTP", "test_session")
+        .unwrap();
+
+    let matches = store.recall_text("model context protocol").unwrap();
+
+    assert_eq!(
+        matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+        vec![mcp_id]
+    );
+}
+
+#[test]
 fn claim_text_renders_subject_predicate_object_for_embedding() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

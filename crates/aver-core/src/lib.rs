@@ -1194,7 +1194,7 @@ impl Store {
     }
 
     pub fn recall_text(&self, query: &str) -> Result<Vec<Claim>, Error> {
-        let query_tokens = tokenize_for_recall(query);
+        let query_tokens = query_tokens_for_recall(query);
         if query_tokens.is_empty() {
             return Ok(Vec::new());
         }
@@ -1285,6 +1285,20 @@ impl Store {
         });
         Ok(scored_claims.into_iter().map(|(_, claim)| claim).collect())
     }
+}
+
+fn query_tokens_for_recall(query: &str) -> Vec<String> {
+    let mut tokens = tokenize_for_recall(query);
+    if tokens.len() >= 3 {
+        let acronym: String = tokens
+            .iter()
+            .filter_map(|token| token.chars().next())
+            .collect();
+        if acronym.len() >= 2 && !tokens.contains(&acronym) {
+            tokens.push(acronym);
+        }
+    }
+    tokens
 }
 
 fn tokenize_for_recall(text: &str) -> Vec<String> {

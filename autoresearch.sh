@@ -24,7 +24,8 @@ if [ "$TEST_EXIT" -eq 0 ] && [ "$RED" -eq 0 ]; then
     eval/fixtures/natural_query_noise.json \
     eval/fixtures/camel_case_memory_terms.json \
     eval/fixtures/abstention.json \
-    eval/fixtures/predicate_role_morphology.json 2>&1)
+    eval/fixtures/predicate_role_morphology.json \
+    eval/fixtures/acronym_expansion.json 2>&1)
   BENCH_EXIT=$?
 fi
 

@@ -1,0 +1,13 @@
+{
+  "name": "acronym_expansion",
+  "version": 1,
+  "description": "Expanded natural terms should find acronym memories without returning broad same-subject protocol facts",
+  "claims": [
+    {"subject": "protocol", "predicate": "name", "object": "MCP"},
+    {"subject": "protocol", "predicate": "transport", "object": "HTTP"},
+    {"subject": "server", "predicate": "supports", "object": "OAuth"}
+  ],
+  "queries": [
+    {"query": "model context protocol", "relevant_indices": [0], "top_k": 5}
+  ]
+}
