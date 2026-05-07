@@ -279,6 +279,30 @@ impl Store {
             .map_err(Error::from)
     }
 
+    /// List vector chunk metadata for a claim in stable insertion order.
+    pub fn list_vector_chunks_for_claim(&self, claim_id: i64) -> Result<Vec<VectorChunk>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, claim_id, text, embedding_model
+               FROM vector_chunks
+              WHERE claim_id = ?1
+              ORDER BY id",
+        )?;
+        let rows = stmt.query_map([claim_id], |row| {
+            Ok(VectorChunk {
+                id: row.get(0)?,
+                claim_id: row.get(1)?,
+                text: row.get(2)?,
+                embedding_model: row.get(3)?,
+            })
+        })?;
+
+        let mut chunks = Vec::new();
+        for row in rows {
+            chunks.push(row?);
+        }
+        Ok(chunks)
+    }
+
     /// Text-only keyword recall over active claims. This is the v0.1
     /// precursor to HybridRAG: cheap SQLite substring matching across the
     /// claim triple fields, ordered deterministically by id.
