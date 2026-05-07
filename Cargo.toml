@@ -23,6 +23,9 @@ tempfile    = "3"
 tree-sitter = "0.22"
 tree-sitter-rust = "0.21"
 
+[workspace.metadata.memory]
+shared_mode = "planned"
+
 [profile.release]
 opt-level     = "z"
 lto           = "fat"
