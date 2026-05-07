@@ -421,12 +421,15 @@ impl Store {
         client: &impl vector::EmbeddingClient,
         top_k: usize,
     ) -> Result<Vec<Claim>, Error> {
-        let chunks = self.recall_vector_chunks(query, client, top_k)?;
+        let chunks = self.recall_vector_chunks(query, client, usize::MAX)?;
         let mut seen = HashSet::new();
         let mut claims = Vec::new();
         for chunk in chunks {
             if seen.insert(chunk.claim_id) {
                 claims.push(self.get_claim(chunk.claim_id)?);
+                if claims.len() == top_k {
+                    break;
+                }
             }
         }
         Ok(claims)
