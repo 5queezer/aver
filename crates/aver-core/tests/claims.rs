@@ -176,17 +176,17 @@ fn recall_text_prefers_claims_covering_multiple_query_tokens() {
 }
 
 #[test]
-fn recall_text_caps_ambiguous_single_token_queries_to_best_match() {
+fn recall_text_ranks_ambiguous_single_token_queries_deterministically() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
 
     let project_rust_id = store
         .add_claim("project", "language", "Rust", "test_session")
         .unwrap();
-    store
+    let user_rust_id = store
         .add_claim("user", "likes", "Rust", "test_session")
         .unwrap();
-    store
+    let benchmark_rust_id = store
         .add_claim("benchmark", "language", "Rust", "test_session")
         .unwrap();
 
@@ -194,7 +194,30 @@ fn recall_text_caps_ambiguous_single_token_queries_to_best_match() {
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
-        vec![project_rust_id]
+        vec![project_rust_id, user_rust_id, benchmark_rust_id]
+    );
+}
+
+#[test]
+fn recall_text_preserves_multi_answer_single_token_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let first = store
+        .add_claim("project", "language", "Rust", "test_session")
+        .unwrap();
+    let second = store
+        .add_claim("user", "likes", "Rust", "test_session")
+        .unwrap();
+    let third = store
+        .add_claim("benchmark", "language", "Rust", "test_session")
+        .unwrap();
+
+    let matches = store.recall_text("Rust").unwrap();
+
+    assert_eq!(
+        matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+        vec![first, second, third]
     );
 }
 

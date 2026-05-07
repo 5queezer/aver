@@ -1278,9 +1278,6 @@ impl Store {
                 .cmp(a_score)
                 .then_with(|| a_claim.id.cmp(&b_claim.id))
         });
-        if query_tokens.len() == 1 {
-            scored_claims.truncate(1);
-        }
         Ok(scored_claims.into_iter().map(|(_, claim)| claim).collect())
     }
 }
