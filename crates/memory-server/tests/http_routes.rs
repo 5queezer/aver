@@ -1,8 +1,10 @@
 use axum::{
     body::Body,
-    http::{Request, StatusCode},
+    http::{Method, Request, StatusCode, header},
 };
-use memory_server::{config::ServerConfig, http::build_router};
+use memory_server::{
+    auth::AuthDb, config::ServerConfig, http::build_router, oauth::pkce_s256_challenge,
+};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -33,4 +35,48 @@ async fn oauth_metadata_route_returns_discovery_document() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["issuer"], "https://aml.example.com");
+}
+
+#[tokio::test]
+async fn oauth_token_route_exchanges_authorization_code_with_pkce() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let db = AuthDb::open(&auth_db_path).unwrap();
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    let code = db
+        .store_authorization_code("client-1", "user-1", &pkce_s256_challenge(verifier))
+        .unwrap();
+    drop(db);
+
+    let config = ServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 3317,
+        base_url: "https://aml.example.com".to_string(),
+        memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
+        auth_db_path: auth_db_path.to_string_lossy().to_string(),
+    };
+    let app = build_router(config).unwrap();
+    let body = format!(
+        "grant_type=authorization_code&code={code}&client_id=client-1&code_verifier={verifier}"
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/oauth/token")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["token_type"], "Bearer");
+    assert!(json["access_token"].as_str().unwrap().len() > 10);
 }
