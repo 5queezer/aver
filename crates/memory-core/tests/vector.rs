@@ -2,6 +2,9 @@
 //! before any network I/O. ADR-0013 requires Rust HTTP to local Ollama; ADR-0004
 //! supplies HybridRAG's vector side.
 
+use std::io::{Read, Write};
+use std::net::TcpListener;
+
 use memory_core::vector::{
     OllamaEmbeddingClient, OllamaEmbeddingRequest, OllamaEmbeddingResponse, VectorBackend,
 };
@@ -87,4 +90,32 @@ fn ollama_embedding_client_parses_response_body_to_vector() {
         .unwrap();
 
     assert_eq!(embedding, vec![0.25, 0.75]);
+}
+
+#[test]
+fn ollama_embedding_client_posts_to_local_embeddings_endpoint() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0_u8; 2048];
+        let n = stream.read(&mut request).unwrap();
+        let request = String::from_utf8_lossy(&request[..n]);
+        assert!(request.starts_with("POST /api/embeddings "));
+
+        let body = r#"{"embedding":[0.1,0.2]}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+    });
+
+    let client = OllamaEmbeddingClient::new(format!("http://{addr}"), "nomic-embed-text");
+    let embedding = client.embed("hello memory").unwrap();
+
+    handle.join().unwrap();
+    assert_eq!(embedding, vec![0.1, 0.2]);
 }

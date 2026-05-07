@@ -8,6 +8,16 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, thiserror::Error)]
+pub enum EmbeddingError {
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("ollama http: {0}")]
+    Http(String),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum VectorBackend {
     #[default]
@@ -91,5 +101,13 @@ impl OllamaEmbeddingClient {
     pub fn parse_response_body(&self, body: &str) -> Result<Vec<f32>, serde_json::Error> {
         let response: OllamaEmbeddingResponse = serde_json::from_str(body)?;
         Ok(response.embedding)
+    }
+
+    pub fn embed(&self, prompt: &str) -> Result<Vec<f32>, EmbeddingError> {
+        let response = ureq::post(&self.embeddings_url())
+            .send_json(serde_json::to_value(self.request(prompt))?)
+            .map_err(|err| EmbeddingError::Http(err.to_string()))?
+            .into_string()?;
+        Ok(self.parse_response_body(&response)?)
     }
 }
