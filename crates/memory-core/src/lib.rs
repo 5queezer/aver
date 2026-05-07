@@ -65,8 +65,9 @@ pub struct VectorChunk {
     pub embedding: Option<Vec<f32>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PrivacyRejection {
+    #[error("AWS access key")]
     AwsAccessKey,
 }
 
@@ -201,6 +202,8 @@ impl Store {
         object: &str,
         source: &str,
     ) -> Result<i64, Error> {
+        privacy_filter(&format!("{subject} {predicate} {object} {source}"))?;
+
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
         // Pre-allocate the claim id. Single-writer assumption: rusqlite's
@@ -577,6 +580,8 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("embedding: {0}")]
     Embedding(#[from] vector::EmbeddingError),
+    #[error("privacy filter rejected content: {0:?}")]
+    Privacy(#[from] PrivacyRejection),
     #[error("invalid {kind} value in database: {value:?}")]
     EnumParse { kind: &'static str, value: String },
 }
