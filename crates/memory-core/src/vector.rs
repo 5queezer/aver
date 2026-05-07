@@ -3,6 +3,7 @@
 //! ADR-0013 keeps the Ollama boundary in Rust; this module starts with the
 //! deterministic JSON shape expected by Ollama's local embeddings endpoint.
 
+use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,15 @@ impl FromStr for VectorBackend {
             "qdrant" => Ok(Self::Qdrant),
             _ => Err("unknown vector backend"),
         }
+    }
+}
+
+impl fmt::Display for VectorBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::SqliteVss => "sqlite-vss",
+            Self::Qdrant => "qdrant",
+        })
     }
 }
 

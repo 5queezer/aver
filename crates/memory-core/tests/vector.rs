@@ -55,3 +55,9 @@ fn vector_backend_parses_qdrant_opt_in() {
         VectorBackend::Qdrant
     );
 }
+
+#[test]
+fn vector_backend_displays_config_values() {
+    assert_eq!(VectorBackend::SqliteVss.to_string(), "sqlite-vss");
+    assert_eq!(VectorBackend::Qdrant.to_string(), "qdrant");
+}
