@@ -1,8 +1,9 @@
 //! T55 — v0.3 starts with deterministic Tree-sitter Rust extraction.
 
 use memory_extractor::{
-    ExtractedFact, extract_rust_calls, extract_rust_facts, extract_rust_functions,
-    extract_rust_imports, extract_rust_structs, extract_rust_tests, map_rust_tests_to_functions,
+    ExtractedFact, extract_rust_calls, extract_rust_enums, extract_rust_facts,
+    extract_rust_functions, extract_rust_imports, extract_rust_structs, extract_rust_tests,
+    map_rust_tests_to_functions,
 };
 
 #[test]
@@ -31,6 +32,13 @@ fn extract_rust_structs_finds_struct_name() {
     let structs = extract_rust_structs("struct Claim { text: String }").unwrap();
 
     assert_eq!(structs, vec!["Claim".to_string()]);
+}
+
+#[test]
+fn extract_rust_enums_finds_enum_name() {
+    let enums = extract_rust_enums("enum MemoryError { ParseFailed }").unwrap();
+
+    assert_eq!(enums, vec!["MemoryError".to_string()]);
 }
 
 #[test]
