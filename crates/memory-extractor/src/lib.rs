@@ -101,6 +101,17 @@ pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
                 object: format!("Module:{module}"),
             }),
     );
+    facts.extend(extract_rust_function_call_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_rust_function_call_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_rust::language())?;
+    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+
+    let mut facts = Vec::new();
+    collect_function_call_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -186,6 +197,31 @@ fn collect_tests(node: Node<'_>, source: &[u8], tests: &mut Vec<String>) -> Resu
 
         collect_tests(child, source, tests)?;
         preceding_test_attr = false;
+    }
+    Ok(())
+}
+
+fn collect_function_call_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "function_item"
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        let caller = name.utf8_text(source)?.to_string();
+        let mut calls = Vec::new();
+        collect_calls(node, source, &mut calls)?;
+        facts.extend(calls.into_iter().map(|callee| ExtractedFact {
+            subject: format!("Function:{caller}"),
+            predicate: "calls".to_string(),
+            object: format!("Function:{callee}"),
+        }));
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_function_call_facts(child, source, facts)?;
     }
     Ok(())
 }

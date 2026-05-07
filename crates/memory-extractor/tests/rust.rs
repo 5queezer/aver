@@ -83,3 +83,14 @@ fn extract_rust_facts_emits_file_imports_module_triple() {
         }]
     );
 }
+
+#[test]
+fn extract_rust_facts_emits_function_calls_function_triple() {
+    let facts = extract_rust_facts("src/lib.rs", "fn remember() { recall(); }").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Function:remember".to_string(),
+        predicate: "calls".to_string(),
+        object: "Function:recall".to_string(),
+    }));
+}
