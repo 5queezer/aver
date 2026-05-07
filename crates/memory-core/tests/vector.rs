@@ -7,6 +7,7 @@ use std::net::TcpListener;
 
 use memory_core::vector::{
     OllamaEmbeddingClient, OllamaEmbeddingRequest, OllamaEmbeddingResponse, VectorBackend,
+    cosine_similarity,
 };
 
 #[test]
@@ -90,6 +91,13 @@ fn ollama_embedding_client_parses_response_body_to_vector() {
         .unwrap();
 
     assert_eq!(embedding, vec![0.25, 0.75]);
+}
+
+#[test]
+fn cosine_similarity_returns_one_for_identical_vectors() {
+    let score = cosine_similarity(&[1.0, 2.0, 3.0], &[1.0, 2.0, 3.0]).unwrap();
+
+    assert!((score - 1.0).abs() < f32::EPSILON);
 }
 
 #[test]

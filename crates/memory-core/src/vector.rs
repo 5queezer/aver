@@ -55,6 +55,23 @@ impl fmt::Display for VectorBackend {
     }
 }
 
+pub fn cosine_similarity(left: &[f32], right: &[f32]) -> Option<f32> {
+    if left.len() != right.len() || left.is_empty() {
+        return None;
+    }
+
+    let mut dot = 0.0;
+    let mut left_norm = 0.0;
+    let mut right_norm = 0.0;
+    for (&left, &right) in left.iter().zip(right) {
+        dot += left * right;
+        left_norm += left * left;
+        right_norm += right * right;
+    }
+
+    Some(dot / (left_norm.sqrt() * right_norm.sqrt()))
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct OllamaEmbeddingRequest<'a> {
     model: &'a str,
