@@ -77,7 +77,6 @@ fn add_claim_log_entry_claim_id_matches_sqlite_row_id() {
     // The JSONL log entry carries the same claim_id.
     let log_path = dir.path().join("log.jsonl");
     let log = std::fs::read_to_string(&log_path).unwrap();
-    let entry: serde_json::Value =
-        serde_json::from_str(log.lines().next().unwrap()).unwrap();
+    let entry: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
     assert_eq!(entry["claim_id"], serde_json::json!(claim_id));
 }

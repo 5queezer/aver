@@ -4,8 +4,9 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::Serialize;
 
 /// Embedded migrations applied in order on every `Store::open`.
@@ -51,19 +52,22 @@ impl Provenance {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::UserAsserted => "USER_ASSERTED",
-            Self::Extracted    => "EXTRACTED",
-            Self::Inferred     => "INFERRED",
-            Self::Ambiguous    => "AMBIGUOUS",
+            Self::Extracted => "EXTRACTED",
+            Self::Inferred => "INFERRED",
+            Self::Ambiguous => "AMBIGUOUS",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Result<Self, Error> {
+impl FromStr for Provenance {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self, Error> {
         match s {
             "USER_ASSERTED" => Ok(Self::UserAsserted),
-            "EXTRACTED"     => Ok(Self::Extracted),
-            "INFERRED"      => Ok(Self::Inferred),
-            "AMBIGUOUS"     => Ok(Self::Ambiguous),
-            other           => Err(Error::EnumParse {
+            "EXTRACTED" => Ok(Self::Extracted),
+            "INFERRED" => Ok(Self::Inferred),
+            "AMBIGUOUS" => Ok(Self::Ambiguous),
+            other => Err(Error::EnumParse {
                 kind: "Provenance",
                 value: other.to_string(),
             }),
@@ -82,18 +86,21 @@ pub enum ClaimStatus {
 impl ClaimStatus {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Active      => "ACTIVE",
-            Self::Superseded  => "SUPERSEDED",
+            Self::Active => "ACTIVE",
+            Self::Superseded => "SUPERSEDED",
             Self::Invalidated => "INVALIDATED",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Result<Self, Error> {
+impl FromStr for ClaimStatus {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self, Error> {
         match s {
-            "ACTIVE"      => Ok(Self::Active),
-            "SUPERSEDED"  => Ok(Self::Superseded),
+            "ACTIVE" => Ok(Self::Active),
+            "SUPERSEDED" => Ok(Self::Superseded),
             "INVALIDATED" => Ok(Self::Invalidated),
-            other         => Err(Error::EnumParse {
+            other => Err(Error::EnumParse {
                 kind: "ClaimStatus",
                 value: other.to_string(),
             }),
@@ -150,11 +157,11 @@ impl Store {
         // Pre-allocate the claim id. Single-writer assumption: rusqlite's
         // Connection is !Sync, so within a process this is race-free; SQLite
         // WAL serializes writers across processes.
-        let claim_id: i64 = self.conn.query_row(
-            "SELECT COALESCE(MAX(id), 0) + 1 FROM claims",
-            [],
-            |r| r.get(0),
-        )?;
+        let claim_id: i64 =
+            self.conn
+                .query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM claims", [], |r| {
+                    r.get(0)
+                })?;
 
         let entry = LogEntry {
             kind: "add_claim",
@@ -180,15 +187,28 @@ impl Store {
     /// Retrieve a claim by id.
     pub fn get_claim(&self, id: i64) -> Result<Claim, Error> {
         let (id, subject, predicate, object, provenance, confidence, status, source_refs): (
-            i64, String, String, String, String, f64, String, String,
+            i64,
+            String,
+            String,
+            String,
+            String,
+            f64,
+            String,
+            String,
         ) = self.conn.query_row(
             "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs
                FROM claims WHERE id = ?1",
             [id],
             |row| {
                 Ok((
-                    row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
-                    row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?,
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
                 ))
             },
         )?;
@@ -198,9 +218,9 @@ impl Store {
             subject,
             predicate,
             object,
-            provenance: Provenance::from_str(&provenance)?,
+            provenance: provenance.parse()?,
             confidence,
-            status: ClaimStatus::from_str(&status)?,
+            status: status.parse()?,
             source_refs: serde_json::from_str(&source_refs)?,
         })
     }
