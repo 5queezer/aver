@@ -21,3 +21,26 @@ impl<'a> OllamaEmbeddingRequest<'a> {
 pub struct OllamaEmbeddingResponse {
     pub embedding: Vec<f32>,
 }
+
+#[derive(Debug, Clone)]
+pub struct OllamaEmbeddingClient {
+    base_url: String,
+    model: String,
+}
+
+impl OllamaEmbeddingClient {
+    pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+            model: model.into(),
+        }
+    }
+
+    pub fn embeddings_url(&self) -> String {
+        format!("{}/api/embeddings", self.base_url)
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+}
