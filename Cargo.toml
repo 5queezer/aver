@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members  = ["crates/aver-core", "crates/aver-cli", "crates/aver-extractor", "crates/aver-server"]
+members  = ["crates/aver-core", "crates/aver-cli", "crates/aver-extractor", "crates/aver-server", "crates/aver-eval"]
 
 [workspace.package]
 version      = "0.1.0"
