@@ -79,6 +79,8 @@ pub enum PrivacyRejection {
     OpenAiKey,
     #[error("Anthropic API key")]
     AnthropicKey,
+    #[error("Stripe live secret key")]
+    StripeLiveKey,
 }
 
 pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
@@ -108,6 +110,12 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
         .any(|token| token.starts_with("sk-ant-") && token.len() >= 30)
     {
         return Err(PrivacyRejection::AnthropicKey);
+    }
+    if content
+        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .any(|token| token.starts_with("sk_live_") && token.len() >= 30)
+    {
+        return Err(PrivacyRejection::StripeLiveKey);
     }
     if content
         .split(|ch: char| ch.is_whitespace() || ch == '=')
