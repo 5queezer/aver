@@ -1251,11 +1251,17 @@ impl Store {
                 agent_kind: agent_kind.parse()?,
                 write_ts,
             };
-            let score = recall_token_overlap(&query_tokens, &claim);
+            let score = recall_token_score(&query_tokens, &claim);
             if score > 0 {
                 scored_claims.push((score, claim));
             }
         }
+        let minimum_score = if scored_claims.iter().any(|(score, _)| *score >= 2) {
+            2
+        } else {
+            1
+        };
+        scored_claims.retain(|(score, _)| *score >= minimum_score);
         scored_claims.sort_by(|(a_score, a_claim), (b_score, b_claim)| {
             b_score
                 .cmp(a_score)
@@ -1272,13 +1278,26 @@ fn tokenize_for_recall(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn recall_token_overlap(query_tokens: &[String], claim: &Claim) -> usize {
-    let claim_text = claim.text();
-    let claim_tokens: HashSet<String> = tokenize_for_recall(&claim_text).into_iter().collect();
+fn recall_token_score(query_tokens: &[String], claim: &Claim) -> usize {
+    let claim_text = claim.text().to_ascii_lowercase();
+    let exact_tokens: HashSet<String> = claim_text
+        .split_whitespace()
+        .filter(|token| !token.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    let sub_tokens: HashSet<String> = tokenize_for_recall(&claim_text).into_iter().collect();
     query_tokens
         .iter()
-        .filter(|token| claim_tokens.contains(*token))
-        .count()
+        .map(|token| {
+            if exact_tokens.contains(token) {
+                2
+            } else if sub_tokens.contains(token) {
+                1
+            } else {
+                0
+            }
+        })
+        .sum()
 }
 
 fn validate_agent_id(agent_id: &str) -> Result<(), Error> {
