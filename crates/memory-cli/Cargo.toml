@@ -1,0 +1,16 @@
+[package]
+name        = "memory-cli"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+authors.workspace     = true
+rust-version.workspace = true
+
+[[bin]]
+name = "memory"
+path = "src/main.rs"
+
+[dependencies]
+memory-core      = { path = "../memory-core" }
+clap.workspace   = true
+anyhow.workspace = true
