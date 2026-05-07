@@ -7,7 +7,7 @@ use std::net::TcpListener;
 
 use memory_core::vector::{
     OllamaEmbeddingClient, OllamaEmbeddingRequest, OllamaEmbeddingResponse, VectorBackend,
-    cosine_similarity, normalized_cosine_score,
+    VectorIndexConfig, cosine_similarity, normalized_cosine_score,
 };
 
 #[test]
@@ -80,6 +80,14 @@ fn vector_backend_config_parser_trims_whitespace() {
         VectorBackend::from_optional_config(Some(" qdrant ")).unwrap(),
         VectorBackend::Qdrant
     );
+}
+
+#[test]
+fn vector_index_config_defaults_to_sqlite_vss_and_nomic_model() {
+    let config = VectorIndexConfig::default();
+
+    assert_eq!(config.backend, VectorBackend::SqliteVss);
+    assert_eq!(config.embedding_model, "nomic-embed-text");
 }
 
 #[test]

@@ -55,6 +55,21 @@ impl fmt::Display for VectorBackend {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VectorIndexConfig {
+    pub backend: VectorBackend,
+    pub embedding_model: String,
+}
+
+impl Default for VectorIndexConfig {
+    fn default() -> Self {
+        Self {
+            backend: VectorBackend::default(),
+            embedding_model: "nomic-embed-text".to_string(),
+        }
+    }
+}
+
 pub fn cosine_similarity(left: &[f32], right: &[f32]) -> Option<f32> {
     if left.len() != right.len() || left.is_empty() {
         return None;
