@@ -1,6 +1,7 @@
 //! Memory layer core: storage, episodic log, claim CRUD.
 //! See doc/adr/ for architecture decisions.
 
+pub mod retrieval;
 pub mod vector;
 
 use std::fs::OpenOptions;
