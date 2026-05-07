@@ -76,3 +76,20 @@ fn top_k_candidates_returns_highest_scoring_limit() {
     let ids: Vec<i64> = top.into_iter().map(|c| c.claim_id).collect();
     assert_eq!(ids, vec![2, 3]);
 }
+
+#[test]
+fn rank_candidates_breaks_score_ties_by_claim_id() {
+    let ranked = rank_candidates(vec![
+        RetrievalCandidate {
+            claim_id: 2,
+            score: 0.5,
+        },
+        RetrievalCandidate {
+            claim_id: 1,
+            score: 0.5,
+        },
+    ]);
+
+    let ids: Vec<i64> = ranked.into_iter().map(|c| c.claim_id).collect();
+    assert_eq!(ids, vec![1, 2]);
+}

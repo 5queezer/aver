@@ -106,11 +106,12 @@ fn ollama_embedding_client_posts_to_local_embeddings_endpoint() {
         let body = r#"{"embedding":[0.1,0.2]}"#;
         write!(
             stream,
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         )
         .unwrap();
+        stream.flush().unwrap();
     });
 
     let client = OllamaEmbeddingClient::new(format!("http://{addr}"), "nomic-embed-text");
