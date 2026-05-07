@@ -242,6 +242,26 @@ fn recall_text_singularizes_plural_query_tokens() {
 }
 
 #[test]
+fn recall_text_splits_camel_case_claim_tokens() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let bench_name_id = store
+        .add_claim("benchmark", "name", "MemoryAgentBench", "test_session")
+        .unwrap();
+    store
+        .add_claim("benchmark", "topic", "memory_recall", "test_session")
+        .unwrap();
+
+    let matches = store.recall_text("memory agent bench benchmark").unwrap();
+
+    assert_eq!(
+        matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+        vec![bench_name_id]
+    );
+}
+
+#[test]
 fn claim_text_renders_subject_predicate_object_for_embedding() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

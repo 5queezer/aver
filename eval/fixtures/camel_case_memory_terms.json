@@ -1,0 +1,13 @@
+{
+  "name": "camel_case_memory_terms",
+  "version": 1,
+  "description": "Natural spaced query terms should match CamelCase memory identifiers without favoring broad topic distractors",
+  "claims": [
+    {"subject": "benchmark", "predicate": "name", "object": "MemoryAgentBench"},
+    {"subject": "benchmark", "predicate": "topic", "object": "memory_recall"},
+    {"subject": "project", "predicate": "name", "object": "Aver"}
+  ],
+  "queries": [
+    {"query": "memory agent bench benchmark", "relevant_indices": [0], "top_k": 5}
+  ]
+}

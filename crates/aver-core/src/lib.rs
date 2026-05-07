@@ -1265,7 +1265,9 @@ impl Store {
             && scored_claims.iter().any(|(score, claim)| {
                 *score == max_score && claim.predicate.eq_ignore_ascii_case("name")
             });
-        let minimum_score = if max_score >= 4 && !has_name_anchor {
+        let minimum_score = if max_score >= 5 {
+            max_score - 1
+        } else if max_score >= 4 && !has_name_anchor {
             3
         } else if max_score >= 2 {
             2
@@ -1285,8 +1287,22 @@ impl Store {
 fn tokenize_for_recall(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|token| !token.is_empty())
-        .map(normalize_recall_token)
+        .flat_map(camel_case_parts)
+        .map(|token| normalize_recall_token(&token))
         .collect()
+}
+
+fn camel_case_parts(token: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for (idx, ch) in token.char_indices().skip(1) {
+        if ch.is_ascii_uppercase() {
+            parts.push(token[start..idx].to_string());
+            start = idx;
+        }
+    }
+    parts.push(token[start..].to_string());
+    parts
 }
 
 fn normalize_recall_token(token: &str) -> String {
@@ -1299,8 +1315,9 @@ fn normalize_recall_token(token: &str) -> String {
 }
 
 fn recall_token_score(query_tokens: &[String], claim: &Claim) -> usize {
-    let claim_text = claim.text().to_ascii_lowercase();
-    let exact_tokens: HashSet<String> = claim_text
+    let claim_text = claim.text();
+    let exact_text = claim_text.to_ascii_lowercase();
+    let exact_tokens: HashSet<String> = exact_text
         .split_whitespace()
         .filter(|token| !token.is_empty())
         .map(ToOwned::to_owned)
