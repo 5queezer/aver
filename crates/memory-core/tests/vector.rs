@@ -101,15 +101,38 @@ fn cosine_similarity_returns_one_for_identical_vectors() {
 }
 
 #[test]
+fn cosine_similarity_returns_none_for_zero_vector() {
+    assert_eq!(cosine_similarity(&[0.0, 0.0], &[1.0, 2.0]), None);
+}
+
+#[test]
 fn ollama_embedding_client_posts_to_local_embeddings_endpoint() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0_u8; 2048];
-        let n = stream.read(&mut request).unwrap();
-        let request = String::from_utf8_lossy(&request[..n]);
-        assert!(request.starts_with("POST /api/embeddings "));
+        let mut request = Vec::new();
+        let mut buf = [0_u8; 512];
+        let header_end = loop {
+            let n = stream.read(&mut buf).unwrap();
+            assert!(n > 0, "client closed before headers finished");
+            request.extend_from_slice(&buf[..n]);
+            if let Some(pos) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                break pos + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        assert!(headers.starts_with("POST /api/embeddings "));
+        let content_length = headers
+            .lines()
+            .find_map(|line| line.strip_prefix("Content-Length: "))
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        while request.len() < header_end + content_length {
+            let n = stream.read(&mut buf).unwrap();
+            assert!(n > 0, "client closed before body finished");
+            request.extend_from_slice(&buf[..n]);
+        }
 
         let body = r#"{"embedding":[0.1,0.2]}"#;
         write!(

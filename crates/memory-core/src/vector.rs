@@ -69,6 +69,10 @@ pub fn cosine_similarity(left: &[f32], right: &[f32]) -> Option<f32> {
         right_norm += right * right;
     }
 
+    if left_norm == 0.0 || right_norm == 0.0 {
+        return None;
+    }
+
     Some(dot / (left_norm.sqrt() * right_norm.sqrt()))
 }
 
