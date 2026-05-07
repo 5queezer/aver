@@ -107,6 +107,29 @@ fn recall_text_returns_claim_by_keyword() {
 }
 
 #[test]
+fn recall_text_ranks_claims_by_multi_token_overlap() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let language_id = store
+        .add_claim("project", "language", "Rust", "test_session")
+        .unwrap();
+    let name_id = store
+        .add_claim("project", "name", "Aver", "test_session")
+        .unwrap();
+    store
+        .add_claim("meeting", "attendee", "Bob", "test_session")
+        .unwrap();
+
+    let matches = store.recall_text("Aver project").unwrap();
+
+    assert_eq!(
+        matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+        vec![name_id, language_id]
+    );
+}
+
+#[test]
 fn claim_text_renders_subject_predicate_object_for_embedding() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

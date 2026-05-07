@@ -1194,17 +1194,20 @@ impl Store {
     }
 
     pub fn recall_text(&self, query: &str) -> Result<Vec<Claim>, Error> {
-        let pattern = format!("%{query}%");
+        let query_tokens = tokenize_for_recall(query);
+        if query_tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let mut stmt = self.conn.prepare(
             "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs,
                     agent_id, agent_kind, write_ts
                FROM claims
               WHERE status = 'ACTIVE'
-                AND (subject LIKE ?1 OR predicate LIKE ?1 OR object LIKE ?1)
               ORDER BY id",
         )?;
 
-        let rows = stmt.query_map(params![pattern], |row| {
+        let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
@@ -1220,7 +1223,7 @@ impl Store {
             ))
         })?;
 
-        let mut claims = Vec::new();
+        let mut scored_claims = Vec::new();
         for row in rows {
             let (
                 id,
@@ -1235,7 +1238,7 @@ impl Store {
                 agent_kind,
                 write_ts,
             ) = row?;
-            claims.push(Claim {
+            let claim = Claim {
                 id,
                 subject,
                 predicate,
@@ -1247,10 +1250,35 @@ impl Store {
                 agent_id,
                 agent_kind: agent_kind.parse()?,
                 write_ts,
-            });
+            };
+            let score = recall_token_overlap(&query_tokens, &claim);
+            if score > 0 {
+                scored_claims.push((score, claim));
+            }
         }
-        Ok(claims)
+        scored_claims.sort_by(|(a_score, a_claim), (b_score, b_claim)| {
+            b_score
+                .cmp(a_score)
+                .then_with(|| a_claim.id.cmp(&b_claim.id))
+        });
+        Ok(scored_claims.into_iter().map(|(_, claim)| claim).collect())
     }
+}
+
+fn tokenize_for_recall(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect()
+}
+
+fn recall_token_overlap(query_tokens: &[String], claim: &Claim) -> usize {
+    let claim_text = claim.text();
+    let claim_tokens: HashSet<String> = tokenize_for_recall(&claim_text).into_iter().collect();
+    query_tokens
+        .iter()
+        .filter(|token| claim_tokens.contains(*token))
+        .count()
 }
 
 fn validate_agent_id(agent_id: &str) -> Result<(), Error> {
