@@ -117,3 +117,34 @@ fn promote_candidate_claim_creates_durable_claim_with_event_source() {
     assert_eq!(candidate.status, "PROMOTED");
     assert_eq!(candidate.promoted_claim_id, Some(claim_id));
 }
+
+#[test]
+fn reject_candidate_claim_marks_rejected_with_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let event_id = store
+        .record_event(
+            "session-1",
+            "assistant_observation",
+            "Maybe AML uses Redis for storage.",
+            "conversation",
+        )
+        .unwrap();
+    let candidate_id = store
+        .propose_candidate_claim(event_id, "AML", "uses", "Redis")
+        .unwrap();
+
+    store
+        .reject_candidate_claim(candidate_id, "unsupported by source")
+        .unwrap();
+
+    let candidate = store.get_candidate_claim(candidate_id).unwrap();
+
+    assert_eq!(candidate.status, "REJECTED");
+    assert_eq!(
+        candidate.rejection_reason,
+        Some("unsupported by source".to_string())
+    );
+    assert!(store.recall_text("Redis").unwrap().is_empty());
+}

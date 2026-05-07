@@ -90,6 +90,7 @@ pub struct CandidateClaim {
     pub confidence: f64,
     pub status: String,
     pub promoted_claim_id: Option<i64>,
+    pub rejection_reason: Option<String>,
 }
 
 /// A text chunk attached to a claim for vector indexing.
@@ -675,47 +676,44 @@ impl Store {
         Ok(claim_id)
     }
 
-    pub fn get_candidate_claim(&self, id: i64) -> Result<CandidateClaim, Error> {
-        let (id, event_id, subject, predicate, object, provenance, confidence, status, promoted_claim_id): (
-            i64,
-            i64,
-            String,
-            String,
-            String,
-            String,
-            f64,
-            String,
-            Option<i64>,
-        ) = self.conn.query_row(
-            "SELECT id, event_id, subject, predicate, object, provenance, confidence, status, promoted_claim_id
-               FROM candidate_claims WHERE id = ?1",
-            [id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                    row.get(8)?,
-                ))
-            },
+    pub fn reject_candidate_claim(&self, candidate_id: i64, reason: &str) -> Result<(), Error> {
+        privacy_filter(reason)?;
+        self.conn.execute(
+            "UPDATE candidate_claims
+                SET status = 'REJECTED', rejection_reason = ?1
+              WHERE id = ?2",
+            params![reason, candidate_id],
         )?;
+        Ok(())
+    }
 
-        Ok(CandidateClaim {
-            id,
-            event_id,
-            subject,
-            predicate,
-            object,
-            provenance: provenance.parse()?,
-            confidence,
-            status,
-            promoted_claim_id,
-        })
+    pub fn get_candidate_claim(&self, id: i64) -> Result<CandidateClaim, Error> {
+        self.conn
+            .query_row(
+                "SELECT id, event_id, subject, predicate, object, provenance, confidence, status,
+                    promoted_claim_id, rejection_reason
+               FROM candidate_claims WHERE id = ?1",
+                [id],
+                |row| {
+                    let provenance: String = row.get(5)?;
+                    let provenance = provenance.parse().map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(err))
+                    })?;
+                    Ok(CandidateClaim {
+                        id: row.get(0)?,
+                        event_id: row.get(1)?,
+                        subject: row.get(2)?,
+                        predicate: row.get(3)?,
+                        object: row.get(4)?,
+                        provenance,
+                        confidence: row.get(6)?,
+                        status: row.get(7)?,
+                        promoted_claim_id: row.get(8)?,
+                        rejection_reason: row.get(9)?,
+                    })
+                },
+            )
+            .map_err(Error::from)
     }
 
     /// Retrieve a claim by id.

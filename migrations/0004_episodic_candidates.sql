@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS candidate_claims (
   confidence        REAL    NOT NULL DEFAULT 0.45,
   status            TEXT    NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','PROMOTED','REJECTED')),
   promoted_claim_id INTEGER REFERENCES claims(id),
+  rejection_reason  TEXT,
   created_at        INTEGER NOT NULL
 );
 
