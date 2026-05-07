@@ -78,6 +78,19 @@ pub struct EpisodicEvent {
     pub ts: i64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CandidateClaim {
+    pub id: i64,
+    pub event_id: i64,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub provenance: Provenance,
+    pub confidence: f64,
+    pub status: String,
+    pub promoted_claim_id: Option<i64>,
+}
+
 /// A text chunk attached to a claim for vector indexing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VectorChunk {
@@ -543,6 +556,80 @@ impl Store {
             agent_id,
             agent_kind: agent_kind.parse()?,
             ts,
+        })
+    }
+
+    pub fn propose_candidate_claim(
+        &self,
+        event_id: i64,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+    ) -> Result<i64, Error> {
+        if !self.event_exists(event_id)? {
+            return Err(Error::MissingEventProvenance { event_id });
+        }
+        privacy_filter(&format!("{subject} {predicate} {object}"))?;
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.conn.execute(
+            "INSERT INTO candidate_claims (event_id, subject, predicate, object, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![event_id, subject, predicate, object, now],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    fn event_exists(&self, event_id: i64) -> Result<bool, Error> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM episodic_events WHERE id = ?1",
+                [event_id],
+                |_| Ok(()),
+            )
+            .is_ok())
+    }
+
+    pub fn get_candidate_claim(&self, id: i64) -> Result<CandidateClaim, Error> {
+        let (id, event_id, subject, predicate, object, provenance, confidence, status, promoted_claim_id): (
+            i64,
+            i64,
+            String,
+            String,
+            String,
+            String,
+            f64,
+            String,
+            Option<i64>,
+        ) = self.conn.query_row(
+            "SELECT id, event_id, subject, predicate, object, provenance, confidence, status, promoted_claim_id
+               FROM candidate_claims WHERE id = ?1",
+            [id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                ))
+            },
+        )?;
+
+        Ok(CandidateClaim {
+            id,
+            event_id,
+            subject,
+            predicate,
+            object,
+            provenance: provenance.parse()?,
+            confidence,
+            status,
+            promoted_claim_id,
         })
     }
 
@@ -1029,4 +1116,6 @@ pub enum Error {
     EnumParse { kind: &'static str, value: String },
     #[error("invalid agent_id for partitioned log path: {value:?}")]
     InvalidAgentId { value: String },
+    #[error("candidate claim must cite an existing event: {event_id}")]
+    MissingEventProvenance { event_id: i64 },
 }
