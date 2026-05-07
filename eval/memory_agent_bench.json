@@ -1,0 +1,5 @@
+{
+  "name": "MemoryAgentBench",
+  "primary_metric": "memory_quality_score",
+  "version": 1
+}
