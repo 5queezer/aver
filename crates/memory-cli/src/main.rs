@@ -18,6 +18,14 @@ struct Cli {
 enum Command {
     /// Open the store and report readiness.
     Status,
+    /// Append a user-asserted claim.
+    Remember {
+        subject: String,
+        predicate: String,
+        object: String,
+        #[arg(long)]
+        source: String,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -27,6 +35,16 @@ fn main() -> anyhow::Result<()> {
         Command::Status => {
             Store::open(&cli.memory_dir)?;
             println!("memory store: ok");
+        }
+        Command::Remember {
+            subject,
+            predicate,
+            object,
+            source,
+        } => {
+            let store = Store::open(&cli.memory_dir)?;
+            let claim_id = store.add_claim(&subject, &predicate, &object, &source)?;
+            println!("claim_id={claim_id}");
         }
     }
 

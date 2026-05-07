@@ -365,6 +365,7 @@ dependencies = [
  "anyhow",
  "clap",
  "memory-core",
+ "serde_json",
 ]
 
 [[package]]

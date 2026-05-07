@@ -14,3 +14,6 @@ path = "src/main.rs"
 memory-core      = { path = "../memory-core" }
 clap.workspace   = true
 anyhow.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
