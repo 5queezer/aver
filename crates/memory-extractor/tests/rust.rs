@@ -109,3 +109,17 @@ fn extract_rust_facts_emits_test_covers_function_triple() {
         object: "Function:add_claim".to_string(),
     }));
 }
+
+#[test]
+fn extract_rust_facts_emits_file_defines_struct_triple() {
+    let facts = extract_rust_facts("src/lib.rs", "struct Claim { text: String }").unwrap();
+
+    assert_eq!(
+        facts,
+        vec![ExtractedFact {
+            subject: "src/lib.rs".to_string(),
+            predicate: "defines".to_string(),
+            object: "Struct:Claim".to_string(),
+        }]
+    );
+}

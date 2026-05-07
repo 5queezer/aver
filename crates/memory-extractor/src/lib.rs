@@ -93,6 +93,15 @@ pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
         .collect::<Vec<_>>();
 
     facts.extend(
+        extract_rust_structs(source)?
+            .into_iter()
+            .map(|struct_name| ExtractedFact {
+                subject: path.to_string(),
+                predicate: "defines".to_string(),
+                object: format!("Struct:{struct_name}"),
+            }),
+    );
+    facts.extend(
         extract_rust_imports(source)?
             .into_iter()
             .map(|module| ExtractedFact {
