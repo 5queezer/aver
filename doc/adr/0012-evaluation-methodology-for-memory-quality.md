@@ -85,6 +85,33 @@ Stored as time-series in `eval/snapshots/<timestamp>.json`. Anomaly detection (s
 - **Eval on the eval suite**: don't optimize the system to maximize Layer 1 scores. Reserve a held-out test set (~20% of pairs) that's never used for tuning, only for final reporting.
 - **Cross-project benchmarks**: each project's queries are too domain-specific. Comparisons across projects are done on Layer 3 statistics only.
 
+### Public benchmarks for comparability
+
+The eval suite above is project-specific by design. For external comparability with other memory layers, integrate a small set of public benchmarks. Surveyed and verified 2026-05-07; URLs return 200 and content matches the description.
+
+| Benchmark | Maps to layer | Why it fits | Source |
+|-----------|--------------:|-------------|--------|
+| **MemoryAgentBench** (Hu et al., ICLR 2026) | Layer 1 + Layer 2 | Closest architectural match: four competencies (Accurate Retrieval, Test-Time Learning, Long-Range Understanding, Conflict Resolution) plus EventQA and FactConsolidation. The FactConsolidation set directly exercises ADR-0005's consolidation contract. | [github](https://github.com/HUST-AI-HYZ/MemoryAgentBench) · [paper](https://arxiv.org/abs/2507.05257) · [HF dataset](https://huggingface.co/datasets/ai-hyz/MemoryAgentBench) |
+| **MemoryArena** (He et al., Stanford/UCSD, 2026) | Layer 2 | Tests whether memory *helps* downstream actions, not just recall. Authors explicitly note that LoCoMo-saturated agents fail here — useful regression target. | [site](https://memoryarena.github.io/) · [paper](https://arxiv.org/abs/2602.16313) · [HF dataset](https://huggingface.co/datasets/ZexueHe/memoryarena) |
+| **LongMemEval** (Wu et al.) | Layer 1 | Long-term interactive chat memory: extraction, multi-session reasoning, temporal reasoning, abstention. Useful for the abstention-on-low-confidence behavior we built into ADR-0003. | [github](https://github.com/xiaowu0162/longmemeval) · [paper](https://arxiv.org/abs/2410.10813) |
+| **LoCoMo** (Snap Research, ACL 2024) | Layer 1 | Mature, widely cited; standard comparability story. Persona-dialogue framing makes it weak for *coding* memory but it's the de-facto baseline in vendor reports. | [github](https://github.com/snap-research/locomo) |
+| **HybridRAG-Bench / GraphRAG-Bench** | (Layer 1 retrieval mechanics only) | Tests the graph+vector fusion in ADR-0004; not an *agent memory* benchmark. Use for α-tuning regression, not for end-to-end memory eval. | [HybridRAG-Bench](https://junhongmit.github.io/HybridRAG-Bench/) |
+
+**Starter pair (v0.8)**: integrate **MemoryAgentBench** first (closest fit, includes consolidation eval), then **LongMemEval** for breadth. LoCoMo is added only when vendor comparability becomes an explicit goal.
+
+### What no public benchmark covers
+
+These remain **custom evals** — Layer 1 hand-curated queries and Layer 3 drift snapshots:
+
+- Coding-agent persistent memory (project decisions, debugging hypotheses, API conventions, file/symbol relationships).
+- Tri-state confidence drift / inferred-vs-extracted calibration (ADR-0003).
+- Consolidation correctness — `merge` / `supersede` / `contradicts` edge accuracy (ADR-0005).
+- Privacy-filter regression (ADR-0009) — false negatives are silent leaks.
+- Multi-agent shared graphs, trust weighting, community detection (ADR-0011).
+- Harmful memory: stale or wrong claims making the agent *worse* than no memory.
+
+Public benchmarks anchor us to the field; the custom evals are where the unique parts of this design live or die.
+
 ## Consequences
 
 - (+) Quality regressions become detectable instead of accumulating silently.
