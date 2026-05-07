@@ -131,6 +131,15 @@ pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
             }),
     );
     facts.extend(
+        extract_rust_traits(source)?
+            .into_iter()
+            .map(|trait_name| ExtractedFact {
+                subject: path.to_string(),
+                predicate: "defines".to_string(),
+                object: format!("Trait:{trait_name}"),
+            }),
+    );
+    facts.extend(
         extract_rust_imports(source)?
             .into_iter()
             .map(|module| ExtractedFact {

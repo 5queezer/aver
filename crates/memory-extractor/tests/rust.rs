@@ -163,3 +163,15 @@ fn extract_rust_facts_emits_impl_defines_method_triple() {
         object: "Function:Store::add_claim".to_string(),
     }));
 }
+
+#[test]
+fn extract_rust_facts_emits_file_defines_trait_triple() {
+    let facts =
+        extract_rust_facts("src/lib.rs", "trait EmbeddingClient { fn embed(&self); }").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "src/lib.rs".to_string(),
+        predicate: "defines".to_string(),
+        object: "Trait:EmbeddingClient".to_string(),
+    }));
+}
