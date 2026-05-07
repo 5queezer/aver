@@ -34,3 +34,11 @@ fn parse_prose_facts_rejects_empty_predicate() {
 
     assert!(result.is_err());
 }
+
+#[test]
+fn parse_prose_facts_rejects_empty_object() {
+    let result =
+        parse_prose_facts(r#"{"facts":[{"subject":"User","predicate":"prefers","object":""}]}"#);
+
+    assert!(result.is_err());
+}

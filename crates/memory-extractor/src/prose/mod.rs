@@ -16,6 +16,9 @@ pub fn parse_prose_facts(output: &str) -> Result<Vec<ExtractedFact>, Error> {
         if fact.predicate.trim().is_empty() {
             return Err(Error::InvalidFact("predicate"));
         }
+        if fact.object.trim().is_empty() {
+            return Err(Error::InvalidFact("object"));
+        }
     }
     Ok(extraction.facts)
 }
