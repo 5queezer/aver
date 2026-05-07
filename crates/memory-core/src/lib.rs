@@ -444,6 +444,10 @@ impl Store {
         client: &impl vector::EmbeddingClient,
         top_k: usize,
     ) -> Result<Vec<Claim>, Error> {
+        if top_k == 0 {
+            return Ok(Vec::new());
+        }
+
         let mut claims = self.recall_vector_claims(query, client, top_k)?;
         let mut seen: HashSet<i64> = claims.iter().map(|claim| claim.id).collect();
         for claim in self.recall_text(query)? {

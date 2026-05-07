@@ -1,7 +1,18 @@
 //! T14 — vector chunk metadata can be written for a claim before sqlite-vss
 //! indexing is wired in.
 
-use memory_core::{Store, vector::MockEmbeddingClient};
+use memory_core::{
+    Store,
+    vector::{EmbeddingClient, EmbeddingError, MockEmbeddingClient},
+};
+
+struct FailingEmbeddingClient;
+
+impl EmbeddingClient for FailingEmbeddingClient {
+    fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        Err(EmbeddingError::Http("should not embed".to_string()))
+    }
+}
 
 #[test]
 fn add_vector_chunk_returns_chunk_id_for_claim() {
@@ -258,4 +269,16 @@ fn recall_hybrid_claims_falls_back_to_text_when_vector_index_empty() {
 
     assert_eq!(claims.len(), 1);
     assert_eq!(claims[0].id, claim_id);
+}
+
+#[test]
+fn recall_hybrid_claims_top_k_zero_does_not_embed_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let claims = store
+        .recall_hybrid_claims("anything", &FailingEmbeddingClient, 0)
+        .expect("top_k=0 should short-circuit before embedding");
+
+    assert!(claims.is_empty());
 }
