@@ -31,7 +31,8 @@ if [ "$TEST_EXIT" -eq 0 ] && [ "$RED" -eq 0 ]; then
     eval/fixtures/versioned_camel_case_identifier.json \
     eval/fixtures/mixed_case_numeric_identifier.json \
     eval/fixtures/mixed_case_prefix_identifier.json \
-    eval/fixtures/ies_plural_morphology.json 2>&1)
+    eval/fixtures/ies_plural_morphology.json \
+    eval/fixtures/multi_digit_version_identifier.json 2>&1)
   BENCH_EXIT=$?
 fi
 

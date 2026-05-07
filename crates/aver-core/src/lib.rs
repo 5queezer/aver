@@ -1319,7 +1319,11 @@ fn camel_case_parts(token: &str) -> Vec<String> {
             && split > 0
         {
             parts.push(token[..split].to_string());
-            parts.push(token[split..].to_string());
+            let digits = &token[split..];
+            parts.push(digits.to_string());
+            if digits.len() > 1 {
+                parts.extend(digits.chars().map(|digit| digit.to_string()));
+            }
         }
         return parts;
     }
@@ -1339,7 +1343,11 @@ fn camel_case_parts(token: &str) -> Vec<String> {
             && split > 0
         {
             parts.push(part[..split].to_string());
-            parts.push(part[split..].to_string());
+            let digits = &part[split..];
+            parts.push(digits.to_string());
+            if digits.len() > 1 {
+                parts.extend(digits.chars().map(|digit| digit.to_string()));
+            }
         }
     }
     if base_parts.len() >= 2 {

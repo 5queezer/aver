@@ -422,6 +422,26 @@ fn recall_text_singularizes_ies_plural_query_tokens() {
 }
 
 #[test]
+fn recall_text_matches_multi_digit_version_identifier() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let oauth21_id = store
+        .add_claim("server", "supports", "OAuth21", "test_session")
+        .unwrap();
+    store
+        .add_claim("server", "version", "2", "test_session")
+        .unwrap();
+
+    let matches = store.recall_text("OAuth 2 1 server").unwrap();
+
+    assert_eq!(
+        matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+        vec![oauth21_id]
+    );
+}
+
+#[test]
 fn claim_text_renders_subject_predicate_object_for_embedding() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
