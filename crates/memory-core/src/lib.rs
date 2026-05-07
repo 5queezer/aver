@@ -396,6 +396,7 @@ impl Store {
         object: &str,
         source: &str,
     ) -> Result<i64, Error> {
+        validate_agent_id(agent_id)?;
         privacy_filter(&format!(
             "{agent_id} {} {subject} {predicate} {object} {source}",
             agent_kind.as_str()
@@ -875,6 +876,19 @@ impl Store {
     }
 }
 
+fn validate_agent_id(agent_id: &str) -> Result<(), Error> {
+    if agent_id.is_empty()
+        || !agent_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        return Err(Error::InvalidAgentId {
+            value: agent_id.to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn parse_optional_embedding(value: Option<String>) -> rusqlite::Result<Option<Vec<f32>>> {
     value
         .map(|json| {
@@ -924,4 +938,6 @@ pub enum Error {
     Privacy(#[from] PrivacyRejection),
     #[error("invalid {kind} value in database: {value:?}")]
     EnumParse { kind: &'static str, value: String },
+    #[error("invalid agent_id for partitioned log path: {value:?}")]
+    InvalidAgentId { value: String },
 }

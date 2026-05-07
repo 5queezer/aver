@@ -187,6 +187,26 @@ fn add_claim_from_agent_appends_to_agent_partition_log() {
 }
 
 #[test]
+fn add_claim_from_agent_rejects_path_like_agent_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .add_claim_from_agent(
+            "../escape",
+            memory_core::AgentKind::ExternalTool,
+            "module",
+            "defines",
+            "UnsafeAgent",
+            "test_session",
+        )
+        .unwrap_err();
+
+    assert!(matches!(err, memory_core::Error::InvalidAgentId { .. }));
+    assert!(!dir.path().join("escape/log.jsonl").exists());
+}
+
+#[test]
 fn consolidate_supersedes_duplicate_claims() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
