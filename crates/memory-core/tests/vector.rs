@@ -98,6 +98,14 @@ fn vector_index_config_parses_optional_backend_and_model() {
 }
 
 #[test]
+fn vector_backend_empty_optional_config_uses_default() {
+    assert_eq!(
+        VectorBackend::from_optional_config(Some("  ")).unwrap(),
+        VectorBackend::SqliteVss
+    );
+}
+
+#[test]
 fn ollama_embedding_client_parses_response_body_to_vector() {
     let client = OllamaEmbeddingClient::new("http://localhost:11434", "nomic-embed-text");
 
