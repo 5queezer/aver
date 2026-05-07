@@ -282,3 +282,15 @@ fn recall_hybrid_claims_top_k_zero_does_not_embed_query() {
 
     assert!(claims.is_empty());
 }
+
+#[test]
+fn recall_vector_claims_top_k_zero_does_not_embed_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let claims = store
+        .recall_vector_claims("anything", &FailingEmbeddingClient, 0)
+        .expect("top_k=0 should short-circuit before embedding");
+
+    assert!(claims.is_empty());
+}
