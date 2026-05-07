@@ -130,6 +130,7 @@ pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
             }),
     );
     facts.extend(extract_rust_function_call_facts(source)?);
+    facts.extend(extract_rust_impl_method_facts(source)?);
     facts.extend(
         map_rust_tests_to_functions(source)?
             .into_iter()
@@ -149,6 +150,16 @@ fn extract_rust_function_call_facts(source: &str) -> Result<Vec<ExtractedFact>, 
 
     let mut facts = Vec::new();
     collect_function_call_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
+    Ok(facts)
+}
+
+fn extract_rust_impl_method_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_rust::language())?;
+    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+
+    let mut facts = Vec::new();
+    collect_impl_method_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -273,6 +284,31 @@ fn collect_function_call_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_function_call_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_impl_method_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "impl_item"
+        && let Some(type_node) = node.child_by_field_name("type")
+    {
+        let type_name = type_node.utf8_text(source)?.to_string();
+        let mut methods = Vec::new();
+        collect_function_names(node, source, &mut methods)?;
+        facts.extend(methods.into_iter().map(|method| ExtractedFact {
+            subject: format!("Type:{type_name}"),
+            predicate: "defines".to_string(),
+            object: format!("Function:{type_name}::{method}"),
+        }));
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_impl_method_facts(child, source, facts)?;
     }
     Ok(())
 }

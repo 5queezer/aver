@@ -145,3 +145,14 @@ fn extract_rust_facts_emits_file_defines_enum_triple() {
         }]
     );
 }
+
+#[test]
+fn extract_rust_facts_emits_impl_defines_method_triple() {
+    let facts = extract_rust_facts("src/lib.rs", "impl Store { fn add_claim(&self) {} }").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Type:Store".to_string(),
+        predicate: "defines".to_string(),
+        object: "Function:Store::add_claim".to_string(),
+    }));
+}
