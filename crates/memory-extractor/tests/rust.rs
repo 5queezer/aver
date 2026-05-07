@@ -2,7 +2,7 @@
 
 use memory_extractor::{
     extract_rust_calls, extract_rust_functions, extract_rust_imports, extract_rust_structs,
-    extract_rust_tests,
+    extract_rust_tests, map_rust_tests_to_functions,
 };
 
 #[test]
@@ -38,4 +38,20 @@ fn extract_rust_tests_finds_test_function_name() {
     let tests = extract_rust_tests("#[test]\nfn add_claim_persists_log_first() {}").unwrap();
 
     assert_eq!(tests, vec!["add_claim_persists_log_first".to_string()]);
+}
+
+#[test]
+fn map_rust_tests_to_functions_uses_test_name_prefix() {
+    let mappings = map_rust_tests_to_functions(
+        "fn add_claim() {}\n#[test]\nfn add_claim_persists_log_first() {}",
+    )
+    .unwrap();
+
+    assert_eq!(
+        mappings,
+        vec![(
+            "add_claim_persists_log_first".to_string(),
+            "add_claim".to_string()
+        )]
+    );
 }

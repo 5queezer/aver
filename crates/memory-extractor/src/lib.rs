@@ -1,5 +1,7 @@
 //! Deterministic source extractors (ADR-0007).
 
+use std::collections::HashSet;
+
 use tree_sitter::{Node, Parser};
 
 pub fn extract_rust_functions(source: &str) -> Result<Vec<String>, Error> {
@@ -50,6 +52,27 @@ pub fn extract_rust_tests(source: &str) -> Result<Vec<String>, Error> {
     let mut tests = Vec::new();
     collect_tests(tree.root_node(), source.as_bytes(), &mut tests)?;
     Ok(tests)
+}
+
+pub fn map_rust_tests_to_functions(source: &str) -> Result<Vec<(String, String)>, Error> {
+    let tests = extract_rust_tests(source)?;
+    let test_names = tests.iter().cloned().collect::<HashSet<_>>();
+    let functions = extract_rust_functions(source)?
+        .into_iter()
+        .filter(|function| !test_names.contains(function))
+        .collect::<Vec<_>>();
+
+    let mut mappings = Vec::new();
+    for test in tests {
+        if let Some(function) = functions
+            .iter()
+            .filter(|function| test.starts_with(&format!("{function}_")))
+            .max_by_key(|function| function.len())
+        {
+            mappings.push((test, function.clone()));
+        }
+    }
+    Ok(mappings)
 }
 
 fn collect_function_names(
