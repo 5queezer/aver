@@ -20,7 +20,8 @@ if [ "$TEST_EXIT" -eq 0 ] && [ "$RED" -eq 0 ]; then
     eval/fixtures/basic_recall.json \
     eval/fixtures/conflict_and_noise.json \
     eval/fixtures/ambiguous_single_token.json \
-    eval/fixtures/single_token_multi_answer.json 2>&1)
+    eval/fixtures/single_token_multi_answer.json \
+    eval/fixtures/natural_query_noise.json 2>&1)
   BENCH_EXIT=$?
 fi
 

@@ -1285,8 +1285,17 @@ impl Store {
 fn tokenize_for_recall(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|token| !token.is_empty())
-        .map(|token| token.to_ascii_lowercase())
+        .map(normalize_recall_token)
         .collect()
+}
+
+fn normalize_recall_token(token: &str) -> String {
+    let lower = token.to_ascii_lowercase();
+    if lower.len() > 3 && lower.ends_with('s') {
+        lower.trim_end_matches('s').to_string()
+    } else {
+        lower
+    }
 }
 
 fn recall_token_score(query_tokens: &[String], claim: &Claim) -> usize {
