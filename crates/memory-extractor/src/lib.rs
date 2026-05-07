@@ -150,6 +150,7 @@ pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
     );
     facts.extend(extract_rust_function_call_facts(source)?);
     facts.extend(extract_rust_impl_method_facts(source)?);
+    facts.extend(extract_rust_impl_trait_facts(source)?);
     facts.extend(
         map_rust_tests_to_functions(source)?
             .into_iter()
@@ -179,6 +180,16 @@ fn extract_rust_impl_method_facts(source: &str) -> Result<Vec<ExtractedFact>, Er
 
     let mut facts = Vec::new();
     collect_impl_method_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
+    Ok(facts)
+}
+
+fn extract_rust_impl_trait_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_rust::language())?;
+    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+
+    let mut facts = Vec::new();
+    collect_impl_trait_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -342,6 +353,35 @@ fn collect_impl_method_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_impl_method_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_impl_trait_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "impl_item" {
+        let header = node
+            .utf8_text(source)?
+            .split('{')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .trim_start_matches("impl ");
+        if let Some((trait_name, type_name)) = header.split_once(" for ") {
+            facts.push(ExtractedFact {
+                subject: format!("Type:{}", type_name.trim()),
+                predicate: "implements".to_string(),
+                object: format!("Trait:{}", trait_name.trim()),
+            });
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_impl_trait_facts(child, source, facts)?;
     }
     Ok(())
 }

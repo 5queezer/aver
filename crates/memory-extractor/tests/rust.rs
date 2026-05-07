@@ -175,3 +175,18 @@ fn extract_rust_facts_emits_file_defines_trait_triple() {
         object: "Trait:EmbeddingClient".to_string(),
     }));
 }
+
+#[test]
+fn extract_rust_facts_emits_type_implements_trait_triple() {
+    let facts = extract_rust_facts(
+        "src/lib.rs",
+        "impl EmbeddingClient for OllamaEmbeddingClient { fn embed(&self) {} }",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Type:OllamaEmbeddingClient".to_string(),
+        predicate: "implements".to_string(),
+        object: "Trait:EmbeddingClient".to_string(),
+    }));
+}
