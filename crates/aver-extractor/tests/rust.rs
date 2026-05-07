@@ -365,6 +365,21 @@ fn extract_rust_facts_emits_file_defines_const_triple() {
 }
 
 #[test]
+fn extract_rust_facts_emits_module_defines_const_triple() {
+    let facts = extract_rust_facts(
+        "src/lib.rs",
+        "mod config { const DEFAULT_LIMIT: usize = 10; }",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Module:config".to_string(),
+        predicate: "defines".to_string(),
+        object: "Const:config::DEFAULT_LIMIT".to_string(),
+    }));
+}
+
+#[test]
 fn extract_rust_facts_emits_type_implements_trait_triple() {
     let facts = extract_rust_facts(
         "src/lib.rs",
