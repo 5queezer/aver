@@ -1,0 +1,13 @@
+{
+  "name": "irregular_plural_morphology",
+  "version": 1,
+  "description": "Common irregular plural query terms should normalize to singular forms and beat same-object distractors",
+  "claims": [
+    {"subject": "user", "predicate": "name", "object": "Alice"},
+    {"subject": "child", "predicate": "name", "object": "Alice"},
+    {"subject": "project", "predicate": "name", "object": "Aver"}
+  ],
+  "queries": [
+    {"query": "children Alice", "relevant_indices": [1], "top_k": 5}
+  ]
+}

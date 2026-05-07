@@ -1261,11 +1261,17 @@ impl Store {
             .map(|(score, _)| *score)
             .max()
             .unwrap_or(0);
-        let has_name_anchor = query_tokens.len() == 2
-            && max_score >= 4
-            && scored_claims.iter().any(|(score, claim)| {
-                *score == max_score && claim.predicate.eq_ignore_ascii_case("name")
-            });
+        let name_anchor_subject = if query_tokens.len() == 2 && max_score >= 4 {
+            scored_claims
+                .iter()
+                .find(|(score, claim)| {
+                    *score == max_score && claim.predicate.eq_ignore_ascii_case("name")
+                })
+                .map(|(_, claim)| claim.subject.clone())
+        } else {
+            None
+        };
+        let has_name_anchor = name_anchor_subject.is_some();
         let minimum_score = if has_name_anchor {
             2
         } else if max_score >= 5 {
@@ -1277,7 +1283,12 @@ impl Store {
         } else {
             1
         };
-        scored_claims.retain(|(score, _)| *score >= minimum_score);
+        scored_claims.retain(|(score, claim)| {
+            *score >= minimum_score
+                && name_anchor_subject
+                    .as_ref()
+                    .is_none_or(|subject| *score == max_score || claim.subject == *subject)
+        });
         scored_claims.sort_by(|(a_score, a_claim), (b_score, b_claim)| {
             b_score
                 .cmp(a_score)
@@ -1362,7 +1373,9 @@ fn camel_case_parts(token: &str) -> Vec<String> {
 
 fn normalize_recall_token(token: &str) -> String {
     let lower = token.to_ascii_lowercase();
-    if lower.len() > 4 && lower.ends_with("ee") {
+    if lower == "children" {
+        "child".to_string()
+    } else if lower.len() > 4 && lower.ends_with("ee") {
         lower.trim_end_matches("ee").to_string()
     } else if lower.len() > 4 && lower.ends_with("ies") {
         format!("{}y", lower.trim_end_matches("ies"))

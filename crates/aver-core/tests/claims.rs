@@ -462,6 +462,26 @@ fn recall_text_matches_v_prefixed_version_query_to_compact_identifier() {
 }
 
 #[test]
+fn recall_text_normalizes_common_irregular_plural_query_tokens() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    store
+        .add_claim("user", "name", "Alice", "test_session")
+        .unwrap();
+    let child_id = store
+        .add_claim("child", "name", "Alice", "test_session")
+        .unwrap();
+
+    let matches = store.recall_text("children Alice").unwrap();
+
+    assert_eq!(
+        matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+        vec![child_id]
+    );
+}
+
+#[test]
 fn claim_text_renders_subject_predicate_object_for_embedding() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
