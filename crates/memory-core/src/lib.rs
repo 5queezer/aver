@@ -1,6 +1,8 @@
 //! Memory layer core: storage, episodic log, claim CRUD.
 //! See doc/adr/ for architecture decisions.
 
+pub mod vector;
+
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
