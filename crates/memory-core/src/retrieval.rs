@@ -86,10 +86,13 @@ impl RetrievalCandidate {
 }
 
 pub fn rank_candidates(mut candidates: Vec<RetrievalCandidate>) -> Vec<RetrievalCandidate> {
-    candidates.sort_by(|a, b| {
-        b.score
+    candidates.sort_by(|a, b| match (a.score.is_nan(), b.score.is_nan()) {
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ => b
+            .score
             .total_cmp(&a.score)
-            .then_with(|| a.claim_id.cmp(&b.claim_id))
+            .then_with(|| a.claim_id.cmp(&b.claim_id)),
     });
     candidates
 }

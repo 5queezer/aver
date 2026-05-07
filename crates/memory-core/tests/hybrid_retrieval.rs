@@ -128,3 +128,20 @@ fn retrieval_candidate_from_embeddings_uses_normalized_vector_score() {
     assert_eq!(candidate.claim_id, 7);
     assert!((candidate.score - 0.65).abs() < f64::EPSILON);
 }
+
+#[test]
+fn rank_candidates_puts_nan_scores_last() {
+    let ranked = rank_candidates(vec![
+        RetrievalCandidate {
+            claim_id: 1,
+            score: f64::NAN,
+        },
+        RetrievalCandidate {
+            claim_id: 2,
+            score: 0.5,
+        },
+    ]);
+
+    let ids: Vec<i64> = ranked.into_iter().map(|c| c.claim_id).collect();
+    assert_eq!(ids, vec![2, 1]);
+}
