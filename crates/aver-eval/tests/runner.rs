@@ -117,6 +117,40 @@ fn aggregate_metrics_weights_means_by_query_count() {
 }
 
 #[test]
+fn aggregate_metrics_weights_unsupported_rate_by_retrieved_claims() {
+    let aggregate = aver_eval::aggregate_metrics(vec![
+        aver_eval::BenchMetrics {
+            fixture_name: "many_retrieved".to_string(),
+            mean_recall_at_k: 1.0,
+            mean_precision_at_k: 1.0,
+            unsupported_claim_rate: 0.0,
+            query_results: vec![aver_eval::QueryResult {
+                query: "a".to_string(),
+                recall_at_k: 1.0,
+                precision_at_k: 1.0,
+                retrieved_count: 10,
+                relevant_found: 10,
+            }],
+        },
+        aver_eval::BenchMetrics {
+            fixture_name: "one_bad".to_string(),
+            mean_recall_at_k: 0.0,
+            mean_precision_at_k: 0.0,
+            unsupported_claim_rate: 1.0,
+            query_results: vec![aver_eval::QueryResult {
+                query: "b".to_string(),
+                recall_at_k: 0.0,
+                precision_at_k: 0.0,
+                retrieved_count: 1,
+                relevant_found: 0,
+            }],
+        },
+    ]);
+
+    assert!((aggregate.unsupported_claim_rate - (1.0 / 11.0)).abs() < f64::EPSILON);
+}
+
+#[test]
 fn bench_metrics_serializes_to_json() {
     let f = aver_eval::load_fixture(BASIC_FIXTURE).unwrap();
     let metrics = aver_eval::run_fixture(&f).unwrap();

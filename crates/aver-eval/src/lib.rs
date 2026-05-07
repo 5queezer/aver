@@ -82,13 +82,29 @@ pub fn aggregate_metrics(fixtures: Vec<BenchMetrics>) -> AggregateMetrics {
         }
     };
 
+    let total_retrieved: usize = fixtures
+        .iter()
+        .flat_map(|metric| &metric.query_results)
+        .map(|result| result.retrieved_count)
+        .sum();
+    let total_non_relevant: usize = fixtures
+        .iter()
+        .flat_map(|metric| &metric.query_results)
+        .map(|result| result.retrieved_count.saturating_sub(result.relevant_found))
+        .sum();
+    let unsupported_claim_rate = if total_retrieved == 0 {
+        0.0
+    } else {
+        total_non_relevant as f64 / total_retrieved as f64
+    };
+
     AggregateMetrics {
         fixture_name: "aggregate".to_string(),
         fixture_count,
         query_count,
         mean_recall_at_k: weighted_sum(|metric| metric.mean_recall_at_k),
         mean_precision_at_k: weighted_sum(|metric| metric.mean_precision_at_k),
-        unsupported_claim_rate: weighted_sum(|metric| metric.unsupported_claim_rate),
+        unsupported_claim_rate,
         fixtures,
     }
 }
