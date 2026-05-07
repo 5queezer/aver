@@ -47,3 +47,11 @@ fn ollama_embedding_client_builds_request_with_configured_model() {
 fn vector_backend_defaults_to_sqlite_vss() {
     assert_eq!(VectorBackend::default(), VectorBackend::SqliteVss);
 }
+
+#[test]
+fn vector_backend_parses_qdrant_opt_in() {
+    assert_eq!(
+        "qdrant".parse::<VectorBackend>().unwrap(),
+        VectorBackend::Qdrant
+    );
+}

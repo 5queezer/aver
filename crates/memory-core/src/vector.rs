@@ -3,6 +3,8 @@
 //! ADR-0013 keeps the Ollama boundary in Rust; this module starts with the
 //! deterministic JSON shape expected by Ollama's local embeddings endpoint.
 
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -10,6 +12,18 @@ pub enum VectorBackend {
     #[default]
     SqliteVss,
     Qdrant,
+}
+
+impl FromStr for VectorBackend {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "sqlite-vss" => Ok(Self::SqliteVss),
+            "qdrant" => Ok(Self::Qdrant),
+            _ => Err("unknown vector backend"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
