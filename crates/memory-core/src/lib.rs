@@ -26,13 +26,79 @@ pub struct Store {
 }
 
 /// A claim row as exposed to consumers (ADR-0003).
-/// More fields will surface as later tests demand them.
 #[derive(Debug, Clone)]
 pub struct Claim {
     pub id: i64,
     pub subject: String,
     pub predicate: String,
     pub object: String,
+    pub provenance: Provenance,
+    pub confidence: f64,
+    pub status: ClaimStatus,
+    pub source_refs: Vec<String>,
+}
+
+/// How a claim was acquired (ADR-0003).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provenance {
+    UserAsserted,
+    Extracted,
+    Inferred,
+    Ambiguous,
+}
+
+impl Provenance {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UserAsserted => "USER_ASSERTED",
+            Self::Extracted    => "EXTRACTED",
+            Self::Inferred     => "INFERRED",
+            Self::Ambiguous    => "AMBIGUOUS",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Result<Self, Error> {
+        match s {
+            "USER_ASSERTED" => Ok(Self::UserAsserted),
+            "EXTRACTED"     => Ok(Self::Extracted),
+            "INFERRED"      => Ok(Self::Inferred),
+            "AMBIGUOUS"     => Ok(Self::Ambiguous),
+            other           => Err(Error::EnumParse {
+                kind: "Provenance",
+                value: other.to_string(),
+            }),
+        }
+    }
+}
+
+/// Lifecycle status of a claim (ADR-0003).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimStatus {
+    Active,
+    Superseded,
+    Invalidated,
+}
+
+impl ClaimStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active      => "ACTIVE",
+            Self::Superseded  => "SUPERSEDED",
+            Self::Invalidated => "INVALIDATED",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Result<Self, Error> {
+        match s {
+            "ACTIVE"      => Ok(Self::Active),
+            "SUPERSEDED"  => Ok(Self::Superseded),
+            "INVALIDATED" => Ok(Self::Invalidated),
+            other         => Err(Error::EnumParse {
+                kind: "ClaimStatus",
+                value: other.to_string(),
+            }),
+        }
+    }
 }
 
 impl Store {
@@ -101,20 +167,30 @@ impl Store {
 
     /// Retrieve a claim by id.
     pub fn get_claim(&self, id: i64) -> Result<Claim, Error> {
-        self.conn
-            .query_row(
-                "SELECT id, subject, predicate, object FROM claims WHERE id = ?1",
-                [id],
-                |row| {
-                    Ok(Claim {
-                        id: row.get(0)?,
-                        subject: row.get(1)?,
-                        predicate: row.get(2)?,
-                        object: row.get(3)?,
-                    })
-                },
-            )
-            .map_err(Error::from)
+        let (id, subject, predicate, object, provenance, confidence, status, source_refs): (
+            i64, String, String, String, String, f64, String, String,
+        ) = self.conn.query_row(
+            "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs
+               FROM claims WHERE id = ?1",
+            [id],
+            |row| {
+                Ok((
+                    row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
+                    row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?,
+                ))
+            },
+        )?;
+
+        Ok(Claim {
+            id,
+            subject,
+            predicate,
+            object,
+            provenance: Provenance::from_str(&provenance)?,
+            confidence,
+            status: ClaimStatus::from_str(&status)?,
+            source_refs: serde_json::from_str(&source_refs)?,
+        })
     }
 }
 
@@ -145,4 +221,6 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("invalid {kind} value in database: {value:?}")]
+    EnumParse { kind: &'static str, value: String },
 }
