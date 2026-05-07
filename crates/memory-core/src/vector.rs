@@ -5,6 +5,13 @@
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum VectorBackend {
+    #[default]
+    SqliteVss,
+    Qdrant,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct OllamaEmbeddingRequest<'a> {
     model: &'a str,

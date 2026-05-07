@@ -2,7 +2,9 @@
 //! before any network I/O. ADR-0013 requires Rust HTTP to local Ollama; ADR-0004
 //! supplies HybridRAG's vector side.
 
-use memory_core::vector::{OllamaEmbeddingClient, OllamaEmbeddingRequest, OllamaEmbeddingResponse};
+use memory_core::vector::{
+    OllamaEmbeddingClient, OllamaEmbeddingRequest, OllamaEmbeddingResponse, VectorBackend,
+};
 
 #[test]
 fn ollama_embedding_request_serializes_model_and_prompt() {
@@ -39,4 +41,9 @@ fn ollama_embedding_client_builds_request_with_configured_model() {
 
     assert_eq!(json["model"], "nomic-embed-text");
     assert_eq!(json["prompt"], "remembered claim text");
+}
+
+#[test]
+fn vector_backend_defaults_to_sqlite_vss() {
+    assert_eq!(VectorBackend::default(), VectorBackend::SqliteVss);
 }
