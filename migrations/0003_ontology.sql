@@ -10,3 +10,9 @@ CREATE TABLE IF NOT EXISTS predicate_types (
     name      TEXT NOT NULL UNIQUE,
     parent_id INTEGER REFERENCES predicate_types(id)
 );
+
+CREATE TABLE IF NOT EXISTS entity_type_closure (
+    child_id    INTEGER NOT NULL REFERENCES entity_types(id),
+    ancestor_id INTEGER NOT NULL REFERENCES entity_types(id),
+    PRIMARY KEY (child_id, ancestor_id)
+);

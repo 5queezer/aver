@@ -34,3 +34,14 @@ fn fresh_database_has_predicate_types_table() {
         "predicate_types table should exist after open()"
     );
 }
+
+#[test]
+fn fresh_database_has_entity_type_closure_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+
+    assert!(
+        store.has_table("entity_type_closure"),
+        "entity_type_closure table should exist after open()"
+    );
+}
