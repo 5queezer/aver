@@ -24,3 +24,18 @@ impl HybridWeights {
         self.vector_weight() * vector_score + self.graph_weight() * graph_score
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RetrievalCandidate {
+    pub claim_id: i64,
+    pub score: f64,
+}
+
+impl RetrievalCandidate {
+    pub fn new(claim_id: i64, vector_score: f64, graph_score: f64, weights: HybridWeights) -> Self {
+        Self {
+            claim_id,
+            score: weights.blend(vector_score, graph_score),
+        }
+    }
+}
