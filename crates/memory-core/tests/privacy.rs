@@ -74,6 +74,13 @@ fn privacy_filter_path_rejects_secrets_dir() {
 }
 
 #[test]
+fn privacy_filter_path_rejects_env_file() {
+    let result = privacy_filter_path("/project/.env.local");
+
+    assert_eq!(result, Err(PrivacyRejection::EnvPath));
+}
+
+#[test]
 fn add_claim_rejects_secret_before_episodic_log_write() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
