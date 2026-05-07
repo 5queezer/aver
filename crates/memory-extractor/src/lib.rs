@@ -32,6 +32,16 @@ pub fn extract_rust_calls(source: &str) -> Result<Vec<String>, Error> {
     Ok(calls)
 }
 
+pub fn extract_rust_structs(source: &str) -> Result<Vec<String>, Error> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_rust::language())?;
+    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+
+    let mut structs = Vec::new();
+    collect_structs(tree.root_node(), source.as_bytes(), &mut structs)?;
+    Ok(structs)
+}
+
 fn collect_function_names(
     node: Node<'_>,
     source: &[u8],
@@ -78,6 +88,20 @@ fn collect_calls(node: Node<'_>, source: &[u8], calls: &mut Vec<String>) -> Resu
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_calls(child, source, calls)?;
+    }
+    Ok(())
+}
+
+fn collect_structs(node: Node<'_>, source: &[u8], structs: &mut Vec<String>) -> Result<(), Error> {
+    if node.kind() == "struct_item"
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        structs.push(name.utf8_text(source)?.to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_structs(child, source, structs)?;
     }
     Ok(())
 }

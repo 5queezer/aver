@@ -1,6 +1,8 @@
 //! T55 — v0.3 starts with deterministic Tree-sitter Rust extraction.
 
-use memory_extractor::{extract_rust_calls, extract_rust_functions, extract_rust_imports};
+use memory_extractor::{
+    extract_rust_calls, extract_rust_functions, extract_rust_imports, extract_rust_structs,
+};
 
 #[test]
 fn extract_rust_functions_finds_function_name() {
@@ -21,4 +23,11 @@ fn extract_rust_calls_finds_called_function_name() {
     let calls = extract_rust_calls("fn main() { remember(); }").unwrap();
 
     assert_eq!(calls, vec!["remember".to_string()]);
+}
+
+#[test]
+fn extract_rust_structs_finds_struct_name() {
+    let structs = extract_rust_structs("struct Claim { text: String }").unwrap();
+
+    assert_eq!(structs, vec!["Claim".to_string()]);
 }
