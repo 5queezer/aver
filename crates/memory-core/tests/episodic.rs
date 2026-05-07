@@ -148,3 +148,33 @@ fn reject_candidate_claim_marks_rejected_with_reason() {
     );
     assert!(store.recall_text("Redis").unwrap().is_empty());
 }
+
+#[test]
+fn promote_candidate_claim_twice_returns_existing_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let event_id = store
+        .record_event(
+            "session-1",
+            "explicit_remember",
+            "AML uses triggered episodic memory.",
+            "conversation",
+        )
+        .unwrap();
+    let candidate_id = store
+        .propose_candidate_claim(event_id, "AML", "uses", "triggered_episodic_memory")
+        .unwrap();
+
+    let first_claim_id = store.promote_candidate_claim(candidate_id).unwrap();
+    let second_claim_id = store.promote_candidate_claim(candidate_id).unwrap();
+
+    assert_eq!(second_claim_id, first_claim_id);
+    assert_eq!(
+        store
+            .recall_text("triggered_episodic_memory")
+            .unwrap()
+            .len(),
+        1
+    );
+}

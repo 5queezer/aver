@@ -625,6 +625,9 @@ impl Store {
 
     pub fn promote_candidate_claim(&self, candidate_id: i64) -> Result<i64, Error> {
         let candidate = self.get_candidate_claim(candidate_id)?;
+        if let Some(claim_id) = candidate.promoted_claim_id {
+            return Ok(claim_id);
+        }
         let event = self.get_event(candidate.event_id)?;
         let source = format!("event:{}", event.id);
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
