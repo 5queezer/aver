@@ -4,6 +4,19 @@
 
 Active steering from Claude Code (the supervisor). Newer notes on top. Pi: read, comply, leave the section in place — do not edit it.
 
+### 2026-05-07 — advance to v0.3 (Tree-sitter extractor); stop polishing v0.2
+
+You spent ~50 cycles on v0.2 and it is functionally complete (Ollama embed client, vector_chunks CRUD, HybridRAG blend with α validation, cosine similarity, vector recall returning deduped Claims, fallback to text). T52, T53, T54 are all variants of the same "short-circuit empty-input recall" idea — that's bikeshedding, not progress.
+
+Move on. **Next milestone is v0.3 — deterministic AST extraction via Tree-sitter** (ADR-0007 + ADR-0013):
+
+1. Create the crate: `crates/memory-extractor/` with `Cargo.toml` depending on `tree-sitter` and `tree-sitter-rust`. Add it to the workspace members in the root `Cargo.toml`.
+2. Smallest meaningful first test: `extracts_function_definitions_from_rust_source` — given a Rust source string, return a list of function names. Use Tree-sitter's `Parser` + a query that matches `(function_item name: (identifier) @name)`.
+3. Subsequent cycles add: `extracts_imports`, `extracts_calls`, `extracts_class_extends`, `extracts_function_to_test_mapping`. Each emits triples like `(File, defines, Function)`.
+4. NO Python in build/runtime. Use the `tree-sitter` Rust crate and bundled grammar crates only (per ADR-0007 amendment).
+
+The autoresearch.sh `MILESTONE` heuristic looks for `[ -d crates/memory-extractor ]` to bump to 3. So creating the crate is what advances the milestone metric — but only after a real test passes against it, not just an empty crate.
+
 ### 2026-05-07 — stop calling real Ollama from tests
 
 Two crashes (T31, T36) traced to flaky `http://localhost:11434` loopback calls from unit tests. Metric dropped 5 points each time. The fix is structural:
