@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# autoresearch.sh — measure one TDD evaluation cycle.
+# autoresearch.sh — measure noisy recall quality while keeping the workspace green.
 # Emits METRIC name=value lines parsed by the autoresearch extension.
 
 set -uo pipefail
@@ -12,6 +12,13 @@ TEST_EXIT=$?
 GREEN=$(printf '%s\n' "$TEST_OUT" | awk '/^test result:/ { s += $4 } END { print s+0 }')
 RED=$(printf '%s\n' "$TEST_OUT"   | awk '/^test result:/ { s += $6 } END { print s+0 }')
 TOTAL=$((GREEN + RED))
+
+BENCH_OUT=""
+BENCH_EXIT=0
+if [ "$TEST_EXIT" -eq 0 ] && [ "$RED" -eq 0 ]; then
+  BENCH_OUT=$(cargo run -q -p aver-eval -- eval/fixtures/conflict_and_noise.json 2>&1)
+  BENCH_EXIT=$?
+fi
 
 # Milestone heuristic — bumped as files/symbols characteristic of each
 # milestone appear. Keep the heuristic conservative so it never over-claims.
@@ -37,9 +44,13 @@ echo "METRIC milestone_index=$MILESTONE"
 echo "METRIC loc_core=$LOC_CORE"
 echo "METRIC commit_count_total=$COMMITS"
 
-# Non-zero on compile fail or any red test, so the autoresearch driver
-# records `crash` and the agent sees it.
-if [ "$TEST_EXIT" -ne 0 ] || [ "$RED" -gt 0 ]; then
+if [ "$BENCH_EXIT" -eq 0 ] && [ -n "$BENCH_OUT" ]; then
+  printf '%s\n' "$BENCH_OUT"
+  printf '%s\n' "$BENCH_OUT" | python3 -c 'import json,sys; m=json.load(sys.stdin); print("METRIC unsupported_claim_rate={}".format(m["unsupported_claim_rate"])); print("METRIC mean_precision_at_k={}".format(m["mean_precision_at_k"])); print("METRIC mean_recall_at_k={}".format(m["mean_recall_at_k"]))'
+fi
+
+# Non-zero on compile fail, any red test, or benchmark failure.
+if [ "$TEST_EXIT" -ne 0 ] || [ "$RED" -gt 0 ] || [ "$BENCH_EXIT" -ne 0 ]; then
   exit 1
 fi
 exit 0
