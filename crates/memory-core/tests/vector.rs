@@ -77,3 +77,14 @@ fn vector_backend_config_parser_trims_whitespace() {
         VectorBackend::Qdrant
     );
 }
+
+#[test]
+fn ollama_embedding_client_parses_response_body_to_vector() {
+    let client = OllamaEmbeddingClient::new("http://localhost:11434", "nomic-embed-text");
+
+    let embedding = client
+        .parse_response_body(r#"{"embedding":[0.25,0.75]}"#)
+        .unwrap();
+
+    assert_eq!(embedding, vec![0.25, 0.75]);
+}

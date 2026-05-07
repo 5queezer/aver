@@ -87,4 +87,9 @@ impl OllamaEmbeddingClient {
     pub fn request<'a>(&'a self, prompt: &'a str) -> OllamaEmbeddingRequest<'a> {
         OllamaEmbeddingRequest::new(&self.model, prompt)
     }
+
+    pub fn parse_response_body(&self, body: &str) -> Result<Vec<f32>, serde_json::Error> {
+        let response: OllamaEmbeddingResponse = serde_json::from_str(body)?;
+        Ok(response.embedding)
+    }
 }
