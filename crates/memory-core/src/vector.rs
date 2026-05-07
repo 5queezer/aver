@@ -43,4 +43,8 @@ impl OllamaEmbeddingClient {
     pub fn model(&self) -> &str {
         &self.model
     }
+
+    pub fn request<'a>(&'a self, prompt: &'a str) -> OllamaEmbeddingRequest<'a> {
+        OllamaEmbeddingRequest::new(&self.model, prompt)
+    }
 }

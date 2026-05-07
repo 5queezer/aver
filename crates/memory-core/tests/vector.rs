@@ -30,3 +30,13 @@ fn ollama_embedding_client_normalizes_embeddings_endpoint_url() {
         "http://localhost:11434/api/embeddings"
     );
 }
+
+#[test]
+fn ollama_embedding_client_builds_request_with_configured_model() {
+    let client = OllamaEmbeddingClient::new("http://localhost:11434", "nomic-embed-text");
+
+    let json = serde_json::to_value(client.request("remembered claim text")).unwrap();
+
+    assert_eq!(json["model"], "nomic-embed-text");
+    assert_eq!(json["prompt"], "remembered claim text");
+}
