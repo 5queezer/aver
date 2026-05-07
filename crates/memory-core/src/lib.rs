@@ -409,6 +409,10 @@ impl Store {
         client: &impl vector::EmbeddingClient,
         top_k: usize,
     ) -> Result<Vec<VectorChunk>, Error> {
+        if top_k == 0 {
+            return Ok(Vec::new());
+        }
+
         let query_embedding = client.embed(query)?;
         self.rank_vector_chunks_by_embedding(&query_embedding, top_k)
     }

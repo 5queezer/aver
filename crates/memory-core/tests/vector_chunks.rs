@@ -294,3 +294,15 @@ fn recall_vector_claims_top_k_zero_does_not_embed_query() {
 
     assert!(claims.is_empty());
 }
+
+#[test]
+fn recall_vector_chunks_top_k_zero_does_not_embed_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let chunks = store
+        .recall_vector_chunks("anything", &FailingEmbeddingClient, 0)
+        .expect("top_k=0 should short-circuit before embedding");
+
+    assert!(chunks.is_empty());
+}
