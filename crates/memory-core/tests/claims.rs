@@ -136,6 +136,32 @@ fn add_claim_records_default_agent_provenance() {
 }
 
 #[test]
+fn add_claim_from_agent_records_explicit_agent_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let claim_id = store
+        .add_claim_from_agent(
+            "parser_agent",
+            memory_core::AgentKind::DeterministicParser,
+            "module",
+            "defines",
+            "SharedStore",
+            "tree_sitter",
+        )
+        .unwrap();
+
+    let claim = store.get_claim(claim_id).unwrap();
+
+    assert_eq!(claim.agent_id, "parser_agent");
+    assert_eq!(
+        claim.agent_kind,
+        memory_core::AgentKind::DeterministicParser
+    );
+    assert!(claim.write_ts > 0);
+}
+
+#[test]
 fn consolidate_supersedes_duplicate_claims() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

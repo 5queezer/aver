@@ -377,7 +377,29 @@ impl Store {
         object: &str,
         source: &str,
     ) -> Result<i64, Error> {
-        privacy_filter(&format!("{subject} {predicate} {object} {source}"))?;
+        self.add_claim_from_agent(
+            "local",
+            AgentKind::Human,
+            subject,
+            predicate,
+            object,
+            source,
+        )
+    }
+
+    pub fn add_claim_from_agent(
+        &self,
+        agent_id: &str,
+        agent_kind: AgentKind,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        source: &str,
+    ) -> Result<i64, Error> {
+        privacy_filter(&format!(
+            "{agent_id} {} {subject} {predicate} {object} {source}",
+            agent_kind.as_str()
+        ))?;
 
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
@@ -407,8 +429,17 @@ impl Store {
                                  status, source_refs, agent_id, agent_kind, write_ts,
                                  created_at, last_seen_at)
              VALUES (?1, ?2, ?3, ?4, 'USER_ASSERTED', 0.95, 'ACTIVE', ?5,
-                     'local', 'HUMAN', ?6, ?6, ?6)",
-            params![claim_id, subject, predicate, object, source_refs, now],
+                     ?6, ?7, ?8, ?8, ?8)",
+            params![
+                claim_id,
+                subject,
+                predicate,
+                object,
+                source_refs,
+                agent_id,
+                agent_kind.as_str(),
+                now
+            ],
         )?;
         Ok(claim_id)
     }
