@@ -1,0 +1,23 @@
+{
+  "name": "conflict_and_noise",
+  "version": 1,
+  "description": "Noisy deterministic recall fixture with overlapping project, user, and meeting claims",
+  "claims": [
+    {"subject": "project", "predicate": "language", "object": "Rust"},
+    {"subject": "project", "predicate": "name", "object": "Aver"},
+    {"subject": "project", "predicate": "old_language", "object": "Python"},
+    {"subject": "project", "predicate": "repository", "object": "agent-memory-layer"},
+    {"subject": "meeting", "predicate": "attendee", "object": "Bob"},
+    {"subject": "meeting", "predicate": "topic", "object": "project_planning"},
+    {"subject": "user", "predicate": "name", "object": "Alice"},
+    {"subject": "user", "predicate": "likes", "object": "Rust"},
+    {"subject": "benchmark", "predicate": "name", "object": "MemoryAgentBench"}
+  ],
+  "queries": [
+    {"query": "Aver language", "relevant_indices": [0, 1], "top_k": 5},
+    {"query": "project Python", "relevant_indices": [2], "top_k": 3},
+    {"query": "Bob meeting", "relevant_indices": [4], "top_k": 3},
+    {"query": "Rust user", "relevant_indices": [7], "top_k": 3},
+    {"query": "MemoryAgentBench benchmark", "relevant_indices": [8], "top_k": 3}
+  ]
+}

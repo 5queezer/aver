@@ -1,6 +1,8 @@
 //! MemoryAgentBench runner tests — strict TDD order.
 
 const BASIC_FIXTURE: &str = include_str!("../../../eval/fixtures/basic_recall.json");
+const CONFLICT_AND_NOISE_FIXTURE: &str =
+    include_str!("../../../eval/fixtures/conflict_and_noise.json");
 
 #[test]
 fn fixture_deserializes_from_json() {
@@ -52,5 +54,17 @@ fn unsupported_claim_rate_bounded() {
     let f = aver_eval::load_fixture(BASIC_FIXTURE).unwrap();
     let metrics = aver_eval::run_fixture(&f).unwrap();
     assert!(metrics.unsupported_claim_rate >= 0.0);
+    assert!(metrics.unsupported_claim_rate <= 1.0);
+}
+
+#[test]
+fn conflict_and_noise_fixture_exercises_distractor_retrieval() {
+    let f = aver_eval::load_fixture(CONFLICT_AND_NOISE_FIXTURE).unwrap();
+    assert_eq!(f.name, "conflict_and_noise");
+    assert!(f.claims.len() > 5);
+
+    let metrics = aver_eval::run_fixture(&f).unwrap();
+    assert!(metrics.mean_recall_at_k >= 0.5);
+    assert!(metrics.unsupported_claim_rate > 0.0);
     assert!(metrics.unsupported_claim_rate <= 1.0);
 }
