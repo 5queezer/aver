@@ -12,6 +12,14 @@ impl Default for HybridWeights {
 }
 
 impl HybridWeights {
+    pub fn try_new(alpha: f64) -> Result<Self, &'static str> {
+        if (0.0..=1.0).contains(&alpha) {
+            Ok(Self { alpha })
+        } else {
+            Err("alpha must be between 0.0 and 1.0")
+        }
+    }
+
     pub fn vector_weight(self) -> f64 {
         self.alpha
     }

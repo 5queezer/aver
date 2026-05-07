@@ -93,3 +93,9 @@ fn rank_candidates_breaks_score_ties_by_claim_id() {
     let ids: Vec<i64> = ranked.into_iter().map(|c| c.claim_id).collect();
     assert_eq!(ids, vec![1, 2]);
 }
+
+#[test]
+fn hybrid_weights_reject_alpha_outside_unit_interval() {
+    assert!(HybridWeights::try_new(1.1).is_err());
+    assert!(HybridWeights::try_new(-0.1).is_err());
+}
