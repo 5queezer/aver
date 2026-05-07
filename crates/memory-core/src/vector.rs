@@ -91,6 +91,23 @@ impl Default for VectorIndexConfig {
     }
 }
 
+impl VectorIndexConfig {
+    pub fn from_optional_config(
+        backend: Option<&str>,
+        embedding_model: Option<&str>,
+    ) -> Result<Self, &'static str> {
+        let default = Self::default();
+        Ok(Self {
+            backend: VectorBackend::from_optional_config(backend)?,
+            embedding_model: embedding_model
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .unwrap_or(default.embedding_model),
+        })
+    }
+}
+
 pub fn cosine_similarity(left: &[f32], right: &[f32]) -> Option<f32> {
     if left.len() != right.len() || left.is_empty() {
         return None;

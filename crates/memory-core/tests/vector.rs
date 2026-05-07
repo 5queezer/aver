@@ -89,6 +89,15 @@ fn vector_index_config_defaults_to_sqlite_vss_and_nomic_model() {
 }
 
 #[test]
+fn vector_index_config_parses_optional_backend_and_model() {
+    let config =
+        VectorIndexConfig::from_optional_config(Some(" qdrant "), Some("all-minilm")).unwrap();
+
+    assert_eq!(config.backend, VectorBackend::Qdrant);
+    assert_eq!(config.embedding_model, "all-minilm");
+}
+
+#[test]
 fn ollama_embedding_client_parses_response_body_to_vector() {
     let client = OllamaEmbeddingClient::new("http://localhost:11434", "nomic-embed-text");
 
