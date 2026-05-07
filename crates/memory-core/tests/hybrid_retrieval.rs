@@ -113,3 +113,18 @@ fn hybrid_weights_parser_trims_alpha_override_whitespace() {
 
     assert_eq!(weights.alpha, 0.40);
 }
+
+#[test]
+fn retrieval_candidate_from_embeddings_uses_normalized_vector_score() {
+    let candidate = RetrievalCandidate::from_embeddings(
+        7,
+        &[1.0, 0.0],
+        &[1.0, 0.0],
+        0.0,
+        HybridWeights::default(),
+    )
+    .unwrap();
+
+    assert_eq!(candidate.claim_id, 7);
+    assert!((candidate.score - 0.65).abs() < f64::EPSILON);
+}

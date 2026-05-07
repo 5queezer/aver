@@ -1,5 +1,7 @@
 //! Retrieval scoring primitives for HybridRAG (ADR-0004).
 
+use crate::vector::normalized_cosine_score;
+
 use std::num::ParseFloatError;
 use std::str::FromStr;
 
@@ -64,6 +66,22 @@ impl RetrievalCandidate {
             claim_id,
             score: weights.blend(vector_score, graph_score),
         }
+    }
+
+    pub fn from_embeddings(
+        claim_id: i64,
+        query_embedding: &[f32],
+        candidate_embedding: &[f32],
+        graph_score: f64,
+        weights: HybridWeights,
+    ) -> Option<Self> {
+        let vector_score = normalized_cosine_score(query_embedding, candidate_embedding)?;
+        Some(Self::new(
+            claim_id,
+            f64::from(vector_score),
+            graph_score,
+            weights,
+        ))
     }
 }
 
