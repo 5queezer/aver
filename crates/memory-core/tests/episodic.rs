@@ -29,6 +29,30 @@ fn record_event_persists_episode_event() {
 }
 
 #[test]
+fn record_event_appends_to_episodic_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let event_id = store
+        .record_event(
+            "session-1",
+            "explicit_remember",
+            "AML should not write durable memory after every message.",
+            "conversation",
+        )
+        .unwrap();
+
+    let log = std::fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
+    let entry: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
+
+    assert_eq!(entry["kind"], "record_event");
+    assert_eq!(entry["event_id"], serde_json::json!(event_id));
+    assert_eq!(entry["session_id"], "session-1");
+    assert_eq!(entry["event_kind"], "explicit_remember");
+    assert_eq!(entry["agent_id"], "local");
+}
+
+#[test]
 fn propose_candidate_claim_requires_event_provenance() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

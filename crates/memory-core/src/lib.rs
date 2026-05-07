@@ -42,6 +42,7 @@ const MIGRATIONS: &[(&str, &str)] = &[
 pub struct Store {
     conn: Connection,
     log_path: PathBuf,
+    event_log_path: PathBuf,
 }
 
 /// A claim row as exposed to consumers (ADR-0003).
@@ -371,6 +372,7 @@ impl Store {
 
         let db_path = memory_dir.join("db.sqlite");
         let log_path = memory_dir.join("log.jsonl");
+        let event_log_path = memory_dir.join("events.jsonl");
 
         let conn = Connection::open(&db_path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -380,7 +382,11 @@ impl Store {
             conn.execute_batch(sql)?;
         }
 
-        Ok(Self { conn, log_path })
+        Ok(Self {
+            conn,
+            log_path,
+            event_log_path,
+        })
     }
 
     /// Whether a table with the given name exists. Test/inspection helper.
@@ -511,12 +517,38 @@ impl Store {
             agent_kind.as_str()
         ))?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        self.conn.execute(
-            "INSERT INTO episodic_events (session_id, kind, payload, source, agent_id, agent_kind, ts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![session_id, kind, payload, source, agent_id, agent_kind.as_str(), now],
+        let event_id: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(id), 0) + 1 FROM episodic_events",
+            [],
+            |r| r.get(0),
         )?;
-        Ok(self.conn.last_insert_rowid())
+        let entry = EventLogEntry {
+            kind: "record_event",
+            ts: now,
+            event_id,
+            session_id,
+            event_kind: kind,
+            payload,
+            source,
+            agent_id,
+            agent_kind: agent_kind.as_str(),
+        };
+        append_jsonl(&self.event_log_path, &entry)?;
+        self.conn.execute(
+            "INSERT INTO episodic_events (id, session_id, kind, payload, source, agent_id, agent_kind, ts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                event_id,
+                session_id,
+                kind,
+                payload,
+                source,
+                agent_id,
+                agent_kind.as_str(),
+                now
+            ],
+        )?;
+        Ok(event_id)
     }
 
     pub fn get_event(&self, id: i64) -> Result<EpisodicEvent, Error> {
@@ -1126,6 +1158,19 @@ fn parse_optional_embedding(value: Option<String>) -> rusqlite::Result<Option<Ve
             })
         })
         .transpose()
+}
+
+#[derive(Serialize)]
+struct EventLogEntry<'a> {
+    kind: &'a str,
+    ts: i64,
+    event_id: i64,
+    session_id: &'a str,
+    event_kind: &'a str,
+    payload: &'a str,
+    source: &'a str,
+    agent_id: &'a str,
+    agent_kind: &'a str,
 }
 
 #[derive(Serialize)]
