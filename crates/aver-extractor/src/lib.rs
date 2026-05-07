@@ -75,6 +75,16 @@ pub fn extract_rust_traits(source: &str) -> Result<Vec<String>, Error> {
     Ok(traits)
 }
 
+pub fn extract_rust_consts(source: &str) -> Result<Vec<String>, Error> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_rust::language())?;
+    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+
+    let mut consts = Vec::new();
+    collect_consts(tree.root_node(), source.as_bytes(), &mut consts)?;
+    Ok(consts)
+}
+
 pub fn extract_rust_modules(source: &str) -> Result<Vec<String>, Error> {
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_rust::language())?;
@@ -151,6 +161,15 @@ pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
                 subject: path.to_string(),
                 predicate: "defines".to_string(),
                 object: format!("Trait:{trait_name}"),
+            }),
+    );
+    facts.extend(
+        extract_rust_consts(source)?
+            .into_iter()
+            .map(|const_name| ExtractedFact {
+                subject: path.to_string(),
+                predicate: "defines".to_string(),
+                object: format!("Const:{const_name}"),
             }),
     );
     facts.extend(extract_rust_module_definition_facts(path, source)?);
@@ -422,6 +441,20 @@ fn collect_modules(node: Node<'_>, source: &[u8], modules: &mut Vec<String>) -> 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_modules(child, source, modules)?;
+    }
+    Ok(())
+}
+
+fn collect_consts(node: Node<'_>, source: &[u8], consts: &mut Vec<String>) -> Result<(), Error> {
+    if node.kind() == "const_item"
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        consts.push(name.utf8_text(source)?.to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_consts(child, source, consts)?;
     }
     Ok(())
 }
