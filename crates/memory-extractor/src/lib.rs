@@ -83,14 +83,24 @@ pub fn map_rust_tests_to_functions(source: &str) -> Result<Vec<(String, String)>
 }
 
 pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let facts = extract_rust_functions(source)?
+    let mut facts = extract_rust_functions(source)?
         .into_iter()
         .map(|function| ExtractedFact {
             subject: path.to_string(),
             predicate: "defines".to_string(),
             object: format!("Function:{function}"),
         })
-        .collect();
+        .collect::<Vec<_>>();
+
+    facts.extend(
+        extract_rust_imports(source)?
+            .into_iter()
+            .map(|module| ExtractedFact {
+                subject: path.to_string(),
+                predicate: "imports".to_string(),
+                object: format!("Module:{module}"),
+            }),
+    );
     Ok(facts)
 }
 

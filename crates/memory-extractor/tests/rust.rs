@@ -69,3 +69,17 @@ fn extract_rust_facts_emits_file_defines_function_triple() {
         }]
     );
 }
+
+#[test]
+fn extract_rust_facts_emits_file_imports_module_triple() {
+    let facts = extract_rust_facts("src/lib.rs", "use std::fs;").unwrap();
+
+    assert_eq!(
+        facts,
+        vec![ExtractedFact {
+            subject: "src/lib.rs".to_string(),
+            predicate: "imports".to_string(),
+            object: "Module:std::fs".to_string(),
+        }]
+    );
+}
