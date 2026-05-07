@@ -631,6 +631,7 @@ impl Store {
     /// precursor to HybridRAG: cheap SQLite substring matching across the
     /// claim triple fields, ordered deterministically by id.
     pub fn consolidate(&self) -> Result<usize, Error> {
+        self.merge_duplicate_source_refs()?;
         let changed = self.conn.execute(
             "UPDATE claims
                 SET status = 'SUPERSEDED'
@@ -643,6 +644,51 @@ impl Store {
             [],
         )?;
         Ok(changed)
+    }
+
+    fn merge_duplicate_source_refs(&self) -> Result<(), Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT subject, predicate, object, MIN(id)
+               FROM claims
+              GROUP BY subject, predicate, object
+             HAVING COUNT(*) > 1",
+        )?;
+        let groups = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        for (subject, predicate, object, survivor_id) in groups {
+            let mut source_refs = Vec::new();
+            let mut refs_stmt = self.conn.prepare(
+                "SELECT source_refs
+                   FROM claims
+                  WHERE subject = ?1 AND predicate = ?2 AND object = ?3
+                  ORDER BY id",
+            )?;
+            let refs_rows = refs_stmt.query_map(params![subject, predicate, object], |row| {
+                row.get::<_, String>(0)
+            })?;
+            for refs_json in refs_rows {
+                for source_ref in serde_json::from_str::<Vec<String>>(&refs_json?)? {
+                    if !source_refs.contains(&source_ref) {
+                        source_refs.push(source_ref);
+                    }
+                }
+            }
+            let merged = serde_json::to_string(&source_refs)?;
+            self.conn.execute(
+                "UPDATE claims SET source_refs = ?1 WHERE id = ?2",
+                params![merged, survivor_id],
+            )?;
+        }
+        Ok(())
     }
 
     pub fn recall_text(&self, query: &str) -> Result<Vec<Claim>, Error> {

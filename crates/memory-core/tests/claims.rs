@@ -135,3 +135,18 @@ fn consolidate_supersedes_duplicate_claims() {
         ClaimStatus::Superseded
     );
 }
+
+#[test]
+fn consolidate_merges_duplicate_source_refs_into_survivor() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let first = store.add_claim("a", "rel", "b", "s1").unwrap();
+    store.add_claim("a", "rel", "b", "s2").unwrap();
+
+    store.consolidate().unwrap();
+
+    assert_eq!(
+        store.get_claim(first).unwrap().source_refs,
+        vec!["s1".to_string(), "s2".to_string()]
+    );
+}
