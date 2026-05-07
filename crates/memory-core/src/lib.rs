@@ -24,6 +24,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0002_vector_chunks",
         include_str!("../../../migrations/0002_vector_chunks.sql"),
     ),
+    (
+        "0003_ontology",
+        include_str!("../../../migrations/0003_ontology.sql"),
+    ),
 ];
 
 /// Local storage for the memory layer (ADR-0006).

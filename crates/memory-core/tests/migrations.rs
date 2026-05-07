@@ -12,3 +12,14 @@ fn fresh_database_has_claims_table() {
         "claims table should exist after open()"
     );
 }
+
+#[test]
+fn fresh_database_has_entity_types_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+
+    assert!(
+        store.has_table("entity_types"),
+        "entity_types table should exist after open()"
+    );
+}
