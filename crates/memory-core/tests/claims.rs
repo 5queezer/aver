@@ -118,3 +118,20 @@ fn claim_text_renders_subject_predicate_object_for_embedding() {
 
     assert_eq!(claim.text(), "auth_service depends_on stripe_sdk");
 }
+
+#[test]
+fn consolidate_supersedes_duplicate_claims() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let first = store.add_claim("a", "rel", "b", "s1").unwrap();
+    let duplicate = store.add_claim("a", "rel", "b", "s2").unwrap();
+
+    let superseded = store.consolidate().unwrap();
+
+    assert_eq!(superseded, 1);
+    assert_eq!(store.get_claim(first).unwrap().status, ClaimStatus::Active);
+    assert_eq!(
+        store.get_claim(duplicate).unwrap().status,
+        ClaimStatus::Superseded
+    );
+}

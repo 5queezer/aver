@@ -630,6 +630,21 @@ impl Store {
     /// Text-only keyword recall over active claims. This is the v0.1
     /// precursor to HybridRAG: cheap SQLite substring matching across the
     /// claim triple fields, ordered deterministically by id.
+    pub fn consolidate(&self) -> Result<usize, Error> {
+        let changed = self.conn.execute(
+            "UPDATE claims
+                SET status = 'SUPERSEDED'
+              WHERE id NOT IN (
+                    SELECT MIN(id)
+                      FROM claims
+                     GROUP BY subject, predicate, object
+              )
+                AND status = 'ACTIVE'",
+            [],
+        )?;
+        Ok(changed)
+    }
+
     pub fn recall_text(&self, query: &str) -> Result<Vec<Claim>, Error> {
         let pattern = format!("%{query}%");
         let mut stmt = self.conn.prepare(
