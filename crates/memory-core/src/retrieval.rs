@@ -1,5 +1,16 @@
 //! Retrieval scoring primitives for HybridRAG (ADR-0004).
 
+use std::num::ParseFloatError;
+use std::str::FromStr;
+
+#[derive(Debug, thiserror::Error)]
+pub enum HybridWeightsParseError {
+    #[error("invalid alpha: {0}")]
+    Float(#[from] ParseFloatError),
+    #[error("alpha must be between 0.0 and 1.0")]
+    OutOfRange,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HybridWeights {
     pub alpha: f64,
@@ -12,11 +23,11 @@ impl Default for HybridWeights {
 }
 
 impl HybridWeights {
-    pub fn try_new(alpha: f64) -> Result<Self, &'static str> {
+    pub fn try_new(alpha: f64) -> Result<Self, HybridWeightsParseError> {
         if (0.0..=1.0).contains(&alpha) {
             Ok(Self { alpha })
         } else {
-            Err("alpha must be between 0.0 and 1.0")
+            Err(HybridWeightsParseError::OutOfRange)
         }
     }
 
@@ -30,6 +41,14 @@ impl HybridWeights {
 
     pub fn blend(self, vector_score: f64, graph_score: f64) -> f64 {
         self.vector_weight() * vector_score + self.graph_weight() * graph_score
+    }
+}
+
+impl FromStr for HybridWeights {
+    type Err = HybridWeightsParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_new(s.parse()?)
     }
 }
 

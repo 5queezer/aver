@@ -99,3 +99,10 @@ fn hybrid_weights_reject_alpha_outside_unit_interval() {
     assert!(HybridWeights::try_new(1.1).is_err());
     assert!(HybridWeights::try_new(-0.1).is_err());
 }
+
+#[test]
+fn hybrid_weights_parse_alpha_override_from_string() {
+    let weights: HybridWeights = "0.40".parse().unwrap();
+
+    assert_eq!(weights.alpha, 0.40);
+}
