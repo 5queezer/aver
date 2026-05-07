@@ -93,6 +93,35 @@ pub struct CandidateClaim {
     pub rejection_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateClaimDraft {
+    pub event_id: i64,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+}
+
+pub trait ClaimExtractor {
+    fn extract(&self, events: &[EpisodicEvent]) -> Result<Vec<CandidateClaimDraft>, Error>;
+}
+
+#[derive(Debug, Clone)]
+pub struct MockClaimExtractor {
+    drafts: Vec<CandidateClaimDraft>,
+}
+
+impl MockClaimExtractor {
+    pub fn new(drafts: Vec<CandidateClaimDraft>) -> Self {
+        Self { drafts }
+    }
+}
+
+impl ClaimExtractor for MockClaimExtractor {
+    fn extract(&self, _events: &[EpisodicEvent]) -> Result<Vec<CandidateClaimDraft>, Error> {
+        Ok(self.drafts.clone())
+    }
+}
+
 /// A text chunk attached to a claim for vector indexing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VectorChunk {
