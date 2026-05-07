@@ -83,6 +83,8 @@ pub enum PrivacyRejection {
     StripeLiveKey,
     #[error("private key material")]
     PrivateKey,
+    #[error("high entropy token")]
+    HighEntropy,
 }
 
 pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
@@ -128,7 +130,30 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
     {
         return Err(PrivacyRejection::OpenAiKey);
     }
+    if content
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|token| token.len() > 20 && shannon_entropy(token) > 4.5)
+    {
+        return Err(PrivacyRejection::HighEntropy);
+    }
     Ok(())
+}
+
+fn shannon_entropy(token: &str) -> f64 {
+    let mut counts = [0usize; 256];
+    for byte in token.bytes() {
+        counts[byte as usize] += 1;
+    }
+
+    let len = token.len() as f64;
+    counts
+        .into_iter()
+        .filter(|count| *count > 0)
+        .map(|count| {
+            let p = count as f64 / len;
+            -p * p.log2()
+        })
+        .sum()
 }
 
 fn is_jwt(token: &str) -> bool {

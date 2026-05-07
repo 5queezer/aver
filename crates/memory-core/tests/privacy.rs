@@ -60,6 +60,13 @@ fn privacy_filter_rejects_private_key_header() {
 }
 
 #[test]
+fn privacy_filter_rejects_high_entropy_token() {
+    let result = privacy_filter("secret q7Zp9Lm2Kx8Vn4Rb6Ty0Wc3Ae5Gu");
+
+    assert_eq!(result, Err(PrivacyRejection::HighEntropy));
+}
+
+#[test]
 fn add_claim_rejects_secret_before_episodic_log_write() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
