@@ -12,6 +12,16 @@ pub fn extract_rust_functions(source: &str) -> Result<Vec<String>, Error> {
     Ok(functions)
 }
 
+pub fn extract_rust_imports(source: &str) -> Result<Vec<String>, Error> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_rust::language())?;
+    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+
+    let mut imports = Vec::new();
+    collect_imports(tree.root_node(), source.as_bytes(), &mut imports)?;
+    Ok(imports)
+}
+
 fn collect_function_names(
     node: Node<'_>,
     source: &[u8],
@@ -26,6 +36,24 @@ fn collect_function_names(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_function_names(child, source, functions)?;
+    }
+    Ok(())
+}
+
+fn collect_imports(node: Node<'_>, source: &[u8], imports: &mut Vec<String>) -> Result<(), Error> {
+    if node.kind() == "use_declaration" {
+        let text = node.utf8_text(source)?;
+        imports.push(
+            text.trim()
+                .trim_start_matches("use ")
+                .trim_end_matches(';')
+                .to_string(),
+        );
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_imports(child, source, imports)?;
     }
     Ok(())
 }
