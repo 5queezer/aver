@@ -28,6 +28,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0003_ontology",
         include_str!("../../../migrations/0003_ontology.sql"),
     ),
+    (
+        "0004_episodic_candidates",
+        include_str!("../../../migrations/0004_episodic_candidates.sql"),
+    ),
 ];
 
 /// Local storage for the memory layer (ADR-0006).
@@ -60,6 +64,18 @@ impl Claim {
     pub fn text(&self) -> String {
         format!("{} {} {}", self.subject, self.predicate, self.object)
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EpisodicEvent {
+    pub id: i64,
+    pub session_id: String,
+    pub kind: String,
+    pub payload: String,
+    pub source: String,
+    pub agent_id: String,
+    pub agent_kind: AgentKind,
+    pub ts: i64,
 }
 
 /// A text chunk attached to a claim for vector indexing.
@@ -455,6 +471,79 @@ impl Store {
             .join("agents")
             .join(agent_id)
             .join("log.jsonl")
+    }
+
+    pub fn record_event(
+        &self,
+        session_id: &str,
+        kind: &str,
+        payload: &str,
+        source: &str,
+    ) -> Result<i64, Error> {
+        self.record_event_from_agent("local", AgentKind::Human, session_id, kind, payload, source)
+    }
+
+    pub fn record_event_from_agent(
+        &self,
+        agent_id: &str,
+        agent_kind: AgentKind,
+        session_id: &str,
+        kind: &str,
+        payload: &str,
+        source: &str,
+    ) -> Result<i64, Error> {
+        validate_agent_id(agent_id)?;
+        privacy_filter(&format!(
+            "{agent_id} {} {session_id} {kind} {payload} {source}",
+            agent_kind.as_str()
+        ))?;
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.conn.execute(
+            "INSERT INTO episodic_events (session_id, kind, payload, source, agent_id, agent_kind, ts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![session_id, kind, payload, source, agent_id, agent_kind.as_str(), now],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn get_event(&self, id: i64) -> Result<EpisodicEvent, Error> {
+        let (id, session_id, kind, payload, source, agent_id, agent_kind, ts): (
+            i64,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            i64,
+        ) = self.conn.query_row(
+            "SELECT id, session_id, kind, payload, source, agent_id, agent_kind, ts
+               FROM episodic_events WHERE id = ?1",
+            [id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            },
+        )?;
+
+        Ok(EpisodicEvent {
+            id,
+            session_id,
+            kind,
+            payload,
+            source,
+            agent_id,
+            agent_kind: agent_kind.parse()?,
+            ts,
+        })
     }
 
     /// Retrieve a claim by id.
