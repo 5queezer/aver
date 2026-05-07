@@ -192,6 +192,17 @@ fn extract_rust_facts_emits_qualified_impl_method_call_triple() {
 }
 
 #[test]
+fn extract_rust_facts_emits_file_defines_module_triple() {
+    let facts = extract_rust_facts("src/lib.rs", "mod embedding { fn embed() {} }").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "src/lib.rs".to_string(),
+        predicate: "defines".to_string(),
+        object: "Module:embedding".to_string(),
+    }));
+}
+
+#[test]
 fn extract_rust_facts_emits_type_implements_trait_triple() {
     let facts = extract_rust_facts(
         "src/lib.rs",
