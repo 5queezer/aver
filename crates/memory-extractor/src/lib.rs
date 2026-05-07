@@ -1,10 +1,14 @@
 //! Deterministic source extractors (ADR-0007).
 
+pub mod prose;
+
 use std::collections::HashSet;
 
 use tree_sitter::{Node, Parser};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+pub use prose::parse_prose_facts;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct ExtractedFact {
     pub subject: String,
     pub predicate: String,
@@ -394,4 +398,6 @@ pub enum Error {
     ParseFailed,
     #[error("utf8: {0}")]
     Utf8(#[from] std::str::Utf8Error),
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
 }
