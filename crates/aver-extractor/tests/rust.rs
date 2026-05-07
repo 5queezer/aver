@@ -343,6 +343,17 @@ fn extract_rust_facts_emits_module_qualified_test_covers_function_triple() {
 }
 
 #[test]
+fn extract_rust_facts_emits_module_imports_module_triple() {
+    let facts = extract_rust_facts("src/lib.rs", "mod storage { use std::fs; }").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Module:storage".to_string(),
+        predicate: "imports".to_string(),
+        object: "Module:std::fs".to_string(),
+    }));
+}
+
+#[test]
 fn extract_rust_facts_emits_type_implements_trait_triple() {
     let facts = extract_rust_facts(
         "src/lib.rs",
