@@ -61,6 +61,16 @@ pub fn extract_rust_enums(source: &str) -> Result<Vec<String>, Error> {
     Ok(enums)
 }
 
+pub fn extract_rust_traits(source: &str) -> Result<Vec<String>, Error> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_rust::language())?;
+    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+
+    let mut traits = Vec::new();
+    collect_traits(tree.root_node(), source.as_bytes(), &mut traits)?;
+    Ok(traits)
+}
+
 pub fn extract_rust_tests(source: &str) -> Result<Vec<String>, Error> {
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_rust::language())?;
@@ -237,6 +247,20 @@ fn collect_enums(node: Node<'_>, source: &[u8], enums: &mut Vec<String>) -> Resu
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_enums(child, source, enums)?;
+    }
+    Ok(())
+}
+
+fn collect_traits(node: Node<'_>, source: &[u8], traits: &mut Vec<String>) -> Result<(), Error> {
+    if node.kind() == "trait_item"
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        traits.push(name.utf8_text(source)?.to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_traits(child, source, traits)?;
     }
     Ok(())
 }
