@@ -68,3 +68,20 @@ fn list_vector_chunks_for_claim_orders_by_chunk_id() {
     let texts: Vec<String> = chunks.into_iter().map(|chunk| chunk.text).collect();
     assert_eq!(texts, vec!["first chunk", "second chunk"]);
 }
+
+#[test]
+fn add_vector_chunk_for_claim_uses_canonical_claim_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim("auth_service", "depends_on", "stripe_sdk", "test_session")
+        .unwrap();
+
+    let chunk_id = store
+        .add_vector_chunk_for_claim(claim_id, "nomic-embed-text")
+        .unwrap();
+    let chunk = store.get_vector_chunk(chunk_id).unwrap();
+
+    assert_eq!(chunk.text, "auth_service depends_on stripe_sdk");
+    assert_eq!(chunk.embedding_model, "nomic-embed-text");
+}

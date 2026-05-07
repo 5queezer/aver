@@ -267,6 +267,16 @@ impl Store {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Insert vector chunk metadata using the canonical claim text rendering.
+    pub fn add_vector_chunk_for_claim(
+        &self,
+        claim_id: i64,
+        embedding_model: &str,
+    ) -> Result<i64, Error> {
+        let claim = self.get_claim(claim_id)?;
+        self.add_vector_chunk(claim_id, &claim.text(), embedding_model)
+    }
+
     /// Retrieve vector chunk metadata by id.
     pub fn get_vector_chunk(&self, id: i64) -> Result<VectorChunk, Error> {
         self.conn
