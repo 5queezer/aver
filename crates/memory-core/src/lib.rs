@@ -51,6 +51,9 @@ pub struct Claim {
     pub confidence: f64,
     pub status: ClaimStatus,
     pub source_refs: Vec<String>,
+    pub agent_id: String,
+    pub agent_kind: AgentKind,
+    pub write_ts: i64,
 }
 
 impl Claim {
@@ -225,6 +228,42 @@ fn is_aws_access_key(token: &str) -> bool {
             .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
 }
 
+/// Writer class for shared-mode agent provenance (ADR-0011).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentKind {
+    Human,
+    Llm,
+    DeterministicParser,
+    ExternalTool,
+}
+
+impl AgentKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Human => "HUMAN",
+            Self::Llm => "LLM",
+            Self::DeterministicParser => "DETERMINISTIC_PARSER",
+            Self::ExternalTool => "EXTERNAL_TOOL",
+        }
+    }
+}
+
+impl FromStr for AgentKind {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self, Error> {
+        match s {
+            "HUMAN" => Ok(Self::Human),
+            "LLM" => Ok(Self::Llm),
+            "DETERMINISTIC_PARSER" => Ok(Self::DeterministicParser),
+            "EXTERNAL_TOOL" => Ok(Self::ExternalTool),
+            other => Err(Error::EnumParse {
+                kind: "AgentKind",
+                value: other.to_string(),
+            }),
+        }
+    }
+}
+
 /// How a claim was acquired (ADR-0003).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provenance {
@@ -365,8 +404,10 @@ impl Store {
         let source_refs = serde_json::to_string(&[source])?;
         self.conn.execute(
             "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
-                                 status, source_refs, created_at, last_seen_at)
-             VALUES (?1, ?2, ?3, ?4, 'USER_ASSERTED', 0.95, 'ACTIVE', ?5, ?6, ?6)",
+                                 status, source_refs, agent_id, agent_kind, write_ts,
+                                 created_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, 'USER_ASSERTED', 0.95, 'ACTIVE', ?5,
+                     'local', 'HUMAN', ?6, ?6, ?6)",
             params![claim_id, subject, predicate, object, source_refs, now],
         )?;
         Ok(claim_id)
@@ -374,7 +415,19 @@ impl Store {
 
     /// Retrieve a claim by id.
     pub fn get_claim(&self, id: i64) -> Result<Claim, Error> {
-        let (id, subject, predicate, object, provenance, confidence, status, source_refs): (
+        let (
+            id,
+            subject,
+            predicate,
+            object,
+            provenance,
+            confidence,
+            status,
+            source_refs,
+            agent_id,
+            agent_kind,
+            write_ts,
+        ): (
             i64,
             String,
             String,
@@ -383,8 +436,12 @@ impl Store {
             f64,
             String,
             String,
+            String,
+            String,
+            i64,
         ) = self.conn.query_row(
-            "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs
+            "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs,
+                    agent_id, agent_kind, write_ts
                FROM claims WHERE id = ?1",
             [id],
             |row| {
@@ -397,6 +454,9 @@ impl Store {
                     row.get(5)?,
                     row.get(6)?,
                     row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
                 ))
             },
         )?;
@@ -410,6 +470,9 @@ impl Store {
             confidence,
             status: status.parse()?,
             source_refs: serde_json::from_str(&source_refs)?,
+            agent_id,
+            agent_kind: agent_kind.parse()?,
+            write_ts,
         })
     }
 
@@ -712,7 +775,8 @@ impl Store {
     pub fn recall_text(&self, query: &str) -> Result<Vec<Claim>, Error> {
         let pattern = format!("%{query}%");
         let mut stmt = self.conn.prepare(
-            "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs
+            "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs,
+                    agent_id, agent_kind, write_ts
                FROM claims
               WHERE status = 'ACTIVE'
                 AND (subject LIKE ?1 OR predicate LIKE ?1 OR object LIKE ?1)
@@ -729,13 +793,27 @@ impl Store {
                 row.get::<_, f64>(5)?,
                 row.get::<_, String>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, i64>(10)?,
             ))
         })?;
 
         let mut claims = Vec::new();
         for row in rows {
-            let (id, subject, predicate, object, provenance, confidence, status, source_refs) =
-                row?;
+            let (
+                id,
+                subject,
+                predicate,
+                object,
+                provenance,
+                confidence,
+                status,
+                source_refs,
+                agent_id,
+                agent_kind,
+                write_ts,
+            ) = row?;
             claims.push(Claim {
                 id,
                 subject,
@@ -745,6 +823,9 @@ impl Store {
                 confidence,
                 status: status.parse()?,
                 source_refs: serde_json::from_str(&source_refs)?,
+                agent_id,
+                agent_kind: agent_kind.parse()?,
+                write_ts,
             });
         }
         Ok(claims)

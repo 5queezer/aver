@@ -120,6 +120,22 @@ fn claim_text_renders_subject_predicate_object_for_embedding() {
 }
 
 #[test]
+fn add_claim_records_default_agent_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let claim_id = store
+        .add_claim("shared_mode", "tracks", "agent_provenance", "test_session")
+        .unwrap();
+
+    let claim = store.get_claim(claim_id).unwrap();
+
+    assert_eq!(claim.agent_id, "local");
+    assert_eq!(claim.agent_kind.as_str(), "HUMAN");
+    assert!(claim.write_ts > 0);
+}
+
+#[test]
 fn consolidate_supersedes_duplicate_claims() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

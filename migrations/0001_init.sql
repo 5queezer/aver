@@ -8,6 +8,9 @@ CREATE TABLE IF NOT EXISTS claims (
   confidence       REAL    NOT NULL,
   status           TEXT    NOT NULL DEFAULT 'ACTIVE',
   source_refs      TEXT    NOT NULL,                 -- JSON array
+  agent_id         TEXT    NOT NULL DEFAULT 'local',
+  agent_kind       TEXT    NOT NULL DEFAULT 'HUMAN' CHECK (agent_kind IN ('HUMAN','LLM','DETERMINISTIC_PARSER','EXTERNAL_TOOL')),
+  write_ts         INTEGER NOT NULL DEFAULT 0,
   created_at       INTEGER NOT NULL,
   last_seen_at     INTEGER NOT NULL,
   last_verified_at INTEGER
