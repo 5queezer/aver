@@ -1,0 +1,13 @@
+{
+  "name": "mixed_case_numeric_identifier",
+  "version": 1,
+  "description": "Mixed-case identifiers with numeric suffixes should match spaced natural queries and beat generic version facts",
+  "claims": [
+    {"subject": "server", "predicate": "supports", "object": "OAuth2"},
+    {"subject": "server", "predicate": "version", "object": "2"},
+    {"subject": "protocol", "predicate": "name", "object": "MCP"}
+  ],
+  "queries": [
+    {"query": "OAuth 2 server", "relevant_indices": [0], "top_k": 5}
+  ]
+}

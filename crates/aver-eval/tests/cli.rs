@@ -28,12 +28,13 @@ fn aver_eval_binary_aggregates_multiple_fixtures() {
         .arg("../../eval/fixtures/camel_case_acronym_query.json")
         .arg("../../eval/fixtures/versioned_acronym_identifier.json")
         .arg("../../eval/fixtures/versioned_camel_case_identifier.json")
+        .arg("../../eval/fixtures/mixed_case_numeric_identifier.json")
         .output()
         .unwrap();
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["fixture_name"], "aggregate");
-    assert_eq!(json["fixture_count"], 11);
+    assert_eq!(json["fixture_count"], 12);
     assert!(json["unsupported_claim_rate"].as_f64().unwrap() >= 0.0);
 }
