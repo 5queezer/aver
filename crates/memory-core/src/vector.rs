@@ -15,6 +15,15 @@ pub enum VectorBackend {
     Qdrant,
 }
 
+impl VectorBackend {
+    pub fn from_optional_config(value: Option<&str>) -> Result<Self, &'static str> {
+        match value {
+            Some(value) => value.parse(),
+            None => Ok(Self::default()),
+        }
+    }
+}
+
 impl FromStr for VectorBackend {
     type Err = &'static str;
 

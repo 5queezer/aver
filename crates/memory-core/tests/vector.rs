@@ -61,3 +61,11 @@ fn vector_backend_displays_config_values() {
     assert_eq!(VectorBackend::SqliteVss.to_string(), "sqlite-vss");
     assert_eq!(VectorBackend::Qdrant.to_string(), "qdrant");
 }
+
+#[test]
+fn vector_backend_from_optional_config_defaults_when_unset() {
+    assert_eq!(
+        VectorBackend::from_optional_config(None).unwrap(),
+        VectorBackend::SqliteVss
+    );
+}
