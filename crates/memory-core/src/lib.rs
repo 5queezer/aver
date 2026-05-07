@@ -399,6 +399,19 @@ impl Store {
         Ok(scored.into_iter().map(|(_, chunk)| chunk).collect())
     }
 
+    /// Embed a query with the provided client, then rank persisted vector
+    /// chunks by similarity. Tests use `MockEmbeddingClient`; production can
+    /// pass `OllamaEmbeddingClient` without changing storage logic.
+    pub fn recall_vector_chunks(
+        &self,
+        query: &str,
+        client: &impl vector::EmbeddingClient,
+        top_k: usize,
+    ) -> Result<Vec<VectorChunk>, Error> {
+        let query_embedding = client.embed(query)?;
+        self.rank_vector_chunks_by_embedding(&query_embedding, top_k)
+    }
+
     /// Text-only keyword recall over active claims. This is the v0.1
     /// precursor to HybridRAG: cheap SQLite substring matching across the
     /// claim triple fields, ordered deterministically by id.
