@@ -1256,7 +1256,18 @@ impl Store {
                 scored_claims.push((score, claim));
             }
         }
-        let minimum_score = if scored_claims.iter().any(|(score, _)| *score >= 2) {
+        let max_score = scored_claims
+            .iter()
+            .map(|(score, _)| *score)
+            .max()
+            .unwrap_or(0);
+        let has_name_anchor = max_score >= 4
+            && scored_claims.iter().any(|(score, claim)| {
+                *score == max_score && claim.predicate.eq_ignore_ascii_case("name")
+            });
+        let minimum_score = if max_score >= 4 && !has_name_anchor {
+            3
+        } else if max_score >= 2 {
             2
         } else {
             1

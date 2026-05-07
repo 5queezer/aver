@@ -153,6 +153,29 @@ fn recall_text_filters_weak_compound_token_distractors() {
 }
 
 #[test]
+fn recall_text_prefers_claims_covering_multiple_query_tokens() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    store
+        .add_claim("project", "language", "Rust", "test_session")
+        .unwrap();
+    store
+        .add_claim("user", "name", "Alice", "test_session")
+        .unwrap();
+    let user_rust_id = store
+        .add_claim("user", "likes", "Rust", "test_session")
+        .unwrap();
+
+    let matches = store.recall_text("Rust user").unwrap();
+
+    assert_eq!(
+        matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+        vec![user_rust_id]
+    );
+}
+
+#[test]
 fn claim_text_renders_subject_predicate_object_for_embedding() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

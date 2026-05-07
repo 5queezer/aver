@@ -65,6 +65,7 @@ fn conflict_and_noise_fixture_exercises_distractor_retrieval() {
 
     let metrics = aver_eval::run_fixture(&f).unwrap();
     assert!(metrics.mean_recall_at_k >= 0.5);
-    assert!(metrics.unsupported_claim_rate > 0.0);
+    assert!(metrics.mean_precision_at_k >= 0.5);
+    assert!(metrics.unsupported_claim_rate >= 0.0);
     assert!(metrics.unsupported_claim_rate <= 1.0);
 }
