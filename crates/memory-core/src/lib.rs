@@ -75,6 +75,8 @@ pub enum PrivacyRejection {
     GitHubFineGrainedPat,
     #[error("JWT")]
     Jwt,
+    #[error("OpenAI API key")]
+    OpenAiKey,
 }
 
 pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
@@ -98,6 +100,12 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
     }
     if content.split_whitespace().any(is_jwt) {
         return Err(PrivacyRejection::Jwt);
+    }
+    if content
+        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .any(|token| token.starts_with("sk-") && token.len() >= 30)
+    {
+        return Err(PrivacyRejection::OpenAiKey);
     }
     Ok(())
 }

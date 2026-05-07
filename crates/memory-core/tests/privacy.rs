@@ -32,6 +32,13 @@ fn privacy_filter_rejects_jwt() {
 }
 
 #[test]
+fn privacy_filter_rejects_openai_key() {
+    let result = privacy_filter("OPENAI_API_KEY=OPENAI_TEST_TOKEN");
+
+    assert_eq!(result, Err(PrivacyRejection::OpenAiKey));
+}
+
+#[test]
 fn add_claim_rejects_secret_before_episodic_log_write() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
