@@ -80,3 +80,46 @@ async fn oauth_token_route_exchanges_authorization_code_with_pkce() {
     assert_eq!(json["token_type"], "Bearer");
     assert!(json["access_token"].as_str().unwrap().len() > 10);
 }
+
+#[tokio::test]
+async fn protected_health_requires_bearer_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let db = AuthDb::open(&auth_db_path).unwrap();
+    db.store_access_token_hash(&memory_server::auth::hash_token("secret-token"), "user-1")
+        .unwrap();
+    drop(db);
+
+    let config = ServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 3317,
+        base_url: "https://aml.example.com".to_string(),
+        memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
+        auth_db_path: auth_db_path.to_string_lossy().to_string(),
+    };
+    let app = build_router(config).unwrap();
+
+    let unauthorized = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let authorized = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/health")
+                .header(header::AUTHORIZATION, "Bearer secret-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(authorized.status(), StatusCode::OK);
+}

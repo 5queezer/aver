@@ -1,10 +1,18 @@
 use axum::{
     Form, Json, Router,
+    body::Body,
+    http::{Request, StatusCode, header},
+    middleware::Next,
+    response::IntoResponse,
     routing::{get, post},
 };
 use serde::Deserialize;
 
-use crate::{auth::AuthDb, config::ServerConfig, oauth::authorization_server_metadata};
+use crate::{
+    auth::{AuthDb, hash_token},
+    config::ServerConfig,
+    oauth::authorization_server_metadata,
+};
 
 #[derive(Clone)]
 struct HttpState {
@@ -13,12 +21,17 @@ struct HttpState {
 
 pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
     let state = HttpState { config };
+    let protected = Router::new().route("/api/health", get(health)).route_layer(
+        axum::middleware::from_fn_with_state(state.clone(), validate_bearer_token),
+    );
+
     Ok(Router::new()
         .route(
             "/.well-known/oauth-authorization-server",
             get(oauth_metadata),
         )
         .route("/oauth/token", post(oauth_token))
+        .merge(protected)
         .with_state(state))
 }
 
@@ -26,6 +39,33 @@ async fn oauth_metadata(
     axum::extract::State(state): axum::extract::State<HttpState>,
 ) -> Json<serde_json::Value> {
     Json(authorization_server_metadata(&state.config.base_url))
+}
+
+async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
+async fn validate_bearer_token(
+    axum::extract::State(state): axum::extract::State<HttpState>,
+    request: Request<Body>,
+    next: Next,
+) -> impl IntoResponse {
+    let token = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    let Some(token) = token else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let Ok(db) = AuthDb::open(&state.config.auth_db_path) else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    match db.validate_access_token(&hash_token(token)) {
+        Ok(Some(_)) => next.run(request).await.into_response(),
+        Ok(None) => StatusCode::UNAUTHORIZED.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize)]
