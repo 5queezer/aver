@@ -73,6 +73,8 @@ pub enum PrivacyRejection {
     GitHubPat,
     #[error("GitHub fine-grained personal access token")]
     GitHubFineGrainedPat,
+    #[error("JWT")]
+    Jwt,
 }
 
 pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
@@ -94,7 +96,22 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
     {
         return Err(PrivacyRejection::GitHubFineGrainedPat);
     }
+    if content.split_whitespace().any(is_jwt) {
+        return Err(PrivacyRejection::Jwt);
+    }
     Ok(())
+}
+
+fn is_jwt(token: &str) -> bool {
+    let mut parts = token.split('.');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some(header), Some(claims), Some(signature), None)
+            if header.starts_with("eyJ")
+                && header.len() >= 10
+                && claims.len() >= 10
+                && signature.len() >= 10
+    )
 }
 
 fn is_aws_access_key(token: &str) -> bool {
