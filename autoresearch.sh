@@ -16,7 +16,10 @@ TOTAL=$((GREEN + RED))
 BENCH_OUT=""
 BENCH_EXIT=0
 if [ "$TEST_EXIT" -eq 0 ] && [ "$RED" -eq 0 ]; then
-  BENCH_OUT=$(cargo run -q -p aver-eval -- eval/fixtures/conflict_and_noise.json 2>&1)
+  BENCH_OUT=$(cargo run -q -p aver-eval -- \
+    eval/fixtures/basic_recall.json \
+    eval/fixtures/conflict_and_noise.json \
+    eval/fixtures/ambiguous_single_token.json 2>&1)
   BENCH_EXIT=$?
 fi
 
