@@ -150,3 +150,24 @@ fn consolidate_merges_duplicate_source_refs_into_survivor() {
         vec!["s1".to_string(), "s2".to_string()]
     );
 }
+
+#[test]
+fn consolidate_supersedes_older_conflicting_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let older = store
+        .add_claim("feature", "status", "planned", "s1")
+        .unwrap();
+    let newer = store
+        .add_claim("feature", "status", "shipped", "s2")
+        .unwrap();
+
+    let superseded = store.consolidate().unwrap();
+
+    assert_eq!(superseded, 1);
+    assert_eq!(
+        store.get_claim(older).unwrap().status,
+        ClaimStatus::Superseded
+    );
+    assert_eq!(store.get_claim(newer).unwrap().status, ClaimStatus::Active);
+}

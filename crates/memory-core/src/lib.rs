@@ -632,7 +632,7 @@ impl Store {
     /// claim triple fields, ordered deterministically by id.
     pub fn consolidate(&self) -> Result<usize, Error> {
         self.merge_duplicate_source_refs()?;
-        let changed = self.conn.execute(
+        let duplicate_changed = self.conn.execute(
             "UPDATE claims
                 SET status = 'SUPERSEDED'
               WHERE id NOT IN (
@@ -643,7 +643,21 @@ impl Store {
                 AND status = 'ACTIVE'",
             [],
         )?;
-        Ok(changed)
+        let conflict_changed = self.conn.execute(
+            "UPDATE claims
+                SET status = 'SUPERSEDED'
+              WHERE status = 'ACTIVE'
+                AND EXISTS (
+                    SELECT 1
+                      FROM claims newer
+                     WHERE newer.subject = claims.subject
+                       AND newer.predicate = claims.predicate
+                       AND newer.object <> claims.object
+                       AND newer.id > claims.id
+                )",
+            [],
+        )?;
+        Ok(duplicate_changed + conflict_changed)
     }
 
     fn merge_duplicate_source_refs(&self) -> Result<(), Error> {
