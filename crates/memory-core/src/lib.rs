@@ -85,6 +85,16 @@ pub enum PrivacyRejection {
     PrivateKey,
     #[error("high entropy token")]
     HighEntropy,
+    #[error("secrets path")]
+    SecretsPath,
+}
+
+pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejection> {
+    let path = path.as_ref().to_string_lossy();
+    if path.contains("/.secrets.d/") || path.starts_with("~/.secrets.d/") {
+        return Err(PrivacyRejection::SecretsPath);
+    }
+    Ok(())
 }
 
 pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {

@@ -1,6 +1,6 @@
 //! T72 — v0.4 starts with a pre-write privacy detector for obvious secrets.
 
-use memory_core::{Error, PrivacyRejection, Store, privacy_filter};
+use memory_core::{Error, PrivacyRejection, Store, privacy_filter, privacy_filter_path};
 
 #[test]
 fn privacy_filter_rejects_aws_access_key() {
@@ -64,6 +64,13 @@ fn privacy_filter_rejects_high_entropy_token() {
     let result = privacy_filter("secret q7Zp9Lm2Kx8Vn4Rb6Ty0Wc3Ae5Gu");
 
     assert_eq!(result, Err(PrivacyRejection::HighEntropy));
+}
+
+#[test]
+fn privacy_filter_path_rejects_secrets_dir() {
+    let result = privacy_filter_path("/home/alice/.secrets.d/openai");
+
+    assert_eq!(result, Err(PrivacyRejection::SecretsPath));
 }
 
 #[test]
