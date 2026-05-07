@@ -1,7 +1,7 @@
 {
   "name": "ambiguous_single_token",
   "version": 1,
-  "description": "Ambiguous one-token queries with multiple exact matches to keep precision benchmark unsaturated",
+  "description": "Scoped single-answer query plus simple exact-name queries, avoiding impossible one-token intent labels",
   "claims": [
     {"subject": "project", "predicate": "language", "object": "Rust"},
     {"subject": "user", "predicate": "likes", "object": "Rust"},
@@ -10,7 +10,7 @@
     {"subject": "user", "predicate": "name", "object": "Alice"}
   ],
   "queries": [
-    {"query": "Rust", "relevant_indices": [0], "top_k": 5},
+    {"query": "project Rust", "relevant_indices": [0], "top_k": 5},
     {"query": "Alice", "relevant_indices": [4], "top_k": 5},
     {"query": "Aver", "relevant_indices": [3], "top_k": 5}
   ]

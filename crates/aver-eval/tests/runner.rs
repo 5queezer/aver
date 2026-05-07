@@ -3,6 +3,8 @@
 const BASIC_FIXTURE: &str = include_str!("../../../eval/fixtures/basic_recall.json");
 const CONFLICT_AND_NOISE_FIXTURE: &str =
     include_str!("../../../eval/fixtures/conflict_and_noise.json");
+const AMBIGUOUS_SINGLE_TOKEN_FIXTURE: &str =
+    include_str!("../../../eval/fixtures/ambiguous_single_token.json");
 
 #[test]
 fn fixture_deserializes_from_json() {
@@ -55,6 +57,18 @@ fn unsupported_claim_rate_bounded() {
     let metrics = aver_eval::run_fixture(&f).unwrap();
     assert!(metrics.unsupported_claim_rate >= 0.0);
     assert!(metrics.unsupported_claim_rate <= 1.0);
+}
+
+#[test]
+fn ambiguous_single_answer_fixture_scopes_rust_query() {
+    let f = aver_eval::load_fixture(AMBIGUOUS_SINGLE_TOKEN_FIXTURE).unwrap();
+    let rust_query = f
+        .queries
+        .iter()
+        .find(|query| query.relevant_indices == vec![0])
+        .unwrap();
+
+    assert_eq!(rust_query.query, "project Rust");
 }
 
 #[test]
