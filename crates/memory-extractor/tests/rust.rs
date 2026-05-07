@@ -1,8 +1,8 @@
 //! T55 — v0.3 starts with deterministic Tree-sitter Rust extraction.
 
 use memory_extractor::{
-    extract_rust_calls, extract_rust_functions, extract_rust_imports, extract_rust_structs,
-    extract_rust_tests, map_rust_tests_to_functions,
+    ExtractedFact, extract_rust_calls, extract_rust_facts, extract_rust_functions,
+    extract_rust_imports, extract_rust_structs, extract_rust_tests, map_rust_tests_to_functions,
 };
 
 #[test]
@@ -53,5 +53,19 @@ fn map_rust_tests_to_functions_uses_test_name_prefix() {
             "add_claim_persists_log_first".to_string(),
             "add_claim".to_string()
         )]
+    );
+}
+
+#[test]
+fn extract_rust_facts_emits_file_defines_function_triple() {
+    let facts = extract_rust_facts("src/lib.rs", "fn remember() {}").unwrap();
+
+    assert_eq!(
+        facts,
+        vec![ExtractedFact {
+            subject: "src/lib.rs".to_string(),
+            predicate: "defines".to_string(),
+            object: "Function:remember".to_string(),
+        }]
     );
 }

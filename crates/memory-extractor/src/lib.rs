@@ -4,6 +4,13 @@ use std::collections::HashSet;
 
 use tree_sitter::{Node, Parser};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedFact {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+}
+
 pub fn extract_rust_functions(source: &str) -> Result<Vec<String>, Error> {
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_rust::language())?;
@@ -73,6 +80,18 @@ pub fn map_rust_tests_to_functions(source: &str) -> Result<Vec<(String, String)>
         }
     }
     Ok(mappings)
+}
+
+pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let facts = extract_rust_functions(source)?
+        .into_iter()
+        .map(|function| ExtractedFact {
+            subject: path.to_string(),
+            predicate: "defines".to_string(),
+            object: format!("Function:{function}"),
+        })
+        .collect();
+    Ok(facts)
 }
 
 fn collect_function_names(
