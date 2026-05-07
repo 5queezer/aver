@@ -69,6 +69,8 @@ pub struct VectorChunk {
 pub enum PrivacyRejection {
     #[error("AWS access key")]
     AwsAccessKey,
+    #[error("GitHub personal access token")]
+    GitHubPat,
 }
 
 pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
@@ -77,6 +79,12 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
         .any(is_aws_access_key)
     {
         return Err(PrivacyRejection::AwsAccessKey);
+    }
+    if content
+        .split_whitespace()
+        .any(|token| token.starts_with("ghp_") && token.len() >= 40)
+    {
+        return Err(PrivacyRejection::GitHubPat);
     }
     Ok(())
 }
