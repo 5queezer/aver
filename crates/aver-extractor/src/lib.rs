@@ -540,6 +540,7 @@ fn collect_module_impl_method_facts(
             predicate: "defines".to_string(),
             object: format!("Function:{type_name}::{method}"),
         }));
+        collect_qualified_method_call_facts(node, source, &type_name, facts)?;
     }
 
     let mut cursor = node.walk();

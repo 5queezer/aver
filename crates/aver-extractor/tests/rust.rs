@@ -256,6 +256,21 @@ fn extract_rust_facts_emits_module_qualified_impl_method_triple() {
 }
 
 #[test]
+fn extract_rust_facts_emits_module_qualified_impl_method_call_triple() {
+    let facts = extract_rust_facts(
+        "src/lib.rs",
+        "mod storage { impl Store { fn add_claim(&self) { self.append_log(); } } }",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Function:storage::Store::add_claim".to_string(),
+        predicate: "calls".to_string(),
+        object: "Function:self.append_log".to_string(),
+    }));
+}
+
+#[test]
 fn extract_rust_facts_emits_type_implements_trait_triple() {
     let facts = extract_rust_facts(
         "src/lib.rs",
