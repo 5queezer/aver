@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members  = ["crates/memory-core", "crates/memory-cli"]
+members  = ["crates/memory-core", "crates/memory-cli", "crates/memory-extractor"]
 
 [workspace.package]
 version      = "0.1.0"
@@ -20,6 +20,8 @@ thiserror   = "1"
 time        = { version = "0.3", features = ["serde", "macros"] }
 directories = "5"
 tempfile    = "3"
+tree-sitter = "0.22"
+tree-sitter-rust = "0.21"
 
 [profile.release]
 opt-level     = "z"
