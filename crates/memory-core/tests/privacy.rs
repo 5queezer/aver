@@ -88,6 +88,13 @@ fn privacy_filter_path_rejects_ssh_dir() {
 }
 
 #[test]
+fn privacy_filter_path_rejects_pem_file() {
+    let result = privacy_filter_path("/project/certs/prod.pem");
+
+    assert_eq!(result, Err(PrivacyRejection::KeyPath));
+}
+
+#[test]
 fn privacy_filter_rejects_memory_ignore_marker() {
     let result = privacy_filter("normal note\n# memory:ignore\nsecret context");
 

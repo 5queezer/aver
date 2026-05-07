@@ -93,6 +93,8 @@ pub enum PrivacyRejection {
     MemoryIgnore,
     #[error("SSH path")]
     SshPath,
+    #[error("key file path")]
+    KeyPath,
 }
 
 pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejection> {
@@ -105,6 +107,9 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
     }
     if path.contains("/.ssh/") {
         return Err(PrivacyRejection::SshPath);
+    }
+    if path.ends_with(".pem") || path.ends_with(".key") {
+        return Err(PrivacyRejection::KeyPath);
     }
     Ok(())
 }
