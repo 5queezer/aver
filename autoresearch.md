@@ -1,4 +1,4 @@
-# Autoresearch: agent memory layer (Rust, ADR-driven, TDD)
+# Autoresearch: Aver (Rust, ADR-driven, TDD)
 
 ## Supervisor notes (read this first)
 
@@ -10,18 +10,18 @@ You spent ~50 cycles on v0.2 and it is functionally complete (Ollama embed clien
 
 Move on. **Next milestone is v0.3 — deterministic AST extraction via Tree-sitter** (ADR-0007 + ADR-0013):
 
-1. Create the crate: `crates/memory-extractor/` with `Cargo.toml` depending on `tree-sitter` and `tree-sitter-rust`. Add it to the workspace members in the root `Cargo.toml`.
+1. Create the crate: `crates/aver-extractor/` with `Cargo.toml` depending on `tree-sitter` and `tree-sitter-rust`. Add it to the workspace members in the root `Cargo.toml`.
 2. Smallest meaningful first test: `extracts_function_definitions_from_rust_source` — given a Rust source string, return a list of function names. Use Tree-sitter's `Parser` + a query that matches `(function_item name: (identifier) @name)`.
 3. Subsequent cycles add: `extracts_imports`, `extracts_calls`, `extracts_class_extends`, `extracts_function_to_test_mapping`. Each emits triples like `(File, defines, Function)`.
 4. NO Python in build/runtime. Use the `tree-sitter` Rust crate and bundled grammar crates only (per ADR-0007 amendment).
 
-The autoresearch.sh `MILESTONE` heuristic looks for `[ -d crates/memory-extractor ]` to bump to 3. So creating the crate is what advances the milestone metric — but only after a real test passes against it, not just an empty crate.
+The autoresearch.sh `MILESTONE` heuristic looks for `[ -d crates/aver-extractor ]` to bump to 3. So creating the crate is what advances the milestone metric — but only after a real test passes against it, not just an empty crate.
 
 ### 2026-05-07 — stop calling real Ollama from tests
 
 Two crashes (T31, T36) traced to flaky `http://localhost:11434` loopback calls from unit tests. Metric dropped 5 points each time. The fix is structural:
 
-1. Introduce an `EmbeddingClient` trait in `crates/memory-core/src/embedding/` (or wherever you put the existing client) with one method: `embed(&self, text: &str) -> Result<Vec<f32>, Error>`.
+1. Introduce an `EmbeddingClient` trait in `crates/aver-core/src/embedding/` (or wherever you put the existing client) with one method: `embed(&self, text: &str) -> Result<Vec<f32>, Error>`.
 2. The current Ollama HTTP code becomes `OllamaClient: EmbeddingClient`.
 3. Add `MockEmbeddingClient` that returns deterministic vectors (e.g. hash-based or fixture-loaded). All current Ollama tests must use this mock.
 4. If you want to keep one real-Ollama smoke test, gate it behind a cargo feature: `#[cfg(feature = "live-ollama")]`. Do NOT use `#[ignore]` (still forbidden). `autoresearch.sh` does not enable that feature, so the live test stays out of the loop.
@@ -42,7 +42,7 @@ This is **engineering autoresearch**, not parameter tuning. There is no hyperpar
 - **Secondary monitors**:
   - `tests_total` — should equal `tests_green`. Any divergence ⇒ a red test exists.
   - `milestone_index` — `1=v0.1 … 9=v0.9`. Reflects ADR-0013 roadmap. Heuristic-detected by `autoresearch.sh`.
-  - `loc_core` — `wc -l` over `crates/memory-core/src/`. Watches for unchecked code growth.
+  - `loc_core` — `wc -l` over `crates/aver-core/src/`. Watches for unchecked code growth.
   - `commit_count_total` — `git rev-list --count HEAD`. Sanity check that progress = commits.
 
 A run is `keep`-eligible only if `tests_green == tests_total` AND (`tests_green` strictly increased OR `milestone_index` advanced). Otherwise `discard`. Crashes / compile errors are `crash`. Gate failures are `checks_failed`.
@@ -61,7 +61,7 @@ Runs `cargo test --workspace -q`, parses pass/fail counts, and emits one `METRIC
 - `cargo clippy --workspace --no-deps -- -D warnings`
 - ADRs unchanged: `git status --porcelain doc/adr/` must be empty.
 - No new `#[ignore]`: `grep -rn '#\[ignore\]' crates/` must be empty.
-- Log-first invariant heuristic: in `crates/memory-core/src/lib.rs`, the first `append_jsonl` call must appear before the first `INSERT INTO claims` in `Store::add_claim`'s body.
+- Log-first invariant heuristic: in `crates/aver-core/src/lib.rs`, the first `append_jsonl` call must appear before the first `INSERT INTO claims` in `Store::add_claim`'s body.
 
 Checks must pass before logging `keep`. A `checks_failed` run means revert / fix and try again next cycle.
 
@@ -111,7 +111,7 @@ If any step fails, log `crash` or `checks_failed` with a `description` that name
 
 ## Roadmap (current target tracked in `autoresearch.jsonl`)
 
-- v0.1 — walking skeleton: claim CRUD + episodic JSONL log + keyword recall + minimal CLI (`memory remember`/`recall`/`status`). T1–T4 done at loop start; **T5 = `recall_text_returns_claim_by_keyword`** is next.
+- v0.1 — walking skeleton: claim CRUD + episodic JSONL log + keyword recall + minimal CLI (`aver remember`/`recall`/`status`). T1–T4 done at loop start; **T5 = `recall_text_returns_claim_by_keyword`** is next.
 - v0.2 — `sqlite-vss` + Ollama HTTP embedding client; HybridRAG with α hardcoded.
 - v0.3 — Tree-sitter Rust extractor (dogfood: ingests its own source).
 - v0.4 — privacy filter (entropy + regex) on the write path.

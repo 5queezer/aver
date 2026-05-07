@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members  = ["crates/memory-core", "crates/memory-cli", "crates/memory-extractor", "crates/memory-server"]
+members  = ["crates/aver-core", "crates/aver-cli", "crates/aver-extractor", "crates/aver-server"]
 
 [workspace.package]
 version      = "0.1.0"
@@ -23,7 +23,7 @@ tempfile    = "3"
 tree-sitter = "0.22"
 tree-sitter-rust = "0.21"
 
-[workspace.metadata.memory]
+[workspace.metadata.aver]
 shared_mode = "planned"
 
 [profile.release]

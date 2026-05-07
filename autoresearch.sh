@@ -16,16 +16,16 @@ TOTAL=$((GREEN + RED))
 # Milestone heuristic — bumped as files/symbols characteristic of each
 # milestone appear. Keep the heuristic conservative so it never over-claims.
 MILESTONE=1
-[ -f crates/memory-core/src/vector.rs ] && MILESTONE=2
-[ -d crates/memory-extractor ] && MILESTONE=3
-grep -q "fn privacy_filter" crates/memory-core/src/lib.rs 2>/dev/null && MILESTONE=4
-grep -q "fn consolidate"    crates/memory-core/src/lib.rs 2>/dev/null && MILESTONE=5
-[ -d crates/memory-extractor/src/prose ] && MILESTONE=6
+[ -f crates/aver-core/src/vector.rs ] && MILESTONE=2
+[ -d crates/aver-extractor ] && MILESTONE=3
+grep -q "fn privacy_filter" crates/aver-core/src/lib.rs 2>/dev/null && MILESTONE=4
+grep -q "fn consolidate"    crates/aver-core/src/lib.rs 2>/dev/null && MILESTONE=5
+[ -d crates/aver-extractor/src/prose ] && MILESTONE=6
 grep -q "entity_types" migrations/*.sql 2>/dev/null && MILESTONE=7
 [ -d eval ] && MILESTONE=8
 grep -q "shared_mode\|postgres" Cargo.toml 2>/dev/null && MILESTONE=9
 
-LOC_CORE=$(find crates/memory-core/src -name '*.rs' -exec cat {} + 2>/dev/null | wc -l)
+LOC_CORE=$(find crates/aver-core/src -name '*.rs' -exec cat {} + 2>/dev/null | wc -l)
 COMMITS=$(git rev-list --count HEAD 2>/dev/null || echo 0)
 
 # Echo trailing test output so the agent can see failure context if any.

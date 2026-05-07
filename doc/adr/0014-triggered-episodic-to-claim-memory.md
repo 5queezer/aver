@@ -21,11 +21,11 @@ The guiding pattern is:
 5. Promote accepted candidates into the durable claim graph.
 6. Keep rejected or superseded candidates auditable.
 
-This preserves AML's structured graph advantage while making it usable by Claude, Codex, and MCP clients that naturally produce conversational events.
+This preserves Aver's structured graph advantage while making it usable by Claude, Codex, and MCP clients that naturally produce conversational events.
 
 ## Decision
 
-AML adds an explicit event-to-claim pipeline:
+Aver adds an explicit event-to-claim pipeline:
 
 - **Episodic events** are append-only session records. They capture user messages, assistant/tool observations, commits, benchmark results, explicit remember requests, corrections, and session/task boundaries.
 - **Candidate claims** are staged triples extracted from one or more episodic events. They are not returned by durable recall until promoted.

@@ -1,0 +1,19 @@
+[package]
+name        = "aver-cli"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+authors.workspace     = true
+rust-version.workspace = true
+
+[[bin]]
+name = "aver"
+path = "src/main.rs"
+
+[dependencies]
+aver-core      = { path = "../aver-core" }
+clap.workspace   = true
+anyhow.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

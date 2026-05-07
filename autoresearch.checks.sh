@@ -34,7 +34,7 @@ if grep -rn '#\[ignore\]' crates/ 2>/dev/null | grep -v -- '#\[ignore *=' | grep
 fi
 
 echo "=== log-first invariant heuristic ==="
-LIB=crates/memory-core/src/lib.rs
+LIB=crates/aver-core/src/lib.rs
 if [ -f "$LIB" ]; then
   APPEND_LINE=$(grep -n "append_jsonl" "$LIB" | head -1 | cut -d: -f1)
   INSERT_LINE=$(grep -n 'INSERT INTO claims' "$LIB" | head -1 | cut -d: -f1)

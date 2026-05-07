@@ -118,6 +118,62 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "aver-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aver-core",
+ "clap",
+ "serde_json",
+]
+
+[[package]]
+name = "aver-core"
+version = "0.1.0"
+dependencies = [
+ "directories",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "time",
+ "ureq",
+]
+
+[[package]]
+name = "aver-extractor"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tree-sitter",
+ "tree-sitter-rust",
+]
+
+[[package]]
+name = "aver-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aver-core",
+ "axum",
+ "base64",
+ "rmcp",
+ "rusqlite",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "time",
+ "tokio",
+ "tower",
+ "uuid",
+]
+
+[[package]]
 name = "axum"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -967,62 +1023,6 @@ name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
-
-[[package]]
-name = "memory-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "memory-core",
- "serde_json",
-]
-
-[[package]]
-name = "memory-core"
-version = "0.1.0"
-dependencies = [
- "directories",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "time",
- "ureq",
-]
-
-[[package]]
-name = "memory-extractor"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tree-sitter",
- "tree-sitter-rust",
-]
-
-[[package]]
-name = "memory-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "base64",
- "memory-core",
- "rmcp",
- "rusqlite",
- "schemars",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "time",
- "tokio",
- "tower",
- "uuid",
-]
 
 [[package]]
 name = "mime"
