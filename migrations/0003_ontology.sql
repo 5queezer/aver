@@ -16,3 +16,9 @@ CREATE TABLE IF NOT EXISTS entity_type_closure (
     ancestor_id INTEGER NOT NULL REFERENCES entity_types(id),
     PRIMARY KEY (child_id, ancestor_id)
 );
+
+CREATE TABLE IF NOT EXISTS predicate_closure (
+    child_id    INTEGER NOT NULL REFERENCES predicate_types(id),
+    ancestor_id INTEGER NOT NULL REFERENCES predicate_types(id),
+    PRIMARY KEY (child_id, ancestor_id)
+);
