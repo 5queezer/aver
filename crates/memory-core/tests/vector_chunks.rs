@@ -85,3 +85,24 @@ fn add_vector_chunk_for_claim_uses_canonical_claim_text() {
     assert_eq!(chunk.text, "auth_service depends_on stripe_sdk");
     assert_eq!(chunk.embedding_model, "nomic-embed-text");
 }
+
+#[test]
+fn add_vector_chunk_with_embedding_persists_embedding_vector() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim("auth_service", "depends_on", "stripe_sdk", "test_session")
+        .unwrap();
+
+    let chunk_id = store
+        .add_vector_chunk_with_embedding(
+            claim_id,
+            "auth_service depends_on stripe_sdk",
+            "nomic-embed-text",
+            &[0.1, 0.2, 0.3],
+        )
+        .unwrap();
+    let chunk = store.get_vector_chunk(chunk_id).unwrap();
+
+    assert_eq!(chunk.embedding, Some(vec![0.1, 0.2, 0.3]));
+}

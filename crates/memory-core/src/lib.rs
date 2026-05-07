@@ -9,7 +9,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, params, types::Type};
 use serde::Serialize;
 
 /// Embedded migrations applied in order on every `Store::open`.
@@ -55,12 +55,13 @@ impl Claim {
 }
 
 /// A text chunk attached to a claim for vector indexing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VectorChunk {
     pub id: i64,
     pub claim_id: i64,
     pub text: String,
     pub embedding_model: String,
+    pub embedding: Option<Vec<f32>>,
 }
 
 /// How a claim was acquired (ADR-0003).
@@ -267,6 +268,26 @@ impl Store {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Insert vector chunk metadata with its embedding vector serialized for
+    /// deterministic local storage. The sqlite-vss virtual table can index
+    /// the same vector later; this row remains the durable join point.
+    pub fn add_vector_chunk_with_embedding(
+        &self,
+        claim_id: i64,
+        text: &str,
+        embedding_model: &str,
+        embedding: &[f32],
+    ) -> Result<i64, Error> {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let embedding_json = serde_json::to_string(embedding)?;
+        self.conn.execute(
+            "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![claim_id, text, embedding_model, embedding_json, now],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
     /// Insert vector chunk metadata using the canonical claim text rendering.
     pub fn add_vector_chunk_for_claim(
         &self,
@@ -281,14 +302,16 @@ impl Store {
     pub fn get_vector_chunk(&self, id: i64) -> Result<VectorChunk, Error> {
         self.conn
             .query_row(
-                "SELECT id, claim_id, text, embedding_model FROM vector_chunks WHERE id = ?1",
+                "SELECT id, claim_id, text, embedding_model, embedding_json FROM vector_chunks WHERE id = ?1",
                 [id],
                 |row| {
+                    let embedding_json: Option<String> = row.get(4)?;
                     Ok(VectorChunk {
                         id: row.get(0)?,
                         claim_id: row.get(1)?,
                         text: row.get(2)?,
                         embedding_model: row.get(3)?,
+                        embedding: parse_optional_embedding(embedding_json)?,
                     })
                 },
             )
@@ -298,17 +321,19 @@ impl Store {
     /// List vector chunk metadata for a claim in stable insertion order.
     pub fn list_vector_chunks_for_claim(&self, claim_id: i64) -> Result<Vec<VectorChunk>, Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, claim_id, text, embedding_model
+            "SELECT id, claim_id, text, embedding_model, embedding_json
                FROM vector_chunks
               WHERE claim_id = ?1
               ORDER BY id",
         )?;
         let rows = stmt.query_map([claim_id], |row| {
+            let embedding_json: Option<String> = row.get(4)?;
             Ok(VectorChunk {
                 id: row.get(0)?,
                 claim_id: row.get(1)?,
                 text: row.get(2)?,
                 embedding_model: row.get(3)?,
+                embedding: parse_optional_embedding(embedding_json)?,
             })
         })?;
 
@@ -362,6 +387,16 @@ impl Store {
         }
         Ok(claims)
     }
+}
+
+fn parse_optional_embedding(value: Option<String>) -> rusqlite::Result<Option<Vec<f32>>> {
+    value
+        .map(|json| {
+            serde_json::from_str(&json).map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(4, Type::Text, Box::new(err))
+            })
+        })
+        .transpose()
 }
 
 #[derive(Serialize)]

@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS vector_chunks (
   claim_id    INTEGER NOT NULL REFERENCES claims(id),
   text        TEXT    NOT NULL,
   embedding_model TEXT NOT NULL,
+  embedding_json TEXT,
   created_at  INTEGER NOT NULL
 );
 
