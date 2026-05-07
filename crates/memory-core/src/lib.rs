@@ -590,6 +590,59 @@ impl Store {
             .is_ok())
     }
 
+    pub fn promote_candidate_claim(&self, candidate_id: i64) -> Result<i64, Error> {
+        let candidate = self.get_candidate_claim(candidate_id)?;
+        let event = self.get_event(candidate.event_id)?;
+        let source = format!("event:{}", event.id);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let claim_id: i64 =
+            self.conn
+                .query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM claims", [], |r| {
+                    r.get(0)
+                })?;
+
+        let entry = LogEntry {
+            kind: "add_claim",
+            ts: now,
+            claim_id,
+            subject: &candidate.subject,
+            predicate: &candidate.predicate,
+            object: &candidate.object,
+            source: &source,
+            agent_id: &event.agent_id,
+            agent_kind: event.agent_kind.as_str(),
+        };
+        append_jsonl(&self.log_path, &entry)?;
+        append_jsonl(&self.agent_log_path(&event.agent_id), &entry)?;
+
+        let source_refs = serde_json::to_string(&[source])?;
+        self.conn.execute(
+            "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
+                                 status, source_refs, agent_id, agent_kind, write_ts,
+                                 created_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7, ?8, ?9, ?10, ?10, ?10)",
+            params![
+                claim_id,
+                candidate.subject,
+                candidate.predicate,
+                candidate.object,
+                candidate.provenance.as_str(),
+                candidate.confidence,
+                source_refs,
+                event.agent_id,
+                event.agent_kind.as_str(),
+                now
+            ],
+        )?;
+        self.conn.execute(
+            "UPDATE candidate_claims
+                SET status = 'PROMOTED', promoted_claim_id = ?1
+              WHERE id = ?2",
+            params![claim_id, candidate_id],
+        )?;
+        Ok(claim_id)
+    }
+
     pub fn get_candidate_claim(&self, id: i64) -> Result<CandidateClaim, Error> {
         let (id, event_id, subject, predicate, object, provenance, confidence, status, promoted_claim_id): (
             i64,

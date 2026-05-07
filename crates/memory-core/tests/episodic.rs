@@ -63,3 +63,33 @@ fn propose_candidate_claim_requires_event_provenance() {
         memory_core::Error::MissingEventProvenance { .. }
     ));
 }
+
+#[test]
+fn promote_candidate_claim_creates_durable_claim_with_event_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let event_id = store
+        .record_event(
+            "session-1",
+            "user_message",
+            "AML should batch memory extraction.",
+            "conversation",
+        )
+        .unwrap();
+    let candidate_id = store
+        .propose_candidate_claim(event_id, "AML", "should_batch", "memory_extraction")
+        .unwrap();
+
+    let claim_id = store.promote_candidate_claim(candidate_id).unwrap();
+    let claim = store.get_claim(claim_id).unwrap();
+    let candidate = store.get_candidate_claim(candidate_id).unwrap();
+
+    assert_eq!(claim.subject, "AML");
+    assert_eq!(claim.predicate, "should_batch");
+    assert_eq!(claim.object, "memory_extraction");
+    assert_eq!(claim.provenance, memory_core::Provenance::Inferred);
+    assert_eq!(claim.source_refs, vec![format!("event:{event_id}")]);
+    assert_eq!(candidate.status, "PROMOTED");
+    assert_eq!(candidate.promoted_claim_id, Some(claim_id));
+}
