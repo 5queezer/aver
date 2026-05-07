@@ -39,3 +39,8 @@ impl RetrievalCandidate {
         }
     }
 }
+
+pub fn rank_candidates(mut candidates: Vec<RetrievalCandidate>) -> Vec<RetrievalCandidate> {
+    candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
+    candidates
+}
