@@ -18,6 +18,9 @@ time.workspace = true
 schemars = "1.0"
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", rev = "a64be231527f923e9f84d4dd7bf3c3bd695ee53e", features = ["server", "macros"] }
 uuid = { version = "1", features = ["v4"] }
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
 
 [dev-dependencies]
 tempfile.workspace = true
