@@ -165,6 +165,7 @@ pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
     );
     facts.extend(extract_rust_function_call_facts(source)?);
     facts.extend(extract_rust_module_function_facts(source)?);
+    facts.extend(extract_rust_module_impl_method_facts(source)?);
     facts.extend(extract_rust_impl_method_facts(source)?);
     facts.extend(extract_rust_impl_method_call_facts(source)?);
     facts.extend(extract_rust_impl_trait_facts(source)?);
@@ -210,6 +211,16 @@ fn extract_rust_impl_method_facts(source: &str) -> Result<Vec<ExtractedFact>, Er
 
     let mut facts = Vec::new();
     collect_impl_method_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
+    Ok(facts)
+}
+
+fn extract_rust_module_impl_method_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_rust::language())?;
+    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+
+    let mut facts = Vec::new();
+    collect_module_impl_method_facts(tree.root_node(), source.as_bytes(), "", &mut facts)?;
     Ok(facts)
 }
 
@@ -492,6 +503,58 @@ fn collect_module_definition_facts(
         collect_module_definition_facts(child, source, file_path, module_path, facts)?;
     }
     Ok(())
+}
+
+fn collect_module_impl_method_facts(
+    node: Node<'_>,
+    source: &[u8],
+    module_path: &str,
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "mod_item"
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        let module_name = name.utf8_text(source)?;
+        let nested_path = if module_path.is_empty() {
+            module_name.to_string()
+        } else {
+            format!("{module_path}::{module_name}")
+        };
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            collect_module_impl_method_facts(child, source, &nested_path, facts)?;
+        }
+        return Ok(());
+    }
+
+    if !module_path.is_empty()
+        && node.kind() == "impl_item"
+        && let Some(type_node) = node.child_by_field_name("type")
+    {
+        let type_name = qualify_module_type(type_node.utf8_text(source)?, module_path);
+        let mut methods = Vec::new();
+        collect_function_names(node, source, &mut methods)?;
+        facts.extend(methods.into_iter().map(|method| ExtractedFact {
+            subject: format!("Type:{type_name}"),
+            predicate: "defines".to_string(),
+            object: format!("Function:{type_name}::{method}"),
+        }));
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_module_impl_method_facts(child, source, module_path, facts)?;
+    }
+    Ok(())
+}
+
+fn qualify_module_type(type_name: &str, module_path: &str) -> String {
+    if type_name.contains("::") {
+        type_name.to_string()
+    } else {
+        format!("{module_path}::{type_name}")
+    }
 }
 
 fn collect_impl_method_facts(

@@ -241,6 +241,21 @@ fn extract_rust_facts_emits_nested_module_definition_triple() {
 }
 
 #[test]
+fn extract_rust_facts_emits_module_qualified_impl_method_triple() {
+    let facts = extract_rust_facts(
+        "src/lib.rs",
+        "mod storage { impl Store { fn add_claim(&self) {} } }",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Type:storage::Store".to_string(),
+        predicate: "defines".to_string(),
+        object: "Function:storage::Store::add_claim".to_string(),
+    }));
+}
+
+#[test]
 fn extract_rust_facts_emits_type_implements_trait_triple() {
     let facts = extract_rust_facts(
         "src/lib.rs",
