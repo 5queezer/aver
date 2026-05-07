@@ -42,6 +42,16 @@ pub fn extract_rust_structs(source: &str) -> Result<Vec<String>, Error> {
     Ok(structs)
 }
 
+pub fn extract_rust_tests(source: &str) -> Result<Vec<String>, Error> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_rust::language())?;
+    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+
+    let mut tests = Vec::new();
+    collect_tests(tree.root_node(), source.as_bytes(), &mut tests)?;
+    Ok(tests)
+}
+
 fn collect_function_names(
     node: Node<'_>,
     source: &[u8],
@@ -102,6 +112,28 @@ fn collect_structs(node: Node<'_>, source: &[u8], structs: &mut Vec<String>) -> 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_structs(child, source, structs)?;
+    }
+    Ok(())
+}
+
+fn collect_tests(node: Node<'_>, source: &[u8], tests: &mut Vec<String>) -> Result<(), Error> {
+    let mut cursor = node.walk();
+    let mut preceding_test_attr = false;
+    for child in node.children(&mut cursor) {
+        if child.kind() == "attribute_item" {
+            preceding_test_attr = child.utf8_text(source)?.contains("#[test]");
+            continue;
+        }
+
+        if preceding_test_attr
+            && child.kind() == "function_item"
+            && let Some(name) = child.child_by_field_name("name")
+        {
+            tests.push(name.utf8_text(source)?.to_string());
+        }
+
+        collect_tests(child, source, tests)?;
+        preceding_test_attr = false;
     }
     Ok(())
 }
