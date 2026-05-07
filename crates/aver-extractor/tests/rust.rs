@@ -313,6 +313,21 @@ fn extract_rust_facts_emits_module_defines_struct_triple() {
 }
 
 #[test]
+fn extract_rust_facts_emits_module_defines_enum_triple() {
+    let facts = extract_rust_facts(
+        "src/lib.rs",
+        "mod errors { enum MemoryError { ParseFailed } }",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Module:errors".to_string(),
+        predicate: "defines".to_string(),
+        object: "Enum:errors::MemoryError".to_string(),
+    }));
+}
+
+#[test]
 fn extract_rust_facts_emits_type_implements_trait_triple() {
     let facts = extract_rust_facts(
         "src/lib.rs",
