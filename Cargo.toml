@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members  = ["crates/memory-core", "crates/memory-cli", "crates/memory-extractor"]
+members  = ["crates/memory-core", "crates/memory-cli", "crates/memory-extractor", "crates/memory-server"]
 
 [workspace.package]
 version      = "0.1.0"
