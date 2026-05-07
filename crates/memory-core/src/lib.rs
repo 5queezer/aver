@@ -95,6 +95,8 @@ pub enum PrivacyRejection {
     SshPath,
     #[error("key file path")]
     KeyPath,
+    #[error("AWS credentials path")]
+    AwsCredentialsPath,
 }
 
 pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejection> {
@@ -107,6 +109,9 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
     }
     if path.contains("/.ssh/") {
         return Err(PrivacyRejection::SshPath);
+    }
+    if path.ends_with("/.aws/credentials") {
+        return Err(PrivacyRejection::AwsCredentialsPath);
     }
     if path.ends_with(".pem") || path.ends_with(".key") {
         return Err(PrivacyRejection::KeyPath);

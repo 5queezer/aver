@@ -88,6 +88,13 @@ fn privacy_filter_path_rejects_ssh_dir() {
 }
 
 #[test]
+fn privacy_filter_path_rejects_aws_credentials_file() {
+    let result = privacy_filter_path("/home/alice/.aws/credentials");
+
+    assert_eq!(result, Err(PrivacyRejection::AwsCredentialsPath));
+}
+
+#[test]
 fn privacy_filter_path_rejects_pem_file() {
     let result = privacy_filter_path("/project/certs/prod.pem");
 
