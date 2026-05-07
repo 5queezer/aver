@@ -402,6 +402,26 @@ fn recall_text_matches_mixed_case_identifier_without_numeric_hint() {
 }
 
 #[test]
+fn recall_text_singularizes_ies_plural_query_tokens() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let company_id = store
+        .add_claim("company", "name", "Acme", "test_session")
+        .unwrap();
+    store
+        .add_claim("user", "employer", "Acme", "test_session")
+        .unwrap();
+
+    let matches = store.recall_text("companies named Acme").unwrap();
+
+    assert_eq!(
+        matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+        vec![company_id]
+    );
+}
+
+#[test]
 fn claim_text_renders_subject_predicate_object_for_embedding() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

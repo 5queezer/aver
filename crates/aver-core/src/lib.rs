@@ -1356,6 +1356,8 @@ fn normalize_recall_token(token: &str) -> String {
     let lower = token.to_ascii_lowercase();
     if lower.len() > 4 && lower.ends_with("ee") {
         lower.trim_end_matches("ee").to_string()
+    } else if lower.len() > 4 && lower.ends_with("ies") {
+        format!("{}y", lower.trim_end_matches("ies"))
     } else if lower.len() > 3 && lower.ends_with('s') {
         lower.trim_end_matches('s').to_string()
     } else {
