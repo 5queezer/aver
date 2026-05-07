@@ -112,6 +112,15 @@ pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
             }),
     );
     facts.extend(
+        extract_rust_enums(source)?
+            .into_iter()
+            .map(|enum_name| ExtractedFact {
+                subject: path.to_string(),
+                predicate: "defines".to_string(),
+                object: format!("Enum:{enum_name}"),
+            }),
+    );
+    facts.extend(
         extract_rust_imports(source)?
             .into_iter()
             .map(|module| ExtractedFact {

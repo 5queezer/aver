@@ -131,3 +131,17 @@ fn extract_rust_facts_emits_file_defines_struct_triple() {
         }]
     );
 }
+
+#[test]
+fn extract_rust_facts_emits_file_defines_enum_triple() {
+    let facts = extract_rust_facts("src/lib.rs", "enum MemoryError { ParseFailed }").unwrap();
+
+    assert_eq!(
+        facts,
+        vec![ExtractedFact {
+            subject: "src/lib.rs".to_string(),
+            predicate: "defines".to_string(),
+            object: "Enum:MemoryError".to_string(),
+        }]
+    );
+}
