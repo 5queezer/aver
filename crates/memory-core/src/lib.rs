@@ -91,6 +91,8 @@ pub enum PrivacyRejection {
     EnvPath,
     #[error("memory ignore marker")]
     MemoryIgnore,
+    #[error("SSH path")]
+    SshPath,
 }
 
 pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejection> {
@@ -100,6 +102,9 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
     }
     if path.contains("/.env") {
         return Err(PrivacyRejection::EnvPath);
+    }
+    if path.contains("/.ssh/") {
+        return Err(PrivacyRejection::SshPath);
     }
     Ok(())
 }

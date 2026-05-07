@@ -81,6 +81,13 @@ fn privacy_filter_path_rejects_env_file() {
 }
 
 #[test]
+fn privacy_filter_path_rejects_ssh_dir() {
+    let result = privacy_filter_path("/home/alice/.ssh/id_ed25519");
+
+    assert_eq!(result, Err(PrivacyRejection::SshPath));
+}
+
+#[test]
 fn privacy_filter_rejects_memory_ignore_marker() {
     let result = privacy_filter("normal note\n# memory:ignore\nsecret context");
 
