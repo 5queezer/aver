@@ -106,3 +106,10 @@ fn hybrid_weights_parse_alpha_override_from_string() {
 
     assert_eq!(weights.alpha, 0.40);
 }
+
+#[test]
+fn hybrid_weights_parser_trims_alpha_override_whitespace() {
+    let weights: HybridWeights = " 0.40 ".parse().unwrap();
+
+    assert_eq!(weights.alpha, 0.40);
+}

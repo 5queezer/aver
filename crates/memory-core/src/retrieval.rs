@@ -48,7 +48,7 @@ impl FromStr for HybridWeights {
     type Err = HybridWeightsParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::try_new(s.parse()?)
+        Self::try_new(s.trim().parse()?)
     }
 }
 
