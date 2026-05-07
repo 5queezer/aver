@@ -39,6 +39,13 @@ fn privacy_filter_rejects_openai_key() {
 }
 
 #[test]
+fn privacy_filter_rejects_anthropic_key() {
+    let result = privacy_filter("ANTHROPIC_API_KEY=ANTHROPIC_TEST_TOKEN");
+
+    assert_eq!(result, Err(PrivacyRejection::AnthropicKey));
+}
+
+#[test]
 fn add_claim_rejects_secret_before_episodic_log_write() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

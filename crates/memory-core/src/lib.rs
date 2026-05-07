@@ -77,6 +77,8 @@ pub enum PrivacyRejection {
     Jwt,
     #[error("OpenAI API key")]
     OpenAiKey,
+    #[error("Anthropic API key")]
+    AnthropicKey,
 }
 
 pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
@@ -100,6 +102,12 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
     }
     if content.split_whitespace().any(is_jwt) {
         return Err(PrivacyRejection::Jwt);
+    }
+    if content
+        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .any(|token| token.starts_with("sk-ant-") && token.len() >= 30)
+    {
+        return Err(PrivacyRejection::AnthropicKey);
     }
     if content
         .split(|ch: char| ch.is_whitespace() || ch == '=')
