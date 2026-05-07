@@ -19,4 +19,8 @@ impl HybridWeights {
     pub fn graph_weight(self) -> f64 {
         1.0 - self.alpha
     }
+
+    pub fn blend(self, vector_score: f64, graph_score: f64) -> f64 {
+        self.vector_weight() * vector_score + self.graph_weight() * graph_score
+    }
 }
