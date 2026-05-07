@@ -154,6 +154,7 @@ pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
     );
     facts.extend(extract_rust_function_call_facts(source)?);
     facts.extend(extract_rust_impl_method_facts(source)?);
+    facts.extend(extract_rust_impl_method_call_facts(source)?);
     facts.extend(extract_rust_impl_trait_facts(source)?);
     facts.extend(
         map_rust_tests_to_functions(source)?
@@ -184,6 +185,16 @@ fn extract_rust_impl_method_facts(source: &str) -> Result<Vec<ExtractedFact>, Er
 
     let mut facts = Vec::new();
     collect_impl_method_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
+    Ok(facts)
+}
+
+fn extract_rust_impl_method_call_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_rust::language())?;
+    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+
+    let mut facts = Vec::new();
+    collect_impl_method_call_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -357,6 +368,51 @@ fn collect_impl_method_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_impl_method_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_impl_method_call_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "impl_item"
+        && let Some(type_node) = node.child_by_field_name("type")
+    {
+        let type_name = type_node.utf8_text(source)?.to_string();
+        collect_qualified_method_call_facts(node, source, &type_name, facts)?;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_impl_method_call_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_qualified_method_call_facts(
+    node: Node<'_>,
+    source: &[u8],
+    type_name: &str,
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "function_item"
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        let method = name.utf8_text(source)?.to_string();
+        let mut calls = Vec::new();
+        collect_calls(node, source, &mut calls)?;
+        facts.extend(calls.into_iter().map(|callee| ExtractedFact {
+            subject: format!("Function:{type_name}::{method}"),
+            predicate: "calls".to_string(),
+            object: format!("Function:{callee}"),
+        }));
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_qualified_method_call_facts(child, source, type_name, facts)?;
     }
     Ok(())
 }
