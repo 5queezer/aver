@@ -124,3 +124,28 @@ fn add_embedded_vector_chunk_for_claim_uses_embedding_client() {
     assert_eq!(chunk.text, "auth_service depends_on stripe_sdk");
     assert_eq!(chunk.embedding, Some(vec![0.4, 0.5]));
 }
+
+#[test]
+fn rank_vector_chunks_by_embedding_returns_best_match_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim("auth_service", "depends_on", "stripe_sdk", "test_session")
+        .unwrap();
+    let other_id = store
+        .add_claim("billing_worker", "emits", "invoice_event", "test_session")
+        .unwrap();
+    let best_id = store
+        .add_vector_chunk_with_embedding(claim_id, "auth", "nomic-embed-text", &[1.0, 0.0])
+        .unwrap();
+    store
+        .add_vector_chunk_with_embedding(other_id, "billing", "nomic-embed-text", &[0.0, 1.0])
+        .unwrap();
+
+    let ranked = store
+        .rank_vector_chunks_by_embedding(&[1.0, 0.0], 1)
+        .expect("ranking should score stored embeddings");
+
+    assert_eq!(ranked.len(), 1);
+    assert_eq!(ranked[0].id, best_id);
+}

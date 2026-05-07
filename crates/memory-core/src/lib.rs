@@ -357,6 +357,48 @@ impl Store {
         Ok(chunks)
     }
 
+    /// Rank persisted vector chunks by normalized cosine similarity to the
+    /// query embedding, returning the best matches first.
+    pub fn rank_vector_chunks_by_embedding(
+        &self,
+        query_embedding: &[f32],
+        top_k: usize,
+    ) -> Result<Vec<VectorChunk>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, claim_id, text, embedding_model, embedding_json
+               FROM vector_chunks
+              WHERE embedding_json IS NOT NULL
+              ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let embedding_json: Option<String> = row.get(4)?;
+            Ok(VectorChunk {
+                id: row.get(0)?,
+                claim_id: row.get(1)?,
+                text: row.get(2)?,
+                embedding_model: row.get(3)?,
+                embedding: parse_optional_embedding(embedding_json)?,
+            })
+        })?;
+
+        let mut scored = Vec::new();
+        for row in rows {
+            let chunk = row?;
+            if let Some(embedding) = &chunk.embedding
+                && let Some(score) = vector::normalized_cosine_score(query_embedding, embedding)
+            {
+                scored.push((score, chunk));
+            }
+        }
+        scored.sort_by(|(a_score, a_chunk), (b_score, b_chunk)| {
+            b_score
+                .total_cmp(a_score)
+                .then_with(|| a_chunk.id.cmp(&b_chunk.id))
+        });
+        scored.truncate(top_k);
+        Ok(scored.into_iter().map(|(_, chunk)| chunk).collect())
+    }
+
     /// Text-only keyword recall over active claims. This is the v0.1
     /// precursor to HybridRAG: cheap SQLite substring matching across the
     /// claim triple fields, ordered deterministically by id.
