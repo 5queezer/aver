@@ -173,6 +173,7 @@ pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
     facts.extend(extract_rust_impl_method_call_facts(source)?);
     facts.extend(extract_rust_module_impl_trait_facts(source)?);
     facts.extend(extract_rust_impl_trait_facts(source)?);
+    facts.extend(extract_rust_module_test_mapping_facts(source)?);
     facts.extend(
         map_rust_tests_to_functions(source)?
             .into_iter()
@@ -295,6 +296,16 @@ fn extract_rust_module_impl_trait_facts(source: &str) -> Result<Vec<ExtractedFac
 
     let mut facts = Vec::new();
     collect_module_impl_trait_facts(tree.root_node(), source.as_bytes(), "", &mut facts)?;
+    Ok(facts)
+}
+
+fn extract_rust_module_test_mapping_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_rust::language())?;
+    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+
+    let mut facts = Vec::new();
+    collect_module_test_mapping_facts(tree.root_node(), source.as_bytes(), "", &mut facts)?;
     Ok(facts)
 }
 
@@ -847,6 +858,59 @@ fn collect_module_impl_trait_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_module_impl_trait_facts(child, source, module_path, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_module_test_mapping_facts(
+    node: Node<'_>,
+    source: &[u8],
+    module_path: &str,
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "mod_item"
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        let module_name = name.utf8_text(source)?;
+        let nested_path = if module_path.is_empty() {
+            module_name.to_string()
+        } else {
+            format!("{module_path}::{module_name}")
+        };
+
+        let mut tests = Vec::new();
+        collect_tests(node, source, &mut tests)?;
+        let test_names = tests.iter().cloned().collect::<HashSet<_>>();
+        let mut functions = Vec::new();
+        collect_function_names(node, source, &mut functions)?;
+        let functions = functions
+            .into_iter()
+            .filter(|function| !test_names.contains(function))
+            .collect::<Vec<_>>();
+        for test in tests {
+            if let Some(function) = functions
+                .iter()
+                .filter(|function| test.starts_with(&format!("{function}_")))
+                .max_by_key(|function| function.len())
+            {
+                facts.push(ExtractedFact {
+                    subject: format!("Function:{nested_path}::{test}"),
+                    predicate: "tests".to_string(),
+                    object: format!("Function:{nested_path}::{function}"),
+                });
+            }
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            collect_module_test_mapping_facts(child, source, &nested_path, facts)?;
+        }
+        return Ok(());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_module_test_mapping_facts(child, source, module_path, facts)?;
     }
     Ok(())
 }
