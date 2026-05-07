@@ -89,6 +89,8 @@ pub enum PrivacyRejection {
     SecretsPath,
     #[error("environment file path")]
     EnvPath,
+    #[error("memory ignore marker")]
+    MemoryIgnore,
 }
 
 pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejection> {
@@ -103,6 +105,9 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
 }
 
 pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
+    if content.lines().any(|line| line.contains("# memory:ignore")) {
+        return Err(PrivacyRejection::MemoryIgnore);
+    }
     if content.contains("BEGIN PRIVATE KEY") {
         return Err(PrivacyRejection::PrivateKey);
     }
