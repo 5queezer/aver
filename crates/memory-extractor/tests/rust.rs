@@ -94,3 +94,18 @@ fn extract_rust_facts_emits_function_calls_function_triple() {
         object: "Function:recall".to_string(),
     }));
 }
+
+#[test]
+fn extract_rust_facts_emits_test_covers_function_triple() {
+    let facts = extract_rust_facts(
+        "src/lib.rs",
+        "fn add_claim() {}\n#[test]\nfn add_claim_persists_log_first() {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Function:add_claim_persists_log_first".to_string(),
+        predicate: "tests".to_string(),
+        object: "Function:add_claim".to_string(),
+    }));
+}

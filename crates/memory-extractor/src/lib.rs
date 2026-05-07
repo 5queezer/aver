@@ -102,6 +102,15 @@ pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
             }),
     );
     facts.extend(extract_rust_function_call_facts(source)?);
+    facts.extend(
+        map_rust_tests_to_functions(source)?
+            .into_iter()
+            .map(|(test, function)| ExtractedFact {
+                subject: format!("Function:{test}"),
+                predicate: "tests".to_string(),
+                object: format!("Function:{function}"),
+            }),
+    );
     Ok(facts)
 }
 
