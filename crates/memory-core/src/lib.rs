@@ -621,6 +621,37 @@ impl Store {
         })
     }
 
+    pub fn propose_claims_from_extractor(
+        &self,
+        session_id: &str,
+        extractor: &impl ClaimExtractor,
+    ) -> Result<Vec<i64>, Error> {
+        let events = self.list_events_for_session(session_id)?;
+        let drafts = extractor.extract(&events)?;
+        let mut candidate_ids = Vec::new();
+        for draft in drafts {
+            candidate_ids.push(self.propose_candidate_claim(
+                draft.event_id,
+                &draft.subject,
+                &draft.predicate,
+                &draft.object,
+            )?);
+        }
+        Ok(candidate_ids)
+    }
+
+    pub fn list_events_for_session(&self, session_id: &str) -> Result<Vec<EpisodicEvent>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM episodic_events WHERE session_id = ?1 ORDER BY id")?;
+        let rows = stmt.query_map([session_id], |row| row.get::<_, i64>(0))?;
+        let mut events = Vec::new();
+        for row in rows {
+            events.push(self.get_event(row?)?);
+        }
+        Ok(events)
+    }
+
     pub fn should_extract_memories(
         &self,
         session_id: &str,
