@@ -298,6 +298,19 @@ impl Store {
         self.add_vector_chunk(claim_id, &claim.text(), embedding_model)
     }
 
+    /// Embed the canonical claim text and persist the resulting vector chunk.
+    pub fn add_embedded_vector_chunk_for_claim(
+        &self,
+        claim_id: i64,
+        embedding_model: &str,
+        client: &impl vector::EmbeddingClient,
+    ) -> Result<i64, Error> {
+        let claim = self.get_claim(claim_id)?;
+        let text = claim.text();
+        let embedding = client.embed(&text)?;
+        self.add_vector_chunk_with_embedding(claim_id, &text, embedding_model, &embedding)
+    }
+
     /// Retrieve vector chunk metadata by id.
     pub fn get_vector_chunk(&self, id: i64) -> Result<VectorChunk, Error> {
         self.conn
@@ -427,6 +440,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("embedding: {0}")]
+    Embedding(#[from] vector::EmbeddingError),
     #[error("invalid {kind} value in database: {value:?}")]
     EnumParse { kind: &'static str, value: String },
 }

@@ -1,7 +1,7 @@
 //! T14 — vector chunk metadata can be written for a claim before sqlite-vss
 //! indexing is wired in.
 
-use memory_core::Store;
+use memory_core::{Store, vector::MockEmbeddingClient};
 
 #[test]
 fn add_vector_chunk_returns_chunk_id_for_claim() {
@@ -105,4 +105,22 @@ fn add_vector_chunk_with_embedding_persists_embedding_vector() {
     let chunk = store.get_vector_chunk(chunk_id).unwrap();
 
     assert_eq!(chunk.embedding, Some(vec![0.1, 0.2, 0.3]));
+}
+
+#[test]
+fn add_embedded_vector_chunk_for_claim_uses_embedding_client() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim("auth_service", "depends_on", "stripe_sdk", "test_session")
+        .unwrap();
+    let client = MockEmbeddingClient::new(vec![0.4, 0.5]);
+
+    let chunk_id = store
+        .add_embedded_vector_chunk_for_claim(claim_id, "nomic-embed-text", &client)
+        .unwrap();
+    let chunk = store.get_vector_chunk(chunk_id).unwrap();
+
+    assert_eq!(chunk.text, "auth_service depends_on stripe_sdk");
+    assert_eq!(chunk.embedding, Some(vec![0.4, 0.5]));
 }
