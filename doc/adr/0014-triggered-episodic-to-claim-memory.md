@@ -46,10 +46,15 @@ AML adds an explicit event-to-claim pipeline:
 
 ## Implementation notes
 
-The first implementation slice is intentionally small:
+The first implementation slice is intentionally small and has now landed:
 
-1. Add `episodic_events` and `candidate_claims` SQLite tables.
-2. Add `Store::record_event`.
-3. Add `Store::propose_candidate_claim` requiring event provenance.
-4. Add `Store::promote_candidate_claim` that writes a durable claim with `source_refs = ["event:<id>"]`.
-5. Keep all tests deterministic and offline; LLM extractors are traits/mocks only until a later milestone.
+1. `episodic_events` and `candidate_claims` SQLite tables exist.
+2. `Store::record_event` writes `events.jsonl` first, then mirrors the event into SQLite.
+3. `Store::propose_candidate_claim` stages a triple and requires existing event provenance.
+4. `Store::reject_candidate_claim` marks unsupported candidates as `REJECTED` with a rejection reason.
+5. `Store::promote_candidate_claim` writes a durable claim with `source_refs = ["event:<id>"]`, then marks the candidate `PROMOTED`.
+6. Promotion is idempotent: promoting an already-promoted candidate returns the original durable claim id instead of duplicating memory.
+7. `Store::should_extract_memories` provides deterministic trigger policy for explicit remember events and event-count thresholds.
+8. `ClaimExtractor`, `CandidateClaimDraft`, `MockClaimExtractor`, and `Store::propose_claims_from_extractor` provide an offline extractor boundary. Live LLM extractors remain out of tests.
+
+Future slices should add richer trigger reasons, candidate listing by status/session, stronger contradiction validation before promotion, and MCP tools for the event/candidate lifecycle.
