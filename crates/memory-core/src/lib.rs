@@ -47,6 +47,15 @@ pub struct Claim {
     pub source_refs: Vec<String>,
 }
 
+/// A text chunk attached to a claim for vector indexing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VectorChunk {
+    pub id: i64,
+    pub claim_id: i64,
+    pub text: String,
+    pub embedding_model: String,
+}
+
 /// How a claim was acquired (ADR-0003).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provenance {
@@ -249,6 +258,24 @@ impl Store {
             params![claim_id, text, embedding_model, now],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Retrieve vector chunk metadata by id.
+    pub fn get_vector_chunk(&self, id: i64) -> Result<VectorChunk, Error> {
+        self.conn
+            .query_row(
+                "SELECT id, claim_id, text, embedding_model FROM vector_chunks WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok(VectorChunk {
+                        id: row.get(0)?,
+                        claim_id: row.get(1)?,
+                        text: row.get(2)?,
+                        embedding_model: row.get(3)?,
+                    })
+                },
+            )
+            .map_err(Error::from)
     }
 
     /// Text-only keyword recall over active claims. This is the v0.1
