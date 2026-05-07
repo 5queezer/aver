@@ -435,6 +435,28 @@ impl Store {
         Ok(claims)
     }
 
+    /// Hybrid recall over vector chunks plus text fallback. Vector-ranked
+    /// claims are returned first; text recall fills any remaining slots with
+    /// distinct claims so sparse vector indexes remain useful.
+    pub fn recall_hybrid_claims(
+        &self,
+        query: &str,
+        client: &impl vector::EmbeddingClient,
+        top_k: usize,
+    ) -> Result<Vec<Claim>, Error> {
+        let mut claims = self.recall_vector_claims(query, client, top_k)?;
+        let mut seen: HashSet<i64> = claims.iter().map(|claim| claim.id).collect();
+        for claim in self.recall_text(query)? {
+            if claims.len() == top_k {
+                break;
+            }
+            if seen.insert(claim.id) {
+                claims.push(claim);
+            }
+        }
+        Ok(claims)
+    }
+
     /// Text-only keyword recall over active claims. This is the v0.1
     /// precursor to HybridRAG: cheap SQLite substring matching across the
     /// claim triple fields, ordered deterministically by id.

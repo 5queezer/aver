@@ -242,3 +242,20 @@ fn recall_vector_claims_fills_top_k_with_distinct_claims() {
     let ids: Vec<i64> = claims.into_iter().map(|claim| claim.id).collect();
     assert_eq!(ids, vec![auth_id, billing_id]);
 }
+
+#[test]
+fn recall_hybrid_claims_falls_back_to_text_when_vector_index_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim("auth_service", "depends_on", "stripe_sdk", "test_session")
+        .unwrap();
+    let client = MockEmbeddingClient::new(vec![1.0, 0.0]);
+
+    let claims = store
+        .recall_hybrid_claims("stripe", &client, 8)
+        .expect("hybrid recall should use text fallback when no vectors exist");
+
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].id, claim_id);
+}
