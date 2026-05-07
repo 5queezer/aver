@@ -65,6 +65,29 @@ pub struct VectorChunk {
     pub embedding: Option<Vec<f32>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivacyRejection {
+    AwsAccessKey,
+}
+
+pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
+    if content
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(is_aws_access_key)
+    {
+        return Err(PrivacyRejection::AwsAccessKey);
+    }
+    Ok(())
+}
+
+fn is_aws_access_key(token: &str) -> bool {
+    token.len() == 20
+        && token.starts_with("AKIA")
+        && token
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+}
+
 /// How a claim was acquired (ADR-0003).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provenance {
