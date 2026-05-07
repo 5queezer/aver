@@ -27,7 +27,8 @@ if [ "$TEST_EXIT" -eq 0 ] && [ "$RED" -eq 0 ]; then
     eval/fixtures/predicate_role_morphology.json \
     eval/fixtures/acronym_expansion.json \
     eval/fixtures/camel_case_acronym_query.json \
-    eval/fixtures/versioned_acronym_identifier.json 2>&1)
+    eval/fixtures/versioned_acronym_identifier.json \
+    eval/fixtures/versioned_camel_case_identifier.json 2>&1)
   BENCH_EXIT=$?
 fi
 

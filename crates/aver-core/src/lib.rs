@@ -1333,8 +1333,17 @@ fn camel_case_parts(token: &str) -> Vec<String> {
         }
     }
     parts.push(token[start..].to_string());
-    if parts.len() >= 2 {
-        let acronym: String = parts
+    let base_parts = parts.clone();
+    for part in &base_parts {
+        if let Some(split) = part.find(|ch: char| ch.is_ascii_digit())
+            && split > 0
+        {
+            parts.push(part[..split].to_string());
+            parts.push(part[split..].to_string());
+        }
+    }
+    if base_parts.len() >= 2 {
+        let acronym: String = base_parts
             .iter()
             .filter_map(|part| part.chars().next())
             .collect();
