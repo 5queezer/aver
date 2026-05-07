@@ -1,3 +1,15 @@
+use base64::Engine;
+use sha2::{Digest, Sha256};
+
+pub fn pkce_s256_challenge(verifier: &str) -> String {
+    let digest = Sha256::digest(verifier.as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+}
+
+pub fn verify_pkce_s256(verifier: &str, challenge: &str) -> bool {
+    pkce_s256_challenge(verifier) == challenge
+}
+
 pub fn authorization_server_metadata(base_url: &str) -> serde_json::Value {
     let base = base_url.trim_end_matches('/');
     serde_json::json!({
