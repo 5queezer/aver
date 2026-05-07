@@ -442,6 +442,26 @@ fn recall_text_matches_multi_digit_version_identifier() {
 }
 
 #[test]
+fn recall_text_matches_v_prefixed_version_query_to_compact_identifier() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    store
+        .add_claim("server", "version", "2", "test_session")
+        .unwrap();
+    let oauth2_id = store
+        .add_claim("server", "supports", "OAuth2", "test_session")
+        .unwrap();
+
+    let matches = store.recall_text("supports OAuth v2").unwrap();
+
+    assert_eq!(
+        matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+        vec![oauth2_id]
+    );
+}
+
+#[test]
 fn claim_text_renders_subject_predicate_object_for_embedding() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

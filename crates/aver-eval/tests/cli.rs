@@ -32,13 +32,14 @@ fn aver_eval_binary_aggregates_multiple_fixtures() {
         .arg("../../eval/fixtures/mixed_case_prefix_identifier.json")
         .arg("../../eval/fixtures/ies_plural_morphology.json")
         .arg("../../eval/fixtures/multi_digit_version_identifier.json")
+        .arg("../../eval/fixtures/v_prefixed_version_query.json")
         .output()
         .unwrap();
 
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["fixture_name"], "aggregate");
-    assert_eq!(json["fixture_count"], 15);
-    assert_eq!(json["query_count"], 23);
+    assert_eq!(json["fixture_count"], 16);
+    assert_eq!(json["query_count"], 24);
     assert!(json["unsupported_claim_rate"].as_f64().unwrap() >= 0.0);
 }
