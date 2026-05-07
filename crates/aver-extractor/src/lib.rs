@@ -153,15 +153,7 @@ pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
                 object: format!("Trait:{trait_name}"),
             }),
     );
-    facts.extend(
-        extract_rust_modules(source)?
-            .into_iter()
-            .map(|module_name| ExtractedFact {
-                subject: path.to_string(),
-                predicate: "defines".to_string(),
-                object: format!("Module:{module_name}"),
-            }),
-    );
+    facts.extend(extract_rust_module_definition_facts(path, source)?);
     facts.extend(
         extract_rust_imports(source)?
             .into_iter()
@@ -195,6 +187,19 @@ fn extract_rust_function_call_facts(source: &str) -> Result<Vec<ExtractedFact>, 
 
     let mut facts = Vec::new();
     collect_function_call_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
+    Ok(facts)
+}
+
+fn extract_rust_module_definition_facts(
+    path: &str,
+    source: &str,
+) -> Result<Vec<ExtractedFact>, Error> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_rust::language())?;
+    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+
+    let mut facts = Vec::new();
+    collect_module_definition_facts(tree.root_node(), source.as_bytes(), path, "", &mut facts)?;
     Ok(facts)
 }
 
@@ -446,6 +451,47 @@ fn qualify_module_call(callee: &str, module_path: &str) -> String {
     } else {
         format!("{module_path}::{callee}")
     }
+}
+
+fn collect_module_definition_facts(
+    node: Node<'_>,
+    source: &[u8],
+    file_path: &str,
+    module_path: &str,
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "mod_item"
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        let module_name = name.utf8_text(source)?;
+        let nested_path = if module_path.is_empty() {
+            module_name.to_string()
+        } else {
+            format!("{module_path}::{module_name}")
+        };
+        let subject = if module_path.is_empty() {
+            file_path.to_string()
+        } else {
+            format!("Module:{module_path}")
+        };
+        facts.push(ExtractedFact {
+            subject,
+            predicate: "defines".to_string(),
+            object: format!("Module:{nested_path}"),
+        });
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            collect_module_definition_facts(child, source, file_path, &nested_path, facts)?;
+        }
+        return Ok(());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_module_definition_facts(child, source, file_path, module_path, facts)?;
+    }
+    Ok(())
 }
 
 fn collect_impl_method_facts(

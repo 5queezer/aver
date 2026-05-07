@@ -229,6 +229,18 @@ fn extract_rust_facts_emits_module_qualified_function_call_triple() {
 }
 
 #[test]
+fn extract_rust_facts_emits_nested_module_definition_triple() {
+    let facts =
+        extract_rust_facts("src/lib.rs", "mod outer { mod inner { fn run() {} } }").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Module:outer".to_string(),
+        predicate: "defines".to_string(),
+        object: "Module:outer::inner".to_string(),
+    }));
+}
+
+#[test]
 fn extract_rust_facts_emits_type_implements_trait_triple() {
     let facts = extract_rust_facts(
         "src/lib.rs",
