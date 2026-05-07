@@ -30,6 +30,10 @@ fn run() -> anyhow::Result<()> {
     }
 
     let fixture_count = metrics.len();
+    let query_count: usize = metrics
+        .iter()
+        .map(|metric| metric.query_results.len())
+        .sum();
     let mean_recall_at_k = metrics
         .iter()
         .map(|metric| metric.mean_recall_at_k)
@@ -51,6 +55,7 @@ fn run() -> anyhow::Result<()> {
         serde_json::to_string_pretty(&json!({
             "fixture_name": "aggregate",
             "fixture_count": fixture_count,
+            "query_count": query_count,
             "mean_recall_at_k": mean_recall_at_k,
             "mean_precision_at_k": mean_precision_at_k,
             "unsupported_claim_rate": unsupported_claim_rate,
