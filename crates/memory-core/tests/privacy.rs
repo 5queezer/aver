@@ -53,6 +53,13 @@ fn privacy_filter_rejects_stripe_live_key() {
 }
 
 #[test]
+fn privacy_filter_rejects_private_key_header() {
+    let result = privacy_filter("PRIVATE_KEY_HEADER_TEST_TOKEN\nabc\n-----END PRIVATE KEY-----");
+
+    assert_eq!(result, Err(PrivacyRejection::PrivateKey));
+}
+
+#[test]
 fn add_claim_rejects_secret_before_episodic_log_write() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

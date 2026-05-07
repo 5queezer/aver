@@ -81,9 +81,14 @@ pub enum PrivacyRejection {
     AnthropicKey,
     #[error("Stripe live secret key")]
     StripeLiveKey,
+    #[error("private key material")]
+    PrivateKey,
 }
 
 pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
+    if content.contains("BEGIN PRIVATE KEY") {
+        return Err(PrivacyRejection::PrivateKey);
+    }
     if content
         .split(|ch: char| !ch.is_ascii_alphanumeric())
         .any(is_aws_access_key)
