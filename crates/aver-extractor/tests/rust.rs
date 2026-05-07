@@ -301,6 +301,18 @@ fn extract_rust_facts_emits_module_defines_trait_triple() {
 }
 
 #[test]
+fn extract_rust_facts_emits_module_defines_struct_triple() {
+    let facts =
+        extract_rust_facts("src/lib.rs", "mod storage { struct Store { id: u64 } }").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Module:storage".to_string(),
+        predicate: "defines".to_string(),
+        object: "Struct:storage::Store".to_string(),
+    }));
+}
+
+#[test]
 fn extract_rust_facts_emits_type_implements_trait_triple() {
     let facts = extract_rust_facts(
         "src/lib.rs",
