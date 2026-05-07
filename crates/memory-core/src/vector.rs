@@ -18,7 +18,7 @@ pub enum VectorBackend {
 impl VectorBackend {
     pub fn from_optional_config(value: Option<&str>) -> Result<Self, &'static str> {
         match value {
-            Some(value) => value.parse(),
+            Some(value) => value.trim().parse(),
             None => Ok(Self::default()),
         }
     }

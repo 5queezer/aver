@@ -69,3 +69,11 @@ fn vector_backend_from_optional_config_defaults_when_unset() {
         VectorBackend::SqliteVss
     );
 }
+
+#[test]
+fn vector_backend_config_parser_trims_whitespace() {
+    assert_eq!(
+        VectorBackend::from_optional_config(Some(" qdrant ")).unwrap(),
+        VectorBackend::Qdrant
+    );
+}
