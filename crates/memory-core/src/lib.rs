@@ -13,10 +13,16 @@ use serde::Serialize;
 
 /// Embedded migrations applied in order on every `Store::open`.
 /// Each `CREATE` is `IF NOT EXISTS` so re-application is a no-op (ADR-0005).
-const MIGRATIONS: &[(&str, &str)] = &[(
-    "0001_init",
-    include_str!("../../../migrations/0001_init.sql"),
-)];
+const MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "0001_init",
+        include_str!("../../../migrations/0001_init.sql"),
+    ),
+    (
+        "0002_vector_chunks",
+        include_str!("../../../migrations/0002_vector_chunks.sql"),
+    ),
+];
 
 /// Local storage for the memory layer (ADR-0006).
 ///
