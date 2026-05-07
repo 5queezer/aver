@@ -286,6 +286,21 @@ fn extract_rust_facts_emits_module_qualified_impl_trait_triple() {
 }
 
 #[test]
+fn extract_rust_facts_emits_module_defines_trait_triple() {
+    let facts = extract_rust_facts(
+        "src/lib.rs",
+        "mod embedding { trait EmbeddingClient { fn embed(&self); } }",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Module:embedding".to_string(),
+        predicate: "defines".to_string(),
+        object: "Trait:embedding::EmbeddingClient".to_string(),
+    }));
+}
+
+#[test]
 fn extract_rust_facts_emits_type_implements_trait_triple() {
     let facts = extract_rust_facts(
         "src/lib.rs",
