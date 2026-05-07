@@ -169,3 +169,24 @@ fn recall_vector_chunks_embeds_query_with_client_before_ranking() {
     assert_eq!(ranked.len(), 1);
     assert_eq!(ranked[0].id, best_id);
 }
+
+#[test]
+fn recall_vector_claims_returns_claims_for_ranked_chunks() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim("auth_service", "depends_on", "stripe_sdk", "test_session")
+        .unwrap();
+    store
+        .add_vector_chunk_with_embedding(claim_id, "auth", "nomic-embed-text", &[1.0, 0.0])
+        .unwrap();
+    let client = MockEmbeddingClient::new(vec![1.0, 0.0]);
+
+    let claims = store
+        .recall_vector_claims("auth query", &client, 1)
+        .expect("vector recall should return claims, not chunk metadata");
+
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].id, claim_id);
+    assert_eq!(claims[0].subject, "auth_service");
+}

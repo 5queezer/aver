@@ -412,6 +412,22 @@ impl Store {
         self.rank_vector_chunks_by_embedding(&query_embedding, top_k)
     }
 
+    /// Vector recall that returns claim rows instead of internal chunk
+    /// metadata, preserving the chunk ranking order.
+    pub fn recall_vector_claims(
+        &self,
+        query: &str,
+        client: &impl vector::EmbeddingClient,
+        top_k: usize,
+    ) -> Result<Vec<Claim>, Error> {
+        let chunks = self.recall_vector_chunks(query, client, top_k)?;
+        let mut claims = Vec::new();
+        for chunk in chunks {
+            claims.push(self.get_claim(chunk.claim_id)?);
+        }
+        Ok(claims)
+    }
+
     /// Text-only keyword recall over active claims. This is the v0.1
     /// precursor to HybridRAG: cheap SQLite substring matching across the
     /// claim triple fields, ordered deterministically by id.
