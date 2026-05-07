@@ -178,3 +178,48 @@ fn promote_candidate_claim_twice_returns_existing_claim() {
         1
     );
 }
+
+#[test]
+fn should_extract_memories_triggers_on_explicit_remember_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    assert!(!store.should_extract_memories("session-1", 3).unwrap());
+
+    store
+        .record_event(
+            "session-1",
+            "explicit_remember",
+            "Remember that AML batches durable memory writes.",
+            "conversation",
+        )
+        .unwrap();
+
+    assert!(store.should_extract_memories("session-1", 3).unwrap());
+}
+
+#[test]
+fn should_extract_memories_triggers_on_event_count_threshold() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    store
+        .record_event(
+            "session-1",
+            "user_message",
+            "first relevant fact",
+            "conversation",
+        )
+        .unwrap();
+    assert!(!store.should_extract_memories("session-1", 2).unwrap());
+
+    store
+        .record_event(
+            "session-1",
+            "tool_result",
+            "second relevant fact",
+            "conversation",
+        )
+        .unwrap();
+    assert!(store.should_extract_memories("session-1", 2).unwrap());
+}

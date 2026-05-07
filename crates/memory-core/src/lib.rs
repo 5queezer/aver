@@ -592,6 +592,33 @@ impl Store {
         })
     }
 
+    pub fn should_extract_memories(
+        &self,
+        session_id: &str,
+        event_threshold: usize,
+    ) -> Result<bool, Error> {
+        let explicit_remember = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM episodic_events
+                  WHERE session_id = ?1 AND kind = 'explicit_remember'
+                  LIMIT 1",
+                [session_id],
+                |_| Ok(()),
+            )
+            .is_ok();
+        if explicit_remember {
+            return Ok(true);
+        }
+
+        let event_count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM episodic_events WHERE session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )?;
+        Ok(event_threshold > 0 && event_count >= event_threshold)
+    }
+
     pub fn propose_candidate_claim(
         &self,
         event_id: i64,
