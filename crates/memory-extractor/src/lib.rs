@@ -400,4 +400,6 @@ pub enum Error {
     Utf8(#[from] std::str::Utf8Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("invalid extracted fact field: {0}")]
+    InvalidFact(&'static str),
 }

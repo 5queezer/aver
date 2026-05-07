@@ -8,5 +8,11 @@ struct ProseExtraction {
 }
 
 pub fn parse_prose_facts(output: &str) -> Result<Vec<ExtractedFact>, Error> {
-    Ok(serde_json::from_str::<ProseExtraction>(output)?.facts)
+    let extraction = serde_json::from_str::<ProseExtraction>(output)?;
+    for fact in &extraction.facts {
+        if fact.subject.trim().is_empty() {
+            return Err(Error::InvalidFact("subject"));
+        }
+    }
+    Ok(extraction.facts)
 }

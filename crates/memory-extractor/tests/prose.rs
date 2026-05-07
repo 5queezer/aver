@@ -18,3 +18,11 @@ fn parse_prose_facts_reads_structured_llm_output() {
         }]
     );
 }
+
+#[test]
+fn parse_prose_facts_rejects_empty_subject() {
+    let result =
+        parse_prose_facts(r#"{"facts":[{"subject":"","predicate":"prefers","object":"Rust"}]}"#);
+
+    assert!(result.is_err());
+}
