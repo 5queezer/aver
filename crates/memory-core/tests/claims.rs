@@ -162,6 +162,31 @@ fn add_claim_from_agent_records_explicit_agent_provenance() {
 }
 
 #[test]
+fn add_claim_from_agent_appends_to_agent_partition_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let claim_id = store
+        .add_claim_from_agent(
+            "parser_agent",
+            memory_core::AgentKind::DeterministicParser,
+            "module",
+            "defines",
+            "SharedStore",
+            "tree_sitter",
+        )
+        .unwrap();
+
+    let log_path = dir.path().join("agents/parser_agent/log.jsonl");
+    let log = std::fs::read_to_string(log_path).expect("agent partition log should exist");
+    let entry: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
+
+    assert_eq!(entry["claim_id"], serde_json::json!(claim_id));
+    assert_eq!(entry["agent_id"], "parser_agent");
+    assert_eq!(entry["agent_kind"], "DETERMINISTIC_PARSER");
+}
+
+#[test]
 fn consolidate_supersedes_duplicate_claims() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

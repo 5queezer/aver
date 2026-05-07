@@ -420,8 +420,11 @@ impl Store {
             predicate,
             object,
             source,
+            agent_id,
+            agent_kind: agent_kind.as_str(),
         };
         append_jsonl(&self.log_path, &entry)?;
+        append_jsonl(&self.agent_log_path(agent_id), &entry)?;
 
         let source_refs = serde_json::to_string(&[source])?;
         self.conn.execute(
@@ -442,6 +445,15 @@ impl Store {
             ],
         )?;
         Ok(claim_id)
+    }
+
+    fn agent_log_path(&self, agent_id: &str) -> PathBuf {
+        self.log_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("agents")
+            .join(agent_id)
+            .join("log.jsonl")
     }
 
     /// Retrieve a claim by id.
@@ -882,11 +894,16 @@ struct LogEntry<'a> {
     predicate: &'a str,
     object: &'a str,
     source: &'a str,
+    agent_id: &'a str,
+    agent_kind: &'a str,
 }
 
 fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
     let mut line = serde_json::to_vec(value)?;
     line.push(b'\n');
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(&line)?;
     file.sync_data()?;
