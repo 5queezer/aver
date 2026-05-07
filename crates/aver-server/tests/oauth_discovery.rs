@@ -23,6 +23,6 @@ fn oauth_metadata_advertises_pkce_authorization_code_flow() {
     );
     assert_eq!(
         metadata["grant_types_supported"],
-        serde_json::json!(["authorization_code", "refresh_token"])
+        serde_json::json!(["authorization_code"])
     );
 }

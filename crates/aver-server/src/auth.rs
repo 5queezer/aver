@@ -2,6 +2,7 @@ use std::path::Path;
 
 use base64::Engine;
 use rusqlite::{Connection, params};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::oauth::verify_pkce_s256;
@@ -9,6 +10,13 @@ use crate::oauth::verify_pkce_s256;
 pub fn hash_token(token: &str) -> String {
     let digest = Sha256::digest(token.as_bytes());
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegisteredClient {
+    pub client_id: String,
+    pub client_name: String,
+    pub redirect_uris: Vec<String>,
 }
 
 pub struct AuthDb {
@@ -35,9 +43,69 @@ impl AuthDb {
                 code_challenge TEXT NOT NULL,
                 used_at        INTEGER,
                 created_at     INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_clients (
+                client_id     TEXT PRIMARY KEY,
+                client_name   TEXT NOT NULL,
+                redirect_uris TEXT NOT NULL,
+                created_at    INTEGER NOT NULL
             );",
         )?;
         Ok(Self { conn })
+    }
+
+    pub fn register_client(
+        &self,
+        client_name: &str,
+        redirect_uris: &[String],
+    ) -> anyhow::Result<RegisteredClient> {
+        anyhow::ensure!(!client_name.trim().is_empty(), "client_name is required");
+        anyhow::ensure!(!redirect_uris.is_empty(), "at least one redirect_uri is required");
+        anyhow::ensure!(
+            redirect_uris.iter().all(|uri| uri.starts_with("http://") || uri.starts_with("https://")),
+            "redirect_uris must be absolute HTTP(S) URLs"
+        );
+
+        let client = RegisteredClient {
+            client_id: format!("aver-{}", uuid::Uuid::new_v4()),
+            client_name: client_name.to_string(),
+            redirect_uris: redirect_uris.to_vec(),
+        };
+        let redirect_uris_json = serde_json::to_string(&client.redirect_uris)?;
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.conn.execute(
+            "INSERT INTO oauth_clients (client_id, client_name, redirect_uris, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![client.client_id, client.client_name, redirect_uris_json, now],
+        )?;
+        Ok(client)
+    }
+
+    pub fn get_client(&self, client_id: &str) -> anyhow::Result<Option<RegisteredClient>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT client_id, client_name, redirect_uris FROM oauth_clients WHERE client_id = ?1",
+        )?;
+        let mut rows = stmt.query([client_id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let redirect_uris_json: String = row.get(2)?;
+        Ok(Some(RegisteredClient {
+            client_id: row.get(0)?,
+            client_name: row.get(1)?,
+            redirect_uris: serde_json::from_str(&redirect_uris_json)?,
+        }))
+    }
+
+    pub fn client_allows_redirect_uri(
+        &self,
+        client_id: &str,
+        redirect_uri: &str,
+    ) -> anyhow::Result<bool> {
+        Ok(self
+            .get_client(client_id)?
+            .is_some_and(|client| client.redirect_uris.iter().any(|uri| uri == redirect_uri)))
     }
 
     pub fn store_access_token_hash(&self, token_hash: &str, user_id: &str) -> anyhow::Result<()> {
