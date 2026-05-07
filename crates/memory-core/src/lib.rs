@@ -48,6 +48,12 @@ pub struct Claim {
     pub source_refs: Vec<String>,
 }
 
+impl Claim {
+    pub fn text(&self) -> String {
+        format!("{} {} {}", self.subject, self.predicate, self.object)
+    }
+}
+
 /// A text chunk attached to a claim for vector indexing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VectorChunk {

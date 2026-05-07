@@ -105,3 +105,16 @@ fn recall_text_returns_claim_by_keyword() {
     assert_eq!(matches[0].subject, "auth_service");
     assert_eq!(matches[0].object, "stripe_sdk");
 }
+
+#[test]
+fn claim_text_renders_subject_predicate_object_for_embedding() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim("auth_service", "depends_on", "stripe_sdk", "test_session")
+        .unwrap();
+
+    let claim = store.get_claim(claim_id).unwrap();
+
+    assert_eq!(claim.text(), "auth_service depends_on stripe_sdk");
+}
