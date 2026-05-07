@@ -4,6 +4,7 @@
 pub mod retrieval;
 pub mod vector;
 
+use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -421,9 +422,12 @@ impl Store {
         top_k: usize,
     ) -> Result<Vec<Claim>, Error> {
         let chunks = self.recall_vector_chunks(query, client, top_k)?;
+        let mut seen = HashSet::new();
         let mut claims = Vec::new();
         for chunk in chunks {
-            claims.push(self.get_claim(chunk.claim_id)?);
+            if seen.insert(chunk.claim_id) {
+                claims.push(self.get_claim(chunk.claim_id)?);
+            }
         }
         Ok(claims)
     }

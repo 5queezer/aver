@@ -190,3 +190,26 @@ fn recall_vector_claims_returns_claims_for_ranked_chunks() {
     assert_eq!(claims[0].id, claim_id);
     assert_eq!(claims[0].subject, "auth_service");
 }
+
+#[test]
+fn recall_vector_claims_deduplicates_multiple_chunks_for_same_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim("auth_service", "depends_on", "stripe_sdk", "test_session")
+        .unwrap();
+    store
+        .add_vector_chunk_with_embedding(claim_id, "auth one", "nomic-embed-text", &[1.0, 0.0])
+        .unwrap();
+    store
+        .add_vector_chunk_with_embedding(claim_id, "auth two", "nomic-embed-text", &[1.0, 0.0])
+        .unwrap();
+    let client = MockEmbeddingClient::new(vec![1.0, 0.0]);
+
+    let claims = store
+        .recall_vector_claims("auth query", &client, 8)
+        .expect("vector recall should deduplicate claims");
+
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].id, claim_id);
+}
