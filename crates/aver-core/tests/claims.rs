@@ -176,6 +176,29 @@ fn recall_text_prefers_claims_covering_multiple_query_tokens() {
 }
 
 #[test]
+fn recall_text_caps_ambiguous_single_token_queries_to_best_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let project_rust_id = store
+        .add_claim("project", "language", "Rust", "test_session")
+        .unwrap();
+    store
+        .add_claim("user", "likes", "Rust", "test_session")
+        .unwrap();
+    store
+        .add_claim("benchmark", "language", "Rust", "test_session")
+        .unwrap();
+
+    let matches = store.recall_text("Rust").unwrap();
+
+    assert_eq!(
+        matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+        vec![project_rust_id]
+    );
+}
+
+#[test]
 fn claim_text_renders_subject_predicate_object_for_embedding() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
