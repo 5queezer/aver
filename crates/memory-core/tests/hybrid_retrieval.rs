@@ -1,7 +1,9 @@
 //! T16 — v0.2 HybridRAG starts with the hardcoded alpha from ADR-0004 before
 //! adaptive classification exists.
 
-use memory_core::retrieval::{HybridWeights, RetrievalCandidate, rank_candidates};
+use memory_core::retrieval::{
+    HybridWeights, RetrievalCandidate, rank_candidates, top_k_candidates,
+};
 
 #[test]
 fn default_hybrid_weights_use_hardcoded_v0_2_alpha() {
@@ -49,4 +51,28 @@ fn rank_candidates_orders_by_descending_hybrid_score() {
 
     let ids: Vec<i64> = ranked.into_iter().map(|c| c.claim_id).collect();
     assert_eq!(ids, vec![2, 3, 1]);
+}
+
+#[test]
+fn top_k_candidates_returns_highest_scoring_limit() {
+    let top = top_k_candidates(
+        vec![
+            RetrievalCandidate {
+                claim_id: 1,
+                score: 0.2,
+            },
+            RetrievalCandidate {
+                claim_id: 2,
+                score: 0.9,
+            },
+            RetrievalCandidate {
+                claim_id: 3,
+                score: 0.5,
+            },
+        ],
+        2,
+    );
+
+    let ids: Vec<i64> = top.into_iter().map(|c| c.claim_id).collect();
+    assert_eq!(ids, vec![2, 3]);
 }

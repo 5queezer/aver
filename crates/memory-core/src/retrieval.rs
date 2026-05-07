@@ -44,3 +44,12 @@ pub fn rank_candidates(mut candidates: Vec<RetrievalCandidate>) -> Vec<Retrieval
     candidates.sort_by(|a, b| b.score.total_cmp(&a.score));
     candidates
 }
+
+pub fn top_k_candidates(
+    candidates: Vec<RetrievalCandidate>,
+    top_k: usize,
+) -> Vec<RetrievalCandidate> {
+    let mut ranked = rank_candidates(candidates);
+    ranked.truncate(top_k);
+    ranked
+}
