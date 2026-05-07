@@ -19,7 +19,8 @@ if [ "$TEST_EXIT" -eq 0 ] && [ "$RED" -eq 0 ]; then
   BENCH_OUT=$(cargo run -q -p aver-eval -- \
     eval/fixtures/basic_recall.json \
     eval/fixtures/conflict_and_noise.json \
-    eval/fixtures/ambiguous_single_token.json 2>&1)
+    eval/fixtures/ambiguous_single_token.json \
+    eval/fixtures/single_token_multi_answer.json 2>&1)
   BENCH_EXIT=$?
 fi
 
@@ -49,7 +50,7 @@ echo "METRIC commit_count_total=$COMMITS"
 
 if [ "$BENCH_EXIT" -eq 0 ] && [ -n "$BENCH_OUT" ]; then
   printf '%s\n' "$BENCH_OUT"
-  printf '%s\n' "$BENCH_OUT" | python3 -c 'import json,sys; m=json.load(sys.stdin); print("METRIC unsupported_claim_rate={}".format(m["unsupported_claim_rate"])); print("METRIC mean_precision_at_k={}".format(m["mean_precision_at_k"])); print("METRIC mean_recall_at_k={}".format(m["mean_recall_at_k"]))'
+  printf '%s\n' "$BENCH_OUT" | python3 -c 'import json,sys; m=json.load(sys.stdin); memory_error_rate=m["unsupported_claim_rate"]+(1-m["mean_recall_at_k"]); print("METRIC memory_error_rate={}".format(memory_error_rate)); print("METRIC unsupported_claim_rate={}".format(m["unsupported_claim_rate"])); print("METRIC mean_precision_at_k={}".format(m["mean_precision_at_k"])); print("METRIC mean_recall_at_k={}".format(m["mean_recall_at_k"]))'
 fi
 
 # Non-zero on compile fail, any red test, or benchmark failure.
