@@ -233,6 +233,24 @@ impl Store {
         })
     }
 
+    /// Insert vector chunk metadata for a claim. The actual sqlite-vss index
+    /// is wired separately; this table is the durable join point between
+    /// claims and embeddings.
+    pub fn add_vector_chunk(
+        &self,
+        claim_id: i64,
+        text: &str,
+        embedding_model: &str,
+    ) -> Result<i64, Error> {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.conn.execute(
+            "INSERT INTO vector_chunks (claim_id, text, embedding_model, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![claim_id, text, embedding_model, now],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
     /// Text-only keyword recall over active claims. This is the v0.1
     /// precursor to HybridRAG: cheap SQLite substring matching across the
     /// claim triple fields, ordered deterministically by id.
