@@ -80,3 +80,28 @@ fn add_claim_log_entry_claim_id_matches_sqlite_row_id() {
     let entry: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
     assert_eq!(entry["claim_id"], serde_json::json!(claim_id));
 }
+
+/// T5 — minimal recall: keyword search over claim text returns matching
+/// active claims. This is the v0.1 text-only precursor to HybridRAG recall
+/// in ADR-0004 / ADR-0008.
+#[test]
+fn recall_text_returns_claim_by_keyword() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let auth_id = store
+        .add_claim("auth_service", "depends_on", "stripe_sdk", "test_session")
+        .expect("add auth claim");
+    store
+        .add_claim("billing_worker", "emits", "invoice_event", "test_session")
+        .expect("add billing claim");
+
+    let matches = store
+        .recall_text("stripe")
+        .expect("recall_text should search stored claims");
+
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].id, auth_id);
+    assert_eq!(matches[0].subject, "auth_service");
+    assert_eq!(matches[0].object, "stripe_sdk");
+}

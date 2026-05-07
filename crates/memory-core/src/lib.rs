@@ -224,6 +224,50 @@ impl Store {
             source_refs: serde_json::from_str(&source_refs)?,
         })
     }
+
+    /// Text-only keyword recall over active claims. This is the v0.1
+    /// precursor to HybridRAG: cheap SQLite substring matching across the
+    /// claim triple fields, ordered deterministically by id.
+    pub fn recall_text(&self, query: &str) -> Result<Vec<Claim>, Error> {
+        let pattern = format!("%{query}%");
+        let mut stmt = self.conn.prepare(
+            "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs
+               FROM claims
+              WHERE status = 'ACTIVE'
+                AND (subject LIKE ?1 OR predicate LIKE ?1 OR object LIKE ?1)
+              ORDER BY id",
+        )?;
+
+        let rows = stmt.query_map(params![pattern], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, f64>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+            ))
+        })?;
+
+        let mut claims = Vec::new();
+        for row in rows {
+            let (id, subject, predicate, object, provenance, confidence, status, source_refs) =
+                row?;
+            claims.push(Claim {
+                id,
+                subject,
+                predicate,
+                object,
+                provenance: provenance.parse()?,
+                confidence,
+                status: status.parse()?,
+                source_refs: serde_json::from_str(&source_refs)?,
+            });
+        }
+        Ok(claims)
+    }
 }
 
 #[derive(Serialize)]
