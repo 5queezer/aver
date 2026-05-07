@@ -1,9 +1,9 @@
 use std::path::Path;
 
-use aver_core::{AgentKind, Claim, Store};
+use aver_core::{AgentKind, CandidateClaim, Claim, EpisodicEvent, Store};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RememberClaimParams {
     pub subject: String,
     pub predicate: String,
@@ -16,11 +16,57 @@ pub struct RememberClaimParams {
     pub agent_kind: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RecallParams {
     pub query: String,
     #[serde(default)]
     pub top_k: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct RecordEventParams {
+    pub session_id: String,
+    pub kind: String,
+    pub payload: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub agent_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct ShouldExtractMemoriesParams {
+    pub session_id: String,
+    pub event_threshold: usize,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct ProposeCandidateClaimParams {
+    pub event_id: i64,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct ListCandidateClaimsParams {
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct PromoteCandidateClaimParams {
+    pub candidate_id: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct RejectCandidateClaimParams {
+    pub candidate_id: i64,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -36,6 +82,37 @@ pub struct ClaimView {
     pub agent_kind: String,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct EventView {
+    pub id: i64,
+    pub session_id: String,
+    pub kind: String,
+    pub payload: String,
+    pub source: String,
+    pub agent_id: String,
+    pub agent_kind: String,
+    pub ts: i64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct CandidateClaimView {
+    pub id: i64,
+    pub event_id: i64,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub provenance: String,
+    pub confidence: f64,
+    pub status: String,
+    pub promoted_claim_id: Option<i64>,
+    pub rejection_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ShouldExtractMemoriesView {
+    pub should_extract: bool,
+}
+
 impl From<Claim> for ClaimView {
     fn from(claim: Claim) -> Self {
         Self {
@@ -48,6 +125,38 @@ impl From<Claim> for ClaimView {
             source_refs: claim.source_refs,
             agent_id: claim.agent_id,
             agent_kind: claim.agent_kind.as_str().to_string(),
+        }
+    }
+}
+
+impl From<EpisodicEvent> for EventView {
+    fn from(event: EpisodicEvent) -> Self {
+        Self {
+            id: event.id,
+            session_id: event.session_id,
+            kind: event.kind,
+            payload: event.payload,
+            source: event.source,
+            agent_id: event.agent_id,
+            agent_kind: event.agent_kind.as_str().to_string(),
+            ts: event.ts,
+        }
+    }
+}
+
+impl From<CandidateClaim> for CandidateClaimView {
+    fn from(candidate: CandidateClaim) -> Self {
+        Self {
+            id: candidate.id,
+            event_id: candidate.event_id,
+            subject: candidate.subject,
+            predicate: candidate.predicate,
+            object: candidate.object,
+            provenance: candidate.provenance.as_str().to_string(),
+            confidence: candidate.confidence,
+            status: candidate.status,
+            promoted_claim_id: candidate.promoted_claim_id,
+            rejection_reason: candidate.rejection_reason,
         }
     }
 }
@@ -87,5 +196,77 @@ impl AverTools {
         let mut claims = self.store.recall_text(&params.query)?;
         claims.truncate(top_k);
         Ok(claims.into_iter().map(ClaimView::from).collect())
+    }
+
+    pub fn record_event(&self, params: RecordEventParams) -> anyhow::Result<EventView> {
+        let source = params.source.as_deref().unwrap_or("mcp");
+        let agent_id = params.agent_id.as_deref().unwrap_or("mcp");
+        let agent_kind = params
+            .agent_kind
+            .as_deref()
+            .unwrap_or("EXTERNAL_TOOL")
+            .parse::<AgentKind>()?;
+        let id = self.store.record_event_from_agent(
+            agent_id,
+            agent_kind,
+            &params.session_id,
+            &params.kind,
+            &params.payload,
+            source,
+        )?;
+        Ok(self.store.get_event(id)?.into())
+    }
+
+    pub fn should_extract_memories(
+        &self,
+        params: ShouldExtractMemoriesParams,
+    ) -> anyhow::Result<ShouldExtractMemoriesView> {
+        Ok(ShouldExtractMemoriesView {
+            should_extract: self
+                .store
+                .should_extract_memories(&params.session_id, params.event_threshold)?,
+        })
+    }
+
+    pub fn propose_candidate_claim(
+        &self,
+        params: ProposeCandidateClaimParams,
+    ) -> anyhow::Result<CandidateClaimView> {
+        let id = self.store.propose_candidate_claim(
+            params.event_id,
+            &params.subject,
+            &params.predicate,
+            &params.object,
+        )?;
+        Ok(self.store.get_candidate_claim(id)?.into())
+    }
+
+    pub fn list_candidate_claims(
+        &self,
+        params: ListCandidateClaimsParams,
+    ) -> anyhow::Result<Vec<CandidateClaimView>> {
+        Ok(self
+            .store
+            .list_candidate_claims(params.session_id.as_deref(), params.status.as_deref())?
+            .into_iter()
+            .map(CandidateClaimView::from)
+            .collect())
+    }
+
+    pub fn promote_candidate_claim(
+        &self,
+        params: PromoteCandidateClaimParams,
+    ) -> anyhow::Result<ClaimView> {
+        let claim_id = self.store.promote_candidate_claim(params.candidate_id)?;
+        Ok(self.store.get_claim(claim_id)?.into())
+    }
+
+    pub fn reject_candidate_claim(
+        &self,
+        params: RejectCandidateClaimParams,
+    ) -> anyhow::Result<CandidateClaimView> {
+        self.store
+            .reject_candidate_claim(params.candidate_id, &params.reason)?;
+        Ok(self.store.get_candidate_claim(params.candidate_id)?.into())
     }
 }

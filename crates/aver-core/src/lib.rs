@@ -777,6 +777,34 @@ impl Store {
         Ok(())
     }
 
+    pub fn list_candidate_claims(
+        &self,
+        session_id: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<Vec<CandidateClaim>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM candidate_claims ORDER BY id")?;
+        let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
+        let mut candidates = Vec::new();
+        for row in rows {
+            let candidate = self.get_candidate_claim(row?)?;
+            if let Some(status) = status
+                && candidate.status != status
+            {
+                continue;
+            }
+            if let Some(session_id) = session_id {
+                let event = self.get_event(candidate.event_id)?;
+                if event.session_id != session_id {
+                    continue;
+                }
+            }
+            candidates.push(candidate);
+        }
+        Ok(candidates)
+    }
+
     pub fn get_candidate_claim(&self, id: i64) -> Result<CandidateClaim, Error> {
         self.conn
             .query_row(

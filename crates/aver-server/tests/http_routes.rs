@@ -170,7 +170,10 @@ async fn oauth_authorize_route_redirects_with_pkce_code() {
     let auth_db_path = dir.path().join("auth.db");
     let db = AuthDb::open(&auth_db_path).unwrap();
     let client = db
-        .register_client("Claude Desktop", &["http://127.0.0.1:3917/callback".to_string()])
+        .register_client(
+            "Claude Desktop",
+            &["http://127.0.0.1:3917/callback".to_string()],
+        )
         .unwrap();
     drop(db);
     let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
@@ -223,7 +226,9 @@ async fn mcp_route_requires_bearer_token() {
                 .method(Method::POST)
                 .uri("/mcp")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"jsonrpc":"2.0","method":"initialize","id":1}"#))
+                .body(Body::from(
+                    r#"{"jsonrpc":"2.0","method":"initialize","id":1}"#,
+                ))
                 .unwrap(),
         )
         .await

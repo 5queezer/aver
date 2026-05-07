@@ -10,7 +10,9 @@ use rmcp::{
 use serde::Deserialize;
 
 use crate::tools::{
-    AverTools, RecallParams as CoreRecallParams, RememberClaimParams as CoreRememberClaimParams,
+    AverTools, ListCandidateClaimsParams, PromoteCandidateClaimParams, ProposeCandidateClaimParams,
+    RecallParams as CoreRecallParams, RecordEventParams, RejectCandidateClaimParams,
+    RememberClaimParams as CoreRememberClaimParams, ShouldExtractMemoriesParams,
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -89,6 +91,122 @@ impl AverMcpService {
         }
     }
 
+    #[tool(description = "Record an append-only episodic event for later memory extraction.")]
+    async fn record_event(
+        &self,
+        Parameters(params): Parameters<RecordEventParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .record_event(params);
+        json_tool_result(result, "record_event")
+    }
+
+    #[tool(description = "Return whether a session should trigger memory extraction.")]
+    async fn should_extract_memories(
+        &self,
+        Parameters(params): Parameters<ShouldExtractMemoriesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .should_extract_memories(params);
+        json_tool_result(result, "should_extract_memories")
+    }
+
+    #[tool(description = "Stage a candidate claim from episodic event provenance.")]
+    async fn propose_candidate_claim(
+        &self,
+        Parameters(params): Parameters<ProposeCandidateClaimParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .propose_candidate_claim(params);
+        json_tool_result(result, "propose_candidate_claim")
+    }
+
+    #[tool(
+        description = "List staged candidate claims, optionally filtered by session_id and status."
+    )]
+    async fn list_candidate_claims(
+        &self,
+        Parameters(params): Parameters<ListCandidateClaimsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .list_candidate_claims(params);
+        json_tool_result(result, "list_candidate_claims")
+    }
+
+    #[tool(description = "Promote a staged candidate claim to durable Aver memory.")]
+    async fn promote_candidate_claim(
+        &self,
+        Parameters(params): Parameters<PromoteCandidateClaimParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .promote_candidate_claim(params);
+        json_tool_result(result, "promote_candidate_claim")
+    }
+
+    #[tool(description = "Reject a staged candidate claim with a reason.")]
+    async fn reject_candidate_claim(
+        &self,
+        Parameters(params): Parameters<RejectCandidateClaimParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .reject_candidate_claim(params);
+        json_tool_result(result, "reject_candidate_claim")
+    }
+
     #[tool(description = "Recall durable Aver claims by text query.")]
     async fn recall(
         &self,
@@ -121,6 +239,22 @@ impl AverMcpService {
     }
 }
 
+fn json_tool_result<T: serde::Serialize>(
+    result: anyhow::Result<T>,
+    tool_name: &str,
+) -> Result<CallToolResult, McpError> {
+    match result {
+        Ok(value) => Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&value).unwrap_or_default(),
+        )])),
+        Err(err) => Err(McpError::new(
+            ErrorCode::INTERNAL_ERROR,
+            format!("{tool_name} failed: {err}"),
+            None,
+        )),
+    }
+}
+
 #[tool_handler]
 impl ServerHandler for AverMcpService {
     fn get_info(&self) -> ServerInfo {
@@ -128,12 +262,12 @@ impl ServerHandler for AverMcpService {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(
                 Implementation::new("aver", env!("CARGO_PKG_VERSION"))
-                    .with_title("Aver Aver Server")
-                    .with_description("Structured claim Aver server for agents.")
+                    .with_title("Aver Server")
+                    .with_description("Structured claim memory server for agents.")
                     .with_icons(vec![Icon::new(icon_url).with_mime_type("image/svg+xml")]),
             )
             .with_instructions(
-                "Available tools: remember_claim (store a structured claim), recall (search durable claims).".to_string(),
+                "Available tools: remember_claim, recall, record_event, should_extract_memories, propose_candidate_claim, list_candidate_claims, promote_candidate_claim, reject_candidate_claim.".to_string(),
             )
     }
 }

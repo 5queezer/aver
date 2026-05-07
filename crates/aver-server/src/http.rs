@@ -36,7 +36,10 @@ pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
     let base_url = state.config.base_url.clone();
     let mcp_service: StreamableHttpService<AverMcpService, LocalSessionManager> =
         StreamableHttpService::new(
-            move || AverMcpService::open(memory_dir.clone(), base_url.clone()).map_err(std::io::Error::other),
+            move || {
+                AverMcpService::open(memory_dir.clone(), base_url.clone())
+                    .map_err(std::io::Error::other)
+            },
             LocalSessionManager::default().into(),
             StreamableHttpServerConfig::default(),
         );
@@ -110,7 +113,8 @@ async fn oauth_register(
     axum::extract::State(state): axum::extract::State<HttpState>,
     Json(request): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
-    let db = AuthDb::open(&state.config.auth_db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db =
+        AuthDb::open(&state.config.auth_db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let client = db
         .register_client(
             request.client_name.as_deref().unwrap_or("Aver MCP client"),
@@ -148,7 +152,8 @@ async fn oauth_authorize(
     if request.response_type != "code" || request.code_challenge_method != "S256" {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let db = AuthDb::open(&state.config.auth_db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db =
+        AuthDb::open(&state.config.auth_db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if !db
         .client_allows_redirect_uri(&request.client_id, &request.redirect_uri)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -162,7 +167,8 @@ async fn oauth_authorize(
             &request.code_challenge,
         )
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let mut redirect_url = url::Url::parse(&request.redirect_uri).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let mut redirect_url =
+        url::Url::parse(&request.redirect_uri).map_err(|_| StatusCode::BAD_REQUEST)?;
     redirect_url.query_pairs_mut().append_pair("code", &code);
     if let Some(state) = request.state {
         redirect_url.query_pairs_mut().append_pair("state", &state);

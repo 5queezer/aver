@@ -61,9 +61,14 @@ impl AuthDb {
         redirect_uris: &[String],
     ) -> anyhow::Result<RegisteredClient> {
         anyhow::ensure!(!client_name.trim().is_empty(), "client_name is required");
-        anyhow::ensure!(!redirect_uris.is_empty(), "at least one redirect_uri is required");
         anyhow::ensure!(
-            redirect_uris.iter().all(|uri| uri.starts_with("http://") || uri.starts_with("https://")),
+            !redirect_uris.is_empty(),
+            "at least one redirect_uri is required"
+        );
+        anyhow::ensure!(
+            redirect_uris
+                .iter()
+                .all(|uri| uri.starts_with("http://") || uri.starts_with("https://")),
             "redirect_uris must be absolute HTTP(S) URLs"
         );
 
@@ -77,7 +82,12 @@ impl AuthDb {
         self.conn.execute(
             "INSERT INTO oauth_clients (client_id, client_name, redirect_uris, created_at)
              VALUES (?1, ?2, ?3, ?4)",
-            params![client.client_id, client.client_name, redirect_uris_json, now],
+            params![
+                client.client_id,
+                client.client_name,
+                redirect_uris_json,
+                now
+            ],
         )?;
         Ok(client)
     }

@@ -9,5 +9,8 @@ fn mcp_service_advertises_tools_capability() {
     let info = service.get_info();
 
     assert_eq!(info.server_info.name, "aver");
-    assert!(info.instructions.unwrap().contains("remember_claim"));
+    let instructions = info.instructions.unwrap();
+    assert!(instructions.contains("remember_claim"));
+    assert!(instructions.contains("record_event"));
+    assert!(instructions.contains("promote_candidate_claim"));
 }

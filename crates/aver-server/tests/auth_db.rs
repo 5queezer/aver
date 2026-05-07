@@ -37,6 +37,12 @@ fn auth_db_registers_oauth_clients() {
 
     let loaded: RegisteredClient = db.get_client(&client.client_id).unwrap().unwrap();
     assert_eq!(loaded, client);
-    assert!(db.client_allows_redirect_uri(&client.client_id, "http://127.0.0.1/callback").unwrap());
-    assert!(!db.client_allows_redirect_uri(&client.client_id, "http://evil.example/callback").unwrap());
+    assert!(
+        db.client_allows_redirect_uri(&client.client_id, "http://127.0.0.1/callback")
+            .unwrap()
+    );
+    assert!(
+        !db.client_allows_redirect_uri(&client.client_id, "http://evil.example/callback")
+            .unwrap()
+    );
 }
