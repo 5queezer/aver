@@ -172,6 +172,7 @@ pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
             }),
     );
     facts.extend(extract_rust_function_call_facts(source)?);
+    facts.extend(extract_rust_module_function_facts(source)?);
     facts.extend(extract_rust_impl_method_facts(source)?);
     facts.extend(extract_rust_impl_method_call_facts(source)?);
     facts.extend(extract_rust_impl_trait_facts(source)?);
@@ -204,6 +205,16 @@ fn extract_rust_impl_method_facts(source: &str) -> Result<Vec<ExtractedFact>, Er
 
     let mut facts = Vec::new();
     collect_impl_method_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
+    Ok(facts)
+}
+
+fn extract_rust_module_function_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_rust::language())?;
+    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+
+    let mut facts = Vec::new();
+    collect_module_function_facts(tree.root_node(), source.as_bytes(), "", &mut facts)?;
     Ok(facts)
 }
 
@@ -376,6 +387,48 @@ fn collect_function_call_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_function_call_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_module_function_facts(
+    node: Node<'_>,
+    source: &[u8],
+    module_path: &str,
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "mod_item"
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        let module_name = name.utf8_text(source)?;
+        let nested_path = if module_path.is_empty() {
+            module_name.to_string()
+        } else {
+            format!("{module_path}::{module_name}")
+        };
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            collect_module_function_facts(child, source, &nested_path, facts)?;
+        }
+        return Ok(());
+    }
+
+    if !module_path.is_empty()
+        && node.kind() == "function_item"
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        let function = name.utf8_text(source)?;
+        facts.push(ExtractedFact {
+            subject: format!("Module:{module_path}"),
+            predicate: "defines".to_string(),
+            object: format!("Function:{module_path}::{function}"),
+        });
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_module_function_facts(child, source, module_path, facts)?;
     }
     Ok(())
 }
