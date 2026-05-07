@@ -7,7 +7,7 @@ use std::net::TcpListener;
 
 use memory_core::vector::{
     OllamaEmbeddingClient, OllamaEmbeddingRequest, OllamaEmbeddingResponse, VectorBackend,
-    cosine_similarity,
+    cosine_similarity, normalized_cosine_score,
 };
 
 #[test]
@@ -103,6 +103,13 @@ fn cosine_similarity_returns_one_for_identical_vectors() {
 #[test]
 fn cosine_similarity_returns_none_for_zero_vector() {
     assert_eq!(cosine_similarity(&[0.0, 0.0], &[1.0, 2.0]), None);
+}
+
+#[test]
+fn normalized_cosine_score_maps_opposite_vectors_to_zero() {
+    let score = normalized_cosine_score(&[1.0, 0.0], &[-1.0, 0.0]).unwrap();
+
+    assert!((score - 0.0).abs() < f32::EPSILON);
 }
 
 #[test]

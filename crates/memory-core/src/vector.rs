@@ -76,6 +76,10 @@ pub fn cosine_similarity(left: &[f32], right: &[f32]) -> Option<f32> {
     Some(dot / (left_norm.sqrt() * right_norm.sqrt()))
 }
 
+pub fn normalized_cosine_score(left: &[f32], right: &[f32]) -> Option<f32> {
+    cosine_similarity(left, right).map(|score| (score + 1.0) / 2.0)
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct OllamaEmbeddingRequest<'a> {
     model: &'a str,
