@@ -95,6 +95,13 @@ fn privacy_filter_path_rejects_aws_credentials_file() {
 }
 
 #[test]
+fn privacy_filter_path_rejects_config_dir() {
+    let result = privacy_filter_path("/home/alice/.config/gh/hosts.yml");
+
+    assert_eq!(result, Err(PrivacyRejection::ConfigPath));
+}
+
+#[test]
 fn privacy_filter_path_rejects_pem_file() {
     let result = privacy_filter_path("/project/certs/prod.pem");
 

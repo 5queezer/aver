@@ -97,6 +97,8 @@ pub enum PrivacyRejection {
     KeyPath,
     #[error("AWS credentials path")]
     AwsCredentialsPath,
+    #[error("config path")]
+    ConfigPath,
 }
 
 pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejection> {
@@ -112,6 +114,9 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
     }
     if path.ends_with("/.aws/credentials") {
         return Err(PrivacyRejection::AwsCredentialsPath);
+    }
+    if path.contains("/.config/") {
+        return Err(PrivacyRejection::ConfigPath);
     }
     if path.ends_with(".pem") || path.ends_with(".key") {
         return Err(PrivacyRejection::KeyPath);
