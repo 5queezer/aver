@@ -1,0 +1,13 @@
+{
+  "name": "predicate_role_morphology",
+  "version": 1,
+  "description": "Natural verb wording should match role predicates such as attendee without returning broad same-subject facts",
+  "claims": [
+    {"subject": "meeting", "predicate": "attendee", "object": "Bob"},
+    {"subject": "meeting", "predicate": "topic", "object": "project_planning"},
+    {"subject": "project", "predicate": "name", "object": "Aver"}
+  ],
+  "queries": [
+    {"query": "who attends meetings", "relevant_indices": [0], "top_k": 5}
+  ]
+}

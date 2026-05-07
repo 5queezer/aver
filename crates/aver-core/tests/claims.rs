@@ -262,6 +262,26 @@ fn recall_text_splits_camel_case_claim_tokens() {
 }
 
 #[test]
+fn recall_text_matches_attendee_role_from_attends_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let attendee_id = store
+        .add_claim("meeting", "attendee", "Bob", "test_session")
+        .unwrap();
+    store
+        .add_claim("meeting", "topic", "project_planning", "test_session")
+        .unwrap();
+
+    let matches = store.recall_text("who attends meetings").unwrap();
+
+    assert_eq!(
+        matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+        vec![attendee_id]
+    );
+}
+
+#[test]
 fn claim_text_renders_subject_predicate_object_for_embedding() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

@@ -1261,13 +1261,16 @@ impl Store {
             .map(|(score, _)| *score)
             .max()
             .unwrap_or(0);
-        let has_name_anchor = max_score >= 4
+        let has_name_anchor = query_tokens.len() == 2
+            && max_score >= 4
             && scored_claims.iter().any(|(score, claim)| {
                 *score == max_score && claim.predicate.eq_ignore_ascii_case("name")
             });
-        let minimum_score = if max_score >= 5 {
+        let minimum_score = if has_name_anchor {
+            2
+        } else if max_score >= 5 {
             max_score - 1
-        } else if max_score >= 4 && !has_name_anchor {
+        } else if max_score >= 3 {
             3
         } else if max_score >= 2 {
             2
@@ -1307,7 +1310,9 @@ fn camel_case_parts(token: &str) -> Vec<String> {
 
 fn normalize_recall_token(token: &str) -> String {
     let lower = token.to_ascii_lowercase();
-    if lower.len() > 3 && lower.ends_with('s') {
+    if lower.len() > 4 && lower.ends_with("ee") {
+        lower.trim_end_matches("ee").to_string()
+    } else if lower.len() > 3 && lower.ends_with('s') {
         lower.trim_end_matches('s').to_string()
     } else {
         lower

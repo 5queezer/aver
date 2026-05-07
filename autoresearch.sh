@@ -23,7 +23,8 @@ if [ "$TEST_EXIT" -eq 0 ] && [ "$RED" -eq 0 ]; then
     eval/fixtures/single_token_multi_answer.json \
     eval/fixtures/natural_query_noise.json \
     eval/fixtures/camel_case_memory_terms.json \
-    eval/fixtures/abstention.json 2>&1)
+    eval/fixtures/abstention.json \
+    eval/fixtures/predicate_role_morphology.json 2>&1)
   BENCH_EXIT=$?
 fi
 
