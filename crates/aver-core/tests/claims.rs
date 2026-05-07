@@ -302,6 +302,26 @@ fn recall_text_matches_acronym_claim_from_expanded_query() {
 }
 
 #[test]
+fn recall_text_matches_camel_case_identifier_from_acronym_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let bench_name_id = store
+        .add_claim("benchmark", "name", "MemoryAgentBench", "test_session")
+        .unwrap();
+    store
+        .add_claim("benchmark", "topic", "memory_recall", "test_session")
+        .unwrap();
+
+    let matches = store.recall_text("MAB benchmark").unwrap();
+
+    assert_eq!(
+        matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+        vec![bench_name_id]
+    );
+}
+
+#[test]
 fn claim_text_renders_subject_predicate_object_for_embedding() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

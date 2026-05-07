@@ -1310,6 +1310,10 @@ fn tokenize_for_recall(text: &str) -> Vec<String> {
 }
 
 fn camel_case_parts(token: &str) -> Vec<String> {
+    if token.chars().all(|ch| ch.is_ascii_uppercase()) {
+        return vec![token.to_string()];
+    }
+
     let mut parts = Vec::new();
     let mut start = 0;
     for (idx, ch) in token.char_indices().skip(1) {
@@ -1319,6 +1323,13 @@ fn camel_case_parts(token: &str) -> Vec<String> {
         }
     }
     parts.push(token[start..].to_string());
+    if parts.len() >= 2 {
+        let acronym: String = parts
+            .iter()
+            .filter_map(|part| part.chars().next())
+            .collect();
+        parts.push(acronym);
+    }
     parts
 }
 
