@@ -40,6 +40,31 @@ fn recall_at_k_is_one_for_exact_query() {
 }
 
 #[test]
+fn no_relevant_empty_retrieval_scores_perfect_abstention() {
+    let fixture = aver_eval::BenchFixture {
+        name: "abstention".to_string(),
+        description: "no relevant claims".to_string(),
+        version: 1,
+        claims: vec![aver_eval::FixtureClaim {
+            subject: "project".to_string(),
+            predicate: "language".to_string(),
+            object: "Rust".to_string(),
+        }],
+        queries: vec![aver_eval::FixtureQuery {
+            query: "Go".to_string(),
+            relevant_indices: vec![],
+            top_k: 5,
+        }],
+    };
+
+    let metrics = aver_eval::run_fixture(&fixture).unwrap();
+
+    assert_eq!(metrics.mean_recall_at_k, 1.0);
+    assert_eq!(metrics.mean_precision_at_k, 1.0);
+    assert_eq!(metrics.unsupported_claim_rate, 0.0);
+}
+
+#[test]
 fn bench_metrics_serializes_to_json() {
     let f = aver_eval::load_fixture(BASIC_FIXTURE).unwrap();
     let metrics = aver_eval::run_fixture(&f).unwrap();

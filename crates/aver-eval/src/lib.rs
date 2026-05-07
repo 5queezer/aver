@@ -104,12 +104,20 @@ pub fn run_fixture(fixture: &BenchFixture) -> Result<BenchMetrics> {
 
         let total_relevant = fq.relevant_indices.len();
         let recall_at_k = if total_relevant == 0 {
-            0.0
+            if retrieved_count == 0 {
+                1.0
+            } else {
+                0.0
+            }
         } else {
             relevant_found as f64 / total_relevant as f64
         };
         let precision_at_k = if retrieved_count == 0 {
-            0.0
+            if total_relevant == 0 {
+                1.0
+            } else {
+                0.0
+            }
         } else {
             let denom = retrieved_count.min(fq.top_k);
             relevant_found as f64 / denom as f64
