@@ -133,8 +133,10 @@ impl Store {
             .is_ok()
     }
 
-    /// Append a USER_ASSERTED claim. Writes the JSONL log line first
-    /// (source of truth, ADR-0005), then mirrors into SQLite.
+    /// Append a USER_ASSERTED claim. Pre-allocates the claim id, writes
+    /// the JSONL log line first (source of truth, ADR-0005), then mirrors
+    /// into SQLite with the same explicit id so audit replay can rebuild
+    /// the DB from the log without id drift.
     /// Default confidence is 0.95 per ADR-0003's policy table.
     pub fn add_claim(
         &self,
@@ -145,9 +147,19 @@ impl Store {
     ) -> Result<i64, Error> {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
+        // Pre-allocate the claim id. Single-writer assumption: rusqlite's
+        // Connection is !Sync, so within a process this is race-free; SQLite
+        // WAL serializes writers across processes.
+        let claim_id: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(id), 0) + 1 FROM claims",
+            [],
+            |r| r.get(0),
+        )?;
+
         let entry = LogEntry {
             kind: "add_claim",
             ts: now,
+            claim_id,
             subject,
             predicate,
             object,
@@ -157,12 +169,12 @@ impl Store {
 
         let source_refs = serde_json::to_string(&[source])?;
         self.conn.execute(
-            "INSERT INTO claims (subject, predicate, object, provenance, confidence,
+            "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
                                  status, source_refs, created_at, last_seen_at)
-             VALUES (?1, ?2, ?3, 'USER_ASSERTED', 0.95, 'ACTIVE', ?4, ?5, ?5)",
-            params![subject, predicate, object, source_refs, now],
+             VALUES (?1, ?2, ?3, ?4, 'USER_ASSERTED', 0.95, 'ACTIVE', ?5, ?6, ?6)",
+            params![claim_id, subject, predicate, object, source_refs, now],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(claim_id)
     }
 
     /// Retrieve a claim by id.
@@ -198,6 +210,7 @@ impl Store {
 struct LogEntry<'a> {
     kind: &'a str,
     ts: i64,
+    claim_id: i64,
     subject: &'a str,
     predicate: &'a str,
     object: &'a str,
