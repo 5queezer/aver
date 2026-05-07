@@ -65,6 +65,58 @@ fn no_relevant_empty_retrieval_scores_perfect_abstention() {
 }
 
 #[test]
+fn aggregate_metrics_weights_means_by_query_count() {
+    let aggregate = aver_eval::aggregate_metrics(vec![
+        aver_eval::BenchMetrics {
+            fixture_name: "large".to_string(),
+            mean_recall_at_k: 1.0,
+            mean_precision_at_k: 1.0,
+            unsupported_claim_rate: 0.0,
+            query_results: vec![
+                aver_eval::QueryResult {
+                    query: "a".to_string(),
+                    recall_at_k: 1.0,
+                    precision_at_k: 1.0,
+                    retrieved_count: 1,
+                    relevant_found: 1,
+                },
+                aver_eval::QueryResult {
+                    query: "b".to_string(),
+                    recall_at_k: 1.0,
+                    precision_at_k: 1.0,
+                    retrieved_count: 1,
+                    relevant_found: 1,
+                },
+                aver_eval::QueryResult {
+                    query: "c".to_string(),
+                    recall_at_k: 1.0,
+                    precision_at_k: 1.0,
+                    retrieved_count: 1,
+                    relevant_found: 1,
+                },
+            ],
+        },
+        aver_eval::BenchMetrics {
+            fixture_name: "small".to_string(),
+            mean_recall_at_k: 0.0,
+            mean_precision_at_k: 0.0,
+            unsupported_claim_rate: 1.0,
+            query_results: vec![aver_eval::QueryResult {
+                query: "d".to_string(),
+                recall_at_k: 0.0,
+                precision_at_k: 0.0,
+                retrieved_count: 1,
+                relevant_found: 0,
+            }],
+        },
+    ]);
+
+    assert_eq!(aggregate.query_count, 4);
+    assert_eq!(aggregate.mean_recall_at_k, 0.75);
+    assert_eq!(aggregate.mean_precision_at_k, 0.75);
+}
+
+#[test]
 fn bench_metrics_serializes_to_json() {
     let f = aver_eval::load_fixture(BASIC_FIXTURE).unwrap();
     let metrics = aver_eval::run_fixture(&f).unwrap();

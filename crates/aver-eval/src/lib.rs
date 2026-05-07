@@ -50,6 +50,49 @@ pub struct BenchMetrics {
     pub query_results: Vec<QueryResult>,
 }
 
+/// Aggregate metrics across multiple fixture runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregateMetrics {
+    pub fixture_name: String,
+    pub fixture_count: usize,
+    pub query_count: usize,
+    pub mean_recall_at_k: f64,
+    pub mean_precision_at_k: f64,
+    pub unsupported_claim_rate: f64,
+    pub fixtures: Vec<BenchMetrics>,
+}
+
+/// Aggregate per-fixture metrics weighted by their query counts.
+pub fn aggregate_metrics(fixtures: Vec<BenchMetrics>) -> AggregateMetrics {
+    let fixture_count = fixtures.len();
+    let query_count: usize = fixtures
+        .iter()
+        .map(|metric| metric.query_results.len())
+        .sum();
+
+    let weighted_sum = |value: fn(&BenchMetrics) -> f64| -> f64 {
+        if query_count == 0 {
+            0.0
+        } else {
+            fixtures
+                .iter()
+                .map(|metric| value(metric) * metric.query_results.len() as f64)
+                .sum::<f64>()
+                / query_count as f64
+        }
+    };
+
+    AggregateMetrics {
+        fixture_name: "aggregate".to_string(),
+        fixture_count,
+        query_count,
+        mean_recall_at_k: weighted_sum(|metric| metric.mean_recall_at_k),
+        mean_precision_at_k: weighted_sum(|metric| metric.mean_precision_at_k),
+        unsupported_claim_rate: weighted_sum(|metric| metric.unsupported_claim_rate),
+        fixtures,
+    }
+}
+
 /// Parse a fixture from a JSON string.
 pub fn load_fixture(json_str: &str) -> Result<BenchFixture> {
     serde_json::from_str(json_str).map_err(Into::into)
