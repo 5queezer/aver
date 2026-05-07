@@ -1,0 +1,13 @@
+{
+  "name": "versioned_acronym_identifier",
+  "version": 1,
+  "description": "Versioned acronym queries should distinguish identifiers that share an acronym prefix but differ by numeric suffix",
+  "claims": [
+    {"subject": "protocol", "predicate": "name", "object": "MCP1"},
+    {"subject": "protocol", "predicate": "name", "object": "MCP2"},
+    {"subject": "protocol", "predicate": "transport", "object": "HTTP"}
+  ],
+  "queries": [
+    {"query": "MCP 2", "relevant_indices": [1], "top_k": 5}
+  ]
+}

@@ -1310,8 +1310,18 @@ fn tokenize_for_recall(text: &str) -> Vec<String> {
 }
 
 fn camel_case_parts(token: &str) -> Vec<String> {
-    if token.chars().all(|ch| ch.is_ascii_uppercase()) {
-        return vec![token.to_string()];
+    if token
+        .chars()
+        .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+    {
+        let mut parts = vec![token.to_string()];
+        if let Some(split) = token.find(|ch: char| ch.is_ascii_digit())
+            && split > 0
+        {
+            parts.push(token[..split].to_string());
+            parts.push(token[split..].to_string());
+        }
+        return parts;
     }
 
     let mut parts = Vec::new();

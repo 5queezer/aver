@@ -322,6 +322,26 @@ fn recall_text_matches_camel_case_identifier_from_acronym_query() {
 }
 
 #[test]
+fn recall_text_matches_versioned_acronym_identifier() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    store
+        .add_claim("protocol", "name", "MCP1", "test_session")
+        .unwrap();
+    let mcp2_id = store
+        .add_claim("protocol", "name", "MCP2", "test_session")
+        .unwrap();
+
+    let matches = store.recall_text("MCP 2").unwrap();
+
+    assert_eq!(
+        matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+        vec![mcp2_id]
+    );
+}
+
+#[test]
 fn claim_text_renders_subject_predicate_object_for_embedding() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
