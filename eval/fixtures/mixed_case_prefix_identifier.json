@@ -1,0 +1,13 @@
+{
+  "name": "mixed_case_prefix_identifier",
+  "version": 1,
+  "description": "Mixed-case identifiers with numeric suffixes should still match alphabetic prefix queries when the user omits the version",
+  "claims": [
+    {"subject": "server", "predicate": "supports", "object": "OAuth2"},
+    {"subject": "server", "predicate": "version", "object": "2"},
+    {"subject": "protocol", "predicate": "name", "object": "MCP"}
+  ],
+  "queries": [
+    {"query": "OAuth server", "relevant_indices": [0], "top_k": 5}
+  ]
+}
