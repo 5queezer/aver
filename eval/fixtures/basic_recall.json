@@ -1,0 +1,17 @@
+{
+  "name": "basic_recall",
+  "version": 1,
+  "description": "Deterministic text-recall baseline — no network, no LLM",
+  "claims": [
+    {"subject": "user",    "predicate": "name",      "object": "Alice"},
+    {"subject": "user",    "predicate": "employer",   "object": "AcmeCorp"},
+    {"subject": "project", "predicate": "language",   "object": "Rust"},
+    {"subject": "project", "predicate": "name",       "object": "Aver"},
+    {"subject": "meeting", "predicate": "attendee",   "object": "Bob"}
+  ],
+  "queries": [
+    {"query": "Alice",        "relevant_indices": [0],    "top_k": 5},
+    {"query": "Rust",         "relevant_indices": [2],    "top_k": 5},
+    {"query": "Aver project", "relevant_indices": [2, 3], "top_k": 5}
+  ]
+}

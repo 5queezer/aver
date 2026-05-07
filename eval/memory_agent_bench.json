@@ -1,5 +1,8 @@
 {
   "name": "MemoryAgentBench",
-  "primary_metric": "memory_quality_score",
-  "version": 1
+  "primary_metric": "mean_recall_at_k",
+  "version": 2,
+  "description": "Deterministic offline benchmark for Aver memory core",
+  "fixtures": ["eval/fixtures/basic_recall.json"],
+  "metrics": ["mean_recall_at_k", "mean_precision_at_k", "unsupported_claim_rate"]
 }

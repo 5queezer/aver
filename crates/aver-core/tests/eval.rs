@@ -6,5 +6,6 @@ fn eval_harness_declares_memory_agent_bench() {
     let json: serde_json::Value = serde_json::from_str(descriptor).unwrap();
 
     assert_eq!(json["name"], "MemoryAgentBench");
-    assert_eq!(json["primary_metric"], "memory_quality_score");
+    assert_eq!(json["primary_metric"], "mean_recall_at_k");
+    assert_eq!(json["version"], 2);
 }

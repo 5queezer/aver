@@ -1,0 +1,56 @@
+//! MemoryAgentBench runner tests — strict TDD order.
+
+const BASIC_FIXTURE: &str = include_str!("../../../eval/fixtures/basic_recall.json");
+
+#[test]
+fn fixture_deserializes_from_json() {
+    let f = aver_eval::load_fixture(BASIC_FIXTURE).unwrap();
+    assert_eq!(f.name, "basic_recall");
+    assert_eq!(f.claims.len(), 5);
+    assert_eq!(f.queries.len(), 3);
+}
+
+#[test]
+fn runner_seeds_claims_into_store() {
+    let f = aver_eval::load_fixture(BASIC_FIXTURE).unwrap();
+    let metrics = aver_eval::run_fixture(&f).unwrap();
+    // At least some queries returned results.
+    assert!(metrics.query_results.iter().any(|q| q.retrieved_count > 0));
+}
+
+#[test]
+fn recall_at_k_is_one_for_exact_query() {
+    // Query "Alice" with relevant_indices=[0] — "Alice" appears as the object
+    // of claim 0. recall_text("Alice") should find it.
+    let f = aver_eval::load_fixture(BASIC_FIXTURE).unwrap();
+    let metrics = aver_eval::run_fixture(&f).unwrap();
+    let alice_result = metrics
+        .query_results
+        .iter()
+        .find(|q| q.query == "Alice")
+        .unwrap();
+    assert_eq!(
+        alice_result.recall_at_k, 1.0,
+        "Expected perfect recall for exact object match 'Alice'"
+    );
+}
+
+#[test]
+fn bench_metrics_serializes_to_json() {
+    let f = aver_eval::load_fixture(BASIC_FIXTURE).unwrap();
+    let metrics = aver_eval::run_fixture(&f).unwrap();
+    let json = serde_json::to_string_pretty(&metrics).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(v["mean_recall_at_k"].is_number());
+    assert!(v["unsupported_claim_rate"].is_number());
+    assert!(v["query_results"].is_array());
+}
+
+#[test]
+fn unsupported_claim_rate_bounded() {
+    // unsupported_claim_rate must be between 0.0 and 1.0
+    let f = aver_eval::load_fixture(BASIC_FIXTURE).unwrap();
+    let metrics = aver_eval::run_fixture(&f).unwrap();
+    assert!(metrics.unsupported_claim_rate >= 0.0);
+    assert!(metrics.unsupported_claim_rate <= 1.0);
+}
