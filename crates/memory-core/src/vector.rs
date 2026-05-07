@@ -55,6 +55,27 @@ impl fmt::Display for VectorBackend {
     }
 }
 
+pub trait EmbeddingClient {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError>;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MockEmbeddingClient {
+    embedding: Vec<f32>,
+}
+
+impl MockEmbeddingClient {
+    pub fn new(embedding: Vec<f32>) -> Self {
+        Self { embedding }
+    }
+}
+
+impl EmbeddingClient for MockEmbeddingClient {
+    fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        Ok(self.embedding.clone())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VectorIndexConfig {
     pub backend: VectorBackend,
@@ -144,8 +165,14 @@ impl OllamaEmbeddingClient {
     }
 
     pub fn embed(&self, prompt: &str) -> Result<Vec<f32>, EmbeddingError> {
+        <Self as EmbeddingClient>::embed(self, prompt)
+    }
+}
+
+impl EmbeddingClient for OllamaEmbeddingClient {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
         let response = ureq::post(&self.embeddings_url())
-            .send_json(serde_json::to_value(self.request(prompt))?)
+            .send_json(serde_json::to_value(self.request(text))?)
             .map_err(|err| EmbeddingError::Http(err.to_string()))?
             .into_string()?;
         Ok(self.parse_response_body(&response)?)
