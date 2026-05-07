@@ -26,6 +26,8 @@ enum Command {
         #[arg(long)]
         source: String,
     },
+    /// Search active claims by keyword.
+    Recall { query: String },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -45,6 +47,12 @@ fn main() -> anyhow::Result<()> {
             let store = Store::open(&cli.memory_dir)?;
             let claim_id = store.add_claim(&subject, &predicate, &object, &source)?;
             println!("claim_id={claim_id}");
+        }
+        Command::Recall { query } => {
+            let store = Store::open(&cli.memory_dir)?;
+            for claim in store.recall_text(&query)? {
+                println!("{} {} {}", claim.subject, claim.predicate, claim.object);
+            }
         }
     }
 
