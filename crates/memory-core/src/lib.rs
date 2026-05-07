@@ -105,7 +105,12 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
 }
 
 pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
-    if content.lines().any(|line| line.contains("# memory:ignore")) {
+    if content
+        .lines()
+        .next()
+        .is_some_and(|line| line.trim() == "<!-- memory:ignore -->")
+        || content.lines().any(|line| line.contains("# memory:ignore"))
+    {
         return Err(PrivacyRejection::MemoryIgnore);
     }
     if content.contains("BEGIN PRIVATE KEY") {
