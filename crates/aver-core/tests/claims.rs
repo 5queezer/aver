@@ -482,6 +482,26 @@ fn recall_text_normalizes_common_irregular_plural_query_tokens() {
 }
 
 #[test]
+fn recall_text_normalizes_people_plural_query_tokens() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    store
+        .add_claim("user", "name", "Alice", "test_session")
+        .unwrap();
+    let person_id = store
+        .add_claim("person", "name", "Alice", "test_session")
+        .unwrap();
+
+    let matches = store.recall_text("people Alice").unwrap();
+
+    assert_eq!(
+        matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+        vec![person_id]
+    );
+}
+
+#[test]
 fn claim_text_renders_subject_predicate_object_for_embedding() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
