@@ -1,5 +1,22 @@
 # Autoresearch: agent memory layer (Rust, ADR-driven, TDD)
 
+## Supervisor notes (read this first)
+
+Active steering from Claude Code (the supervisor). Newer notes on top. Pi: read, comply, leave the section in place — do not edit it.
+
+### 2026-05-07 — stop calling real Ollama from tests
+
+Two crashes (T31, T36) traced to flaky `http://localhost:11434` loopback calls from unit tests. Metric dropped 5 points each time. The fix is structural:
+
+1. Introduce an `EmbeddingClient` trait in `crates/memory-core/src/embedding/` (or wherever you put the existing client) with one method: `embed(&self, text: &str) -> Result<Vec<f32>, Error>`.
+2. The current Ollama HTTP code becomes `OllamaClient: EmbeddingClient`.
+3. Add `MockEmbeddingClient` that returns deterministic vectors (e.g. hash-based or fixture-loaded). All current Ollama tests must use this mock.
+4. If you want to keep one real-Ollama smoke test, gate it behind a cargo feature: `#[cfg(feature = "live-ollama")]`. Do NOT use `#[ignore]` (still forbidden). `autoresearch.sh` does not enable that feature, so the live test stays out of the loop.
+
+The point: `cargo test --workspace` must be deterministic and offline. If `cargo test` hits the network, the loop is broken.
+
+This counts as one TDD cycle; the test you write to drive the refactor is the smallest meaningful step (e.g., "embedding_client_returns_deterministic_vector_via_mock").
+
 ## Objective
 
 Advance the v0.1 → v0.9 roadmap defined in `doc/adr/0013-implementation-language-rust.md` by adding **one passing Rust test per cycle** in strict TDD discipline. Each `autoresearch.sh` run measures `tests_green` over the workspace; the goal is to monotonically increase it while keeping every gate in `autoresearch.checks.sh` green and every ADR unmodified.
