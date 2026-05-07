@@ -424,6 +424,13 @@ fn collect_module_function_facts(
             predicate: "defines".to_string(),
             object: format!("Function:{module_path}::{function}"),
         });
+        let mut calls = Vec::new();
+        collect_calls(node, source, &mut calls)?;
+        facts.extend(calls.into_iter().map(|callee| ExtractedFact {
+            subject: format!("Function:{module_path}::{function}"),
+            predicate: "calls".to_string(),
+            object: format!("Function:{}", qualify_module_call(&callee, module_path)),
+        }));
     }
 
     let mut cursor = node.walk();
@@ -431,6 +438,14 @@ fn collect_module_function_facts(
         collect_module_function_facts(child, source, module_path, facts)?;
     }
     Ok(())
+}
+
+fn qualify_module_call(callee: &str, module_path: &str) -> String {
+    if callee.contains("::") || callee.contains('.') {
+        callee.to_string()
+    } else {
+        format!("{module_path}::{callee}")
+    }
 }
 
 fn collect_impl_method_facts(

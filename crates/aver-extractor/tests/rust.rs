@@ -214,6 +214,21 @@ fn extract_rust_facts_emits_module_defines_function_triple() {
 }
 
 #[test]
+fn extract_rust_facts_emits_module_qualified_function_call_triple() {
+    let facts = extract_rust_facts(
+        "src/lib.rs",
+        "mod embedding { fn embed() { normalize(); } fn normalize() {} }",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Function:embedding::embed".to_string(),
+        predicate: "calls".to_string(),
+        object: "Function:embedding::normalize".to_string(),
+    }));
+}
+
+#[test]
 fn extract_rust_facts_emits_type_implements_trait_triple() {
     let facts = extract_rust_facts(
         "src/lib.rs",
