@@ -29,7 +29,7 @@ The goal is a trustworthy substrate for coding agents that can:
 - **Contradiction records and confidence decay** — contradictions are explicit audit records; consolidation can decay contradicted active claims and report merged/superseded/decayed counts.
 - **Deterministic code extraction** — `aver-extractor` uses Tree-sitter Rust to extract functions, imports, calls, structs, enums, traits, impl methods, tests, and code facts.
 - **Candidate claim workflow** — episodic events can produce staged claims that are promoted or rejected explicitly.
-- **MCP/OAuth server** — `aver-server` exposes memory tools over Streamable HTTP MCP behind a local OAuth-style token flow, including the ADR-0008 five-tool surface with validated recall/write/extraction-trigger parameters, explicit unsupported-scope errors, persisted confidence overrides, and recall subgraphs with confidence floors.
+- **MCP/OAuth server** — `aver-server` exposes memory tools over Streamable HTTP MCP behind a local OAuth-style token flow, including the ADR-0008 five-tool surface with validated recall/write/event/extraction-trigger parameters, explicit unsupported-scope errors, persisted confidence overrides, and recall subgraphs with confidence floors.
 - **Evaluation harnesses** — fixture evaluation plus a BEAM100K runner using local Ollama for embeddings, answer generation, and judging.
 
 ## Quick Start

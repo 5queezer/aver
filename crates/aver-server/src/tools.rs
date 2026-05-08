@@ -383,6 +383,9 @@ impl AverTools {
     }
 
     pub fn record_event(&self, params: RecordEventParams) -> anyhow::Result<EventView> {
+        if params.session_id.trim().is_empty() {
+            anyhow::bail!("invalid session_id: must not be empty");
+        }
         let source = params.source.as_deref().unwrap_or("mcp");
         let agent_id = params.agent_id.as_deref().unwrap_or("mcp");
         let agent_kind = params

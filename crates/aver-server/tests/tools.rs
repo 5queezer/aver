@@ -453,3 +453,22 @@ fn should_extract_memories_rejects_zero_event_threshold() {
 
     assert!(err.to_string().contains("event_threshold"));
 }
+
+#[test]
+fn record_event_tool_rejects_empty_session_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .record_event(RecordEventParams {
+            session_id: "".to_string(),
+            kind: "message".to_string(),
+            payload: "hello".to_string(),
+            source: None,
+            agent_id: None,
+            agent_kind: None,
+        })
+        .expect_err("empty session ids should be rejected");
+
+    assert!(err.to_string().contains("session_id"));
+}
