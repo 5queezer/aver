@@ -238,3 +238,19 @@ fn add_triple_persists_valid_confidence_override() {
         .expect("written claim should be recalled");
     assert_eq!(claim.confidence, 0.4);
 }
+
+#[test]
+fn expand_tool_rejects_zero_hops() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .expand(ExpandParams {
+            entity: "PaymentGateway".to_string(),
+            hops: Some(0),
+            predicates: None,
+        })
+        .expect_err("zero hops should be rejected");
+
+    assert!(err.to_string().contains("hops"));
+}

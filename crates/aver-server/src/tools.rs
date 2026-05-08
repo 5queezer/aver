@@ -310,15 +310,14 @@ impl AverTools {
     }
 
     pub fn expand(&self, params: ExpandParams) -> anyhow::Result<GraphView> {
+        let hops = validate_hops(params.hops.unwrap_or(2))?;
         let predicate_refs = params
             .predicates
             .as_ref()
             .map(|items| items.iter().map(String::as_str).collect::<Vec<_>>());
-        let graph = self.store.expand(
-            &params.entity,
-            params.hops.unwrap_or(2).clamp(1, 8),
-            predicate_refs.as_deref(),
-        )?;
+        let graph = self
+            .store
+            .expand(&params.entity, hops, predicate_refs.as_deref())?;
         Ok(GraphView {
             nodes: graph.nodes,
             edges: graph.edges.into_iter().map(ClaimView::from).collect(),
@@ -436,5 +435,13 @@ impl AverTools {
         self.store
             .reject_candidate_claim(params.candidate_id, &params.reason)?;
         Ok(self.store.get_candidate_claim(params.candidate_id)?.into())
+    }
+}
+
+fn validate_hops(hops: usize) -> anyhow::Result<usize> {
+    if (1..=8).contains(&hops) {
+        Ok(hops)
+    } else {
+        anyhow::bail!("invalid hops: must be between 1 and 8")
     }
 }
