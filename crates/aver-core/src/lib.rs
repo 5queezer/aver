@@ -1088,6 +1088,7 @@ impl Store {
         claim_id: i64,
         embedding_model: &str,
     ) -> Result<i64, Error> {
+        self.ensure_claim_exists(claim_id)?;
         let claim = self.get_claim(claim_id)?;
         self.add_vector_chunk(claim_id, &claim.text(), embedding_model)
     }

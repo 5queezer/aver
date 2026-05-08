@@ -485,3 +485,15 @@ fn rank_vector_chunks_by_embedding_rejects_zero_top_k() {
 
     assert!(err.to_string().contains("top_k"));
 }
+
+#[test]
+fn add_vector_chunk_for_claim_requires_existing_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .add_vector_chunk_for_claim(42, "nomic-embed-text")
+        .expect_err("claim-text vector chunks should require an existing claim");
+
+    assert!(err.to_string().contains("claim"));
+}
