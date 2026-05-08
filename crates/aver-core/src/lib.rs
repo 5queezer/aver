@@ -1100,6 +1100,7 @@ impl Store {
         embedding_model: &str,
         client: &impl vector::EmbeddingClient,
     ) -> Result<i64, Error> {
+        self.ensure_claim_exists(claim_id)?;
         let claim = self.get_claim(claim_id)?;
         let text = claim.text();
         let embedding = client.embed(&text)?;

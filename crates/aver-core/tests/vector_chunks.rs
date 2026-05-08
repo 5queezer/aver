@@ -497,3 +497,16 @@ fn add_vector_chunk_for_claim_requires_existing_claim() {
 
     assert!(err.to_string().contains("claim"));
 }
+
+#[test]
+fn add_embedded_vector_chunk_for_claim_requires_existing_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let client = MockEmbeddingClient::new(vec![0.1, 0.2]);
+
+    let err = store
+        .add_embedded_vector_chunk_for_claim(42, "nomic-embed-text", &client)
+        .expect_err("embedded claim-text vector chunks should require an existing claim");
+
+    assert!(err.to_string().contains("claim"));
+}
