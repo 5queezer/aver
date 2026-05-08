@@ -160,3 +160,11 @@ fn privacy_filter_path_rejects_relative_env_file() {
         PrivacyRejection::EnvPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_relative_ssh_dir() {
+    assert_eq!(
+        privacy_filter_path(".ssh/id_rsa").unwrap_err(),
+        PrivacyRejection::SshPath
+    );
+}
