@@ -807,3 +807,15 @@ fn contradict_rejects_empty_reason() {
 
     assert!(err.to_string().contains("contradiction reason"));
 }
+
+#[test]
+fn list_contradictions_requires_existing_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .list_contradictions(42)
+        .expect_err("listing contradictions for a missing claim should fail");
+
+    assert!(err.to_string().contains("claim"));
+}

@@ -1379,6 +1379,13 @@ impl Store {
     }
 
     pub fn list_contradictions(&self, claim_id: i64) -> Result<Vec<ContradictionRecord>, Error> {
+        match self.get_claim(claim_id) {
+            Ok(_) => {}
+            Err(Error::Sqlite(rusqlite::Error::QueryReturnedNoRows)) => {
+                return Err(Error::MissingClaim { claim_id });
+            }
+            Err(err) => return Err(err),
+        }
         let mut stmt = self.conn.prepare(
             "SELECT id
                FROM contradictions
@@ -1912,4 +1919,6 @@ pub enum Error {
     InvalidCandidateStatus { candidate_id: i64, status: String },
     #[error("invalid candidate status filter: {status}")]
     InvalidCandidateStatusFilter { status: String },
+    #[error("missing claim: claim {claim_id} does not exist")]
+    MissingClaim { claim_id: i64 },
 }
