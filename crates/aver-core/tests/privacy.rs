@@ -418,3 +418,11 @@ fn privacy_filter_path_rejects_azure_access_tokens() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_aws_config_file() {
+    assert_eq!(
+        privacy_filter_path(".aws/config").unwrap_err(),
+        PrivacyRejection::AwsCredentialsPath
+    );
+}
