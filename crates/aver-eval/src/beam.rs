@@ -1,8 +1,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use aver_core::{vector::OllamaEmbeddingClient, Store};
+use aver_core::{
+    vector::{EmbeddingClient, EmbeddingError, OllamaEmbeddingClient},
+    Store,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -44,10 +48,31 @@ impl BeamQuestion {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BeamProvider {
+    Ollama,
+    OpenAi,
+}
+
+impl FromStr for BeamProvider {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "ollama" => Ok(Self::Ollama),
+            "openai" => Ok(Self::OpenAi),
+            other => anyhow::bail!("unknown BEAM provider: {other}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BeamRunConfig {
     pub dataset_path: PathBuf,
+    pub provider: BeamProvider,
     pub ollama_base_url: String,
+    pub openai_base_url: String,
+    pub openai_api_key: Option<String>,
     pub embedding_model: String,
     pub generation_model: String,
     pub top_k: usize,
@@ -172,8 +197,8 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
         .unwrap_or_else(|| std::env::temp_dir().join("aver-beam100k"));
     std::fs::create_dir_all(&root)?;
 
-    let embedder = OllamaEmbeddingClient::new(&config.ollama_base_url, &config.embedding_model);
-    let judge = OllamaGenerateClient::new(&config.ollama_base_url, &config.generation_model);
+    let embedder = BeamEmbeddingClient::from_config(&config)?;
+    let judge = BeamGenerateClient::from_config(&config)?;
 
     let mut conversations = 0;
     let mut questions = 0;
@@ -258,7 +283,7 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
 fn ingest_conversation(
     store: &Store,
     conv: &BeamConversation,
-    embedder: &OllamaEmbeddingClient,
+    embedder: &impl EmbeddingClient,
     embedding_model: &str,
 ) -> Result<()> {
     for (i, message) in conv.user_messages.iter().enumerate() {
@@ -285,6 +310,74 @@ fn ingest_conversation(
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+enum BeamEmbeddingClient {
+    Ollama(OllamaEmbeddingClient),
+    OpenAi(OpenAiEmbeddingClient),
+}
+
+impl BeamEmbeddingClient {
+    fn from_config(config: &BeamRunConfig) -> Result<Self> {
+        match config.provider {
+            BeamProvider::Ollama => Ok(Self::Ollama(OllamaEmbeddingClient::new(
+                &config.ollama_base_url,
+                &config.embedding_model,
+            ))),
+            BeamProvider::OpenAi => Ok(Self::OpenAi(OpenAiEmbeddingClient::new(
+                &config.openai_base_url,
+                config
+                    .openai_api_key
+                    .clone()
+                    .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+                    .context("OPENAI_API_KEY is required for --provider openai")?,
+                &config.embedding_model,
+            ))),
+        }
+    }
+}
+
+impl EmbeddingClient for BeamEmbeddingClient {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        match self {
+            Self::Ollama(client) => client.embed(text),
+            Self::OpenAi(client) => client.embed(text),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum BeamGenerateClient {
+    Ollama(OllamaGenerateClient),
+    OpenAi(OpenAiChatClient),
+}
+
+impl BeamGenerateClient {
+    fn from_config(config: &BeamRunConfig) -> Result<Self> {
+        match config.provider {
+            BeamProvider::Ollama => Ok(Self::Ollama(OllamaGenerateClient::new(
+                &config.ollama_base_url,
+                &config.generation_model,
+            ))),
+            BeamProvider::OpenAi => Ok(Self::OpenAi(OpenAiChatClient::new(
+                &config.openai_base_url,
+                config
+                    .openai_api_key
+                    .clone()
+                    .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+                    .context("OPENAI_API_KEY is required for --provider openai")?,
+                &config.generation_model,
+            ))),
+        }
+    }
+
+    fn generate(&self, prompt: &str, json_mode: bool) -> Result<String> {
+        match self {
+            Self::Ollama(client) => client.generate(prompt, json_mode),
+            Self::OpenAi(client) => client.generate(prompt, json_mode),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -334,6 +427,168 @@ impl OllamaGenerateClient {
             .map_err(|err| anyhow::anyhow!("ollama generate: {err}"))?
             .into_json::<OllamaGenerateResponse>()?;
         Ok(response.response)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenAiEmbeddingRequest<'a> {
+    model: &'a str,
+    input: &'a str,
+}
+
+impl<'a> OpenAiEmbeddingRequest<'a> {
+    pub fn new(model: &'a str, input: &'a str) -> Self {
+        Self { model, input }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiEmbeddingResponse {
+    data: Vec<OpenAiEmbeddingData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiEmbeddingData {
+    embedding: Vec<f32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenAiEmbeddingClient {
+    base_url: String,
+    api_key: String,
+    model: String,
+}
+
+impl OpenAiEmbeddingClient {
+    pub fn new(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        Self {
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+            api_key: api_key.into(),
+            model: model.into(),
+        }
+    }
+
+    fn embeddings_url(&self) -> String {
+        format!("{}/embeddings", self.base_url)
+    }
+}
+
+impl EmbeddingClient for OpenAiEmbeddingClient {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        let response = ureq::post(&self.embeddings_url())
+            .set("Authorization", &format!("Bearer {}", self.api_key))
+            .send_json(serde_json::to_value(OpenAiEmbeddingRequest::new(
+                &self.model,
+                text,
+            ))?)
+            .map_err(|err| EmbeddingError::Http(format!("openai embeddings: {err}")))?
+            .into_string()?;
+        let parsed: OpenAiEmbeddingResponse = serde_json::from_str(&response)?;
+        parsed
+            .data
+            .into_iter()
+            .next()
+            .map(|item| item.embedding)
+            .ok_or_else(|| EmbeddingError::Http("openai embeddings: empty data".to_string()))
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenAiChatRequest<'a> {
+    model: &'a str,
+    messages: Vec<OpenAiChatMessage<'a>>,
+    temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<OpenAiResponseFormat>,
+}
+
+impl<'a> OpenAiChatRequest<'a> {
+    pub fn new(model: &'a str, prompt: &'a str, json_mode: bool) -> Self {
+        Self {
+            model,
+            messages: vec![OpenAiChatMessage {
+                role: "user",
+                content: prompt,
+            }],
+            temperature: 0.0,
+            response_format: json_mode.then_some(OpenAiResponseFormat {
+                kind: "json_object",
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct OpenAiChatMessage<'a> {
+    role: &'a str,
+    content: &'a str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct OpenAiResponseFormat {
+    #[serde(rename = "type")]
+    kind: &'static str,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiChatResponse {
+    choices: Vec<OpenAiChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiChoice {
+    message: OpenAiResponseMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiResponseMessage {
+    content: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenAiChatClient {
+    base_url: String,
+    api_key: String,
+    model: String,
+}
+
+impl OpenAiChatClient {
+    pub fn new(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        Self {
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+            api_key: api_key.into(),
+            model: model.into(),
+        }
+    }
+
+    fn chat_url(&self) -> String {
+        format!("{}/chat/completions", self.base_url)
+    }
+
+    pub fn generate(&self, prompt: &str, json_mode: bool) -> Result<String> {
+        let response = ureq::post(&self.chat_url())
+            .set("Authorization", &format!("Bearer {}", self.api_key))
+            .send_json(serde_json::to_value(OpenAiChatRequest::new(
+                &self.model,
+                prompt,
+                json_mode,
+            ))?)
+            .map_err(|err| anyhow::anyhow!("openai chat completions: {err}"))?
+            .into_json::<OpenAiChatResponse>()?;
+        response
+            .choices
+            .into_iter()
+            .next()
+            .map(|choice| choice.message.content)
+            .context("openai chat completions: empty choices")
     }
 }
 

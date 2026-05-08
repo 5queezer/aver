@@ -60,6 +60,37 @@ fn beam_answer_prompt_instructs_direct_grounded_answers() {
 }
 
 #[test]
+fn openai_embedding_request_serializes_model_and_input() {
+    let request =
+        aver_eval::beam::OpenAiEmbeddingRequest::new("text-embedding-3-small", "hello memory");
+
+    let json = serde_json::to_value(request).unwrap();
+
+    assert_eq!(json["model"], "text-embedding-3-small");
+    assert_eq!(json["input"], "hello memory");
+}
+
+#[test]
+fn openai_chat_request_uses_json_object_format_for_judge_mode() {
+    let request = aver_eval::beam::OpenAiChatRequest::new("gpt-4o-mini", "judge", true);
+
+    let json = serde_json::to_value(request).unwrap();
+
+    assert_eq!(json["model"], "gpt-4o-mini");
+    assert_eq!(json["messages"][0]["role"], "user");
+    assert_eq!(json["messages"][0]["content"], "judge");
+    assert_eq!(json["response_format"]["type"], "json_object");
+}
+
+#[test]
+fn beam_provider_parses_openai() {
+    assert_eq!(
+        "openai".parse::<aver_eval::beam::BeamProvider>().unwrap(),
+        aver_eval::beam::BeamProvider::OpenAi
+    );
+}
+
+#[test]
 fn beam_answer_prompt_contains_question_and_context_without_reference_answer_leakage() {
     let prompt = aver_eval::beam::answer_prompt(
         "What language?",

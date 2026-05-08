@@ -6,11 +6,18 @@ set -uo pipefail
 cd "$(dirname "$0")"
 
 if [ "${AVER_AUTORESEARCH_TARGET:-}" = "beam" ]; then
+  if [ "${BEAM_PROVIDER:-openai}" = "openai" ] && [ -z "${OPENAI_API_KEY:-}" ] && [ -n "${BEAM_OPENAI_ENV_FILE:-}" ]; then
+    set -a
+    . "$BEAM_OPENAI_ENV_FILE"
+    set +a
+  fi
+
   BEAM_JSON=$(mktemp /tmp/aver-beam100k-autoresearch.XXXXXX.json)
   BEAM_ARGS=(
     --dataset "${BEAM_DATASET_PATH:-../karta/data/beam-100k.json}"
-    --embedding-model "${BEAM_EMBEDDING_MODEL:-nomic-embed-text}"
-    --generation-model "${BEAM_GENERATION_MODEL:-gemma4}"
+    --provider "${BEAM_PROVIDER:-openai}"
+    --embedding-model "${BEAM_EMBEDDING_MODEL:-text-embedding-3-small}"
+    --generation-model "${BEAM_GENERATION_MODEL:-gpt-4o-mini}"
     --top-k "${BEAM_TOP_K:-12}"
   )
   if [ -n "${BEAM_LIMIT_CONVERSATIONS:-}" ]; then
