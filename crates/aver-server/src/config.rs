@@ -6,6 +6,7 @@ pub struct ServerConfig {
     pub memory_dir: String,
     pub auth_db_path: String,
     pub cors_origins: Vec<String>,
+    pub local_authorization_token: Option<String>,
 }
 
 impl ServerConfig {
@@ -26,6 +27,9 @@ impl ServerConfig {
             .filter(|origin| !origin.is_empty())
             .map(ToString::to_string)
             .collect();
+        let local_authorization_token = std::env::var("AVER_LOCAL_AUTHORIZATION_TOKEN")
+            .ok()
+            .filter(|token| !token.trim().is_empty());
 
         Ok(Self {
             host,
@@ -34,6 +38,7 @@ impl ServerConfig {
             memory_dir,
             auth_db_path,
             cors_origins,
+            local_authorization_token,
         })
     }
 }

@@ -1214,6 +1214,14 @@ impl Store {
         Ok(())
     }
 
+    fn privacy_filter_recording(&self, content: &str) -> Result<(), Error> {
+        if let Err(rejection) = privacy_filter(content) {
+            self.record_privacy_rejection(rejection)?;
+            return Err(Error::Privacy(rejection));
+        }
+        Ok(())
+    }
+
     pub fn privacy_rejection_count(&self, rejection: PrivacyRejection) -> Result<i64, Error> {
         Ok(self
             .conn
@@ -1258,7 +1266,7 @@ impl Store {
         validate_event_field("kind", kind)?;
         validate_event_field("source", source)?;
         validate_agent_id(agent_id)?;
-        privacy_filter(&format!(
+        self.privacy_filter_recording(&format!(
             "{agent_id} {} {session_id} {kind} {payload} {source}",
             agent_kind.as_str()
         ))?;
@@ -1389,7 +1397,7 @@ impl Store {
         if source_event_ids.is_empty() {
             return Err(Error::MissingEventProvenance { event_id: 0 });
         }
-        privacy_filter(&format!("{session_id} {content} {derivation}"))?;
+        self.privacy_filter_recording(&format!("{session_id} {content} {derivation}"))?;
 
         let mut events = Vec::new();
         for event_id in source_event_ids {
@@ -1571,7 +1579,6 @@ impl Store {
     pub fn graph_drift_snapshot(
         &self,
         consolidation: ConsolidationReport,
-        privacy_rejection_counts: BTreeMap<PrivacyRejection, u64>,
     ) -> Result<GraphDriftSnapshot, Error> {
         let mut claim_count_by_provenance = BTreeMap::new();
         let mut mean_confidence_by_provenance = BTreeMap::new();
@@ -1617,6 +1624,18 @@ impl Store {
             entity_count_by_type_id.insert(type_id, count);
         }
 
+        let mut privacy_rejection_counts = BTreeMap::new();
+        let mut privacy_stmt = self
+            .conn
+            .prepare("SELECT reason, count FROM privacy_rejections ORDER BY reason")?;
+        let privacy_rows = privacy_stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+        })?;
+        for row in privacy_rows {
+            let (reason, count) = row?;
+            privacy_rejection_counts.insert(reason, count);
+        }
+
         Ok(GraphDriftSnapshot {
             claim_count_by_provenance,
             mean_confidence_by_provenance,
@@ -1629,10 +1648,7 @@ impl Store {
             entity_count_by_type_id,
             consolidation_merged: consolidation.merged,
             consolidation_superseded: consolidation.superseded,
-            privacy_rejection_counts: privacy_rejection_counts
-                .into_iter()
-                .map(|(rejection, count)| (format!("{rejection:?}"), count))
-                .collect(),
+            privacy_rejection_counts,
         })
     }
 
@@ -1730,7 +1746,7 @@ impl Store {
         validate_claim_field("subject", subject)?;
         validate_claim_field("predicate", predicate)?;
         validate_claim_field("object", object)?;
-        privacy_filter(&format!("{subject} {predicate} {object}"))?;
+        self.privacy_filter_recording(&format!("{subject} {predicate} {object}"))?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         self.conn.execute(
             "INSERT INTO candidate_claims (event_id, subject, predicate, object, created_at)
@@ -1831,7 +1847,7 @@ impl Store {
             });
         }
         validate_rejection_reason(reason)?;
-        privacy_filter(reason)?;
+        self.privacy_filter_recording(reason)?;
         let rows_changed = self.conn.execute(
             "UPDATE candidate_claims
                 SET status = 'REJECTED', rejection_reason = ?1
@@ -2407,7 +2423,7 @@ impl Store {
             Err(err) => return Err(err),
         }
         validate_contradiction_reason(reason)?;
-        privacy_filter(reason)?;
+        self.privacy_filter_recording(reason)?;
         let new_claim_id = if let Some(claim) = new_claim {
             Some(self.add_claim(claim.subject, claim.predicate, claim.object, claim.source)?)
         } else {

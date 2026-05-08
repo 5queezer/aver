@@ -17,6 +17,7 @@ async fn oauth_metadata_route_returns_discovery_document() {
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: dir.path().join("auth.db").to_string_lossy().to_string(),
         cors_origins: Vec::new(),
+        local_authorization_token: None,
     };
     let app = build_router(config).unwrap();
 
@@ -56,6 +57,7 @@ async fn oauth_token_route_exchanges_authorization_code_with_pkce() {
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: auth_db_path.to_string_lossy().to_string(),
         cors_origins: Vec::new(),
+        local_authorization_token: None,
     };
     let app = build_router(config).unwrap();
     let body = format!(
@@ -99,6 +101,7 @@ async fn protected_health_requires_bearer_token() {
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: auth_db_path.to_string_lossy().to_string(),
         cors_origins: Vec::new(),
+        local_authorization_token: None,
     };
     let app = build_router(config).unwrap();
 
@@ -137,6 +140,7 @@ async fn oauth_register_route_creates_public_client() {
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: dir.path().join("auth.db").to_string_lossy().to_string(),
         cors_origins: Vec::new(),
+        local_authorization_token: None,
     };
     let app = build_router(config).unwrap();
 
@@ -169,6 +173,43 @@ async fn oauth_register_route_creates_public_client() {
 }
 
 #[tokio::test]
+async fn oauth_authorize_route_rejects_self_service_without_local_approval() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let db = AuthDb::open(&auth_db_path).unwrap();
+    let client = db
+        .register_client(
+            "Claude Desktop",
+            &["http://127.0.0.1:3917/callback".to_string()],
+        )
+        .unwrap();
+    drop(db);
+    let challenge = pkce_s256_challenge("verifier");
+
+    let config = ServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 3317,
+        base_url: "https://aver.example.com".to_string(),
+        memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
+        auth_db_path: auth_db_path.to_string_lossy().to_string(),
+        cors_origins: Vec::new(),
+        local_authorization_token: Some("approved".to_string()),
+    };
+    let app = build_router(config).unwrap();
+    let uri = format!(
+        "/oauth/authorize?response_type=code&client_id={}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={}&code_challenge_method=S256",
+        client.client_id, challenge
+    );
+
+    let response = app
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn oauth_authorize_route_redirects_with_pkce_code() {
     let dir = tempfile::tempdir().unwrap();
     let auth_db_path = dir.path().join("auth.db");
@@ -190,10 +231,11 @@ async fn oauth_authorize_route_redirects_with_pkce_code() {
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: auth_db_path.to_string_lossy().to_string(),
         cors_origins: Vec::new(),
+        local_authorization_token: Some("approved".to_string()),
     };
     let app = build_router(config).unwrap();
     let uri = format!(
-        "/oauth/authorize?response_type=code&client_id={}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={}&code_challenge_method=S256&state=abc",
+        "/oauth/authorize?response_type=code&client_id={}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={}&code_challenge_method=S256&state=abc&approval_token=approved",
         client.client_id, challenge
     );
 
@@ -223,6 +265,7 @@ async fn mcp_route_requires_bearer_token() {
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: dir.path().join("auth.db").to_string_lossy().to_string(),
         cors_origins: Vec::new(),
+        local_authorization_token: None,
     };
     let app = build_router(config).unwrap();
 

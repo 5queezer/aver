@@ -151,7 +151,7 @@ struct AuthorizeRequest {
     #[serde(default)]
     state: Option<String>,
     #[serde(default)]
-    user_id: Option<String>,
+    approval_token: Option<String>,
 }
 
 async fn oauth_authorize(
@@ -160,6 +160,12 @@ async fn oauth_authorize(
 ) -> Result<Redirect, StatusCode> {
     if request.response_type != "code" || request.code_challenge_method != "S256" {
         return Err(StatusCode::BAD_REQUEST);
+    }
+    let Some(expected_approval_token) = state.config.local_authorization_token.as_deref() else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+    if request.approval_token.as_deref() != Some(expected_approval_token) {
+        return Err(StatusCode::UNAUTHORIZED);
     }
     let db =
         AuthDb::open(&state.config.auth_db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -170,11 +176,7 @@ async fn oauth_authorize(
         return Err(StatusCode::BAD_REQUEST);
     }
     let code = db
-        .store_authorization_code(
-            &request.client_id,
-            request.user_id.as_deref().unwrap_or("local"),
-            &request.code_challenge,
-        )
+        .store_authorization_code(&request.client_id, "local", &request.code_challenge)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut redirect_url =
         url::Url::parse(&request.redirect_uri).map_err(|_| StatusCode::BAD_REQUEST)?;
