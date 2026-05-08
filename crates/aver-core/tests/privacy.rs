@@ -370,3 +370,11 @@ fn privacy_filter_path_rejects_netrc_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_npmrc_file() {
+    assert_eq!(
+        privacy_filter_path(".npmrc").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
