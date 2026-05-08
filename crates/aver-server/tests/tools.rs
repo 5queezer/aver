@@ -472,3 +472,22 @@ fn record_event_tool_rejects_empty_session_id() {
 
     assert!(err.to_string().contains("session_id"));
 }
+
+#[test]
+fn record_event_tool_rejects_empty_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .record_event(RecordEventParams {
+            session_id: "s1".to_string(),
+            kind: " ".to_string(),
+            payload: "hello".to_string(),
+            source: None,
+            agent_id: None,
+            agent_kind: None,
+        })
+        .expect_err("empty event kinds should be rejected");
+
+    assert!(err.to_string().contains("kind"));
+}
