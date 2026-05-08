@@ -449,3 +449,15 @@ fn add_vector_chunk_with_embedding_requires_existing_claim() {
 
     assert!(err.to_string().contains("claim"));
 }
+
+#[test]
+fn list_vector_chunks_for_claim_requires_existing_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .list_vector_chunks_for_claim(42)
+        .expect_err("listing chunks for a missing claim should fail");
+
+    assert!(err.to_string().contains("claim"));
+}

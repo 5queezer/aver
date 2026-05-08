@@ -1127,6 +1127,7 @@ impl Store {
 
     /// List vector chunk metadata for a claim in stable insertion order.
     pub fn list_vector_chunks_for_claim(&self, claim_id: i64) -> Result<Vec<VectorChunk>, Error> {
+        self.ensure_claim_exists(claim_id)?;
         let mut stmt = self.conn.prepare(
             "SELECT id, claim_id, text, embedding_model, embedding_json
                FROM vector_chunks
