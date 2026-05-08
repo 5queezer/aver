@@ -306,3 +306,22 @@ fn promote_candidate_claim_rejects_rejected_candidate() {
 
     assert!(err.to_string().contains("candidate"));
 }
+
+#[test]
+fn reject_candidate_claim_rejects_promoted_candidate() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event_id = store
+        .record_event("s1", "message", "remember something", "test")
+        .unwrap();
+    let candidate_id = store
+        .propose_candidate_claim(event_id, "PaymentGateway", "depends_on", "StripeSDK")
+        .unwrap();
+    store.promote_candidate_claim(candidate_id).unwrap();
+
+    let err = store
+        .reject_candidate_claim(candidate_id, "not supported by source")
+        .expect_err("promoted candidates should not be rejected later");
+
+    assert!(err.to_string().contains("candidate"));
+}

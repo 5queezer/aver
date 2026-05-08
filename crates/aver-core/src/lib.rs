@@ -869,6 +869,19 @@ impl Store {
     }
 
     pub fn reject_candidate_claim(&self, candidate_id: i64, reason: &str) -> Result<(), Error> {
+        let candidate = match self.get_candidate_claim(candidate_id) {
+            Ok(candidate) => candidate,
+            Err(Error::Sqlite(rusqlite::Error::QueryReturnedNoRows)) => {
+                return Err(Error::MissingCandidate { candidate_id });
+            }
+            Err(err) => return Err(err),
+        };
+        if candidate.status == "PROMOTED" {
+            return Err(Error::InvalidCandidateStatus {
+                candidate_id,
+                status: candidate.status,
+            });
+        }
         validate_rejection_reason(reason)?;
         privacy_filter(reason)?;
         let rows_changed = self.conn.execute(
