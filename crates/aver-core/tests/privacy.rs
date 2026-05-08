@@ -450,3 +450,11 @@ fn privacy_filter_path_rejects_pypirc_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_rubygems_credentials() {
+    assert_eq!(
+        privacy_filter_path(".gem/credentials").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
