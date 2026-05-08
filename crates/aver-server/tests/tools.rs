@@ -424,3 +424,17 @@ fn recall_tool_confidence_floor_includes_subgraph_edges() {
     assert_eq!(recalled.subgraph.edges.len(), 2);
     assert_eq!(recalled.confidence_floor, 0.4);
 }
+
+#[test]
+fn consolidate_tool_rejects_unsupported_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .consolidate(ConsolidateParams {
+            scope: Some("session:abc".to_string()),
+        })
+        .expect_err("unsupported scoped consolidation should be explicit");
+
+    assert!(err.to_string().contains("scope"));
+}

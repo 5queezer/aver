@@ -368,7 +368,12 @@ impl AverTools {
             .into())
     }
 
-    pub fn consolidate(&self, _params: ConsolidateParams) -> anyhow::Result<ConsolidateView> {
+    pub fn consolidate(&self, params: ConsolidateParams) -> anyhow::Result<ConsolidateView> {
+        if let Some(scope) = params.scope.as_deref()
+            && scope != "all"
+        {
+            anyhow::bail!("unsupported consolidation scope: {scope}");
+        }
         let report = self.store.consolidate_report()?;
         Ok(ConsolidateView {
             merged: report.merged,
