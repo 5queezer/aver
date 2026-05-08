@@ -29,7 +29,8 @@ The goal is a trustworthy substrate for coding agents that can:
 - **Contradiction records and confidence decay** — contradictions are explicit audit records; consolidation can decay contradicted active claims and report merged/superseded/decayed counts.
 - **Deterministic code extraction** — `aver-extractor` uses Tree-sitter Rust to extract functions, imports, calls, structs, enums, traits, impl methods, tests, and code facts.
 - **Candidate claim workflow** — episodic events can produce staged claims that are promoted or rejected explicitly.
-- **MCP/OAuth server** — `aver-server` exposes memory tools over Streamable HTTP MCP behind a local OAuth-style token flow, including the ADR-0008 five-tool surface with validated recall/write/event/extraction-trigger parameters, explicit unsupported-scope errors, persisted confidence overrides, and recall subgraphs with confidence floors.
+- **Observation projections for compaction continuity** — episodic events can produce privacy-checked, source-backed observations, recallable by id and mechanically rendered into session compaction summaries without becoming durable claims.
+- **MCP/OAuth server** — `aver-server` exposes memory tools over Streamable HTTP MCP behind a local OAuth-style token flow, including the ADR-0008 five-tool surface with validated recall/write/event/extraction-trigger parameters, observation projection tools, explicit unsupported-scope errors, persisted confidence overrides, and recall subgraphs with confidence floors.
 - **Evaluation harnesses** — fixture evaluation plus a BEAM100K runner using local Ollama for embeddings, answer generation, and judging.
 
 ## Quick Start
@@ -86,8 +87,11 @@ User / Agent
 
 The design maps to the ADRs:
 
-- **Episodic log** — chronological append-only record in `log.jsonl`.
+- **Episodic log** — chronological append-only record in `log.jsonl` and `events.jsonl`.
+- **Observation projection** — privacy-checked session-continuity observations over episodic events, with source-event provenance and mechanical compaction summaries.
 - **Semantic graph** — durable claims/triples in SQLite.
+- **Ontology reasoner** — ADR-0010 entity and predicate hierarchies are seeded on open, materialized into closure tables, and used by graph expansion so abstract filters such as `depends_on` also match descendant predicates like `calls` and `imports`.
+- **Typed entities** — claim subjects/objects are projected into `entities` with prefix-based types such as `Function:*` and fallback `Thing` for unknown entities.
 - **Vector store** — `vector_chunks` with JSON-serialized embeddings today; sqlite-vss-backed nearest-neighbor indexing is planned.
 - **Extraction** — Rust Tree-sitter extractor turns source code into structured facts.
 - **Graph tools** — recall, expand, add-triple, contradict, and consolidate map the ADR-0008 surface onto the local claim store.
@@ -164,6 +168,9 @@ Operational triggered-memory tools are also exposed:
 - `list_candidate_claims`
 - `promote_candidate_claim`
 - `reject_candidate_claim`
+- `record_observation`
+- `recall_observation`
+- `assemble_compaction_summary`
 
 ## Evaluation
 
@@ -239,9 +246,9 @@ Without `just`, use the equivalent Cargo commands shown in the [`justfile`](just
 Implemented today:
 
 - local-first `Store` backed by SQLite and JSONL,
-- migrations for claims, vector chunks, ontology tables, episodic events, and candidate claims,
-- append-first claim writes,
-- privacy filtering before claim writes,
+- migrations for claims, vector chunks, ontology tables, episodic events, candidate claims, and observation projections,
+- append-first claim and event writes,
+- privacy filtering before claim, event, and observation writes,
 - claim CRUD and keyword recall,
 - vector chunk storage and embedding abstractions,
 - Ollama embedding client and deterministic mock embedding client,
@@ -252,7 +259,7 @@ Implemented today:
 - CLI `status`, `remember`, and `recall`,
 - Tree-sitter Rust extraction,
 - structured prose fact parsing,
-- MCP/OAuth server with ADR-0008 recall/expand/add-triple/contradict/consolidate tools and staged candidate-claim workflow,
+- MCP/OAuth server with ADR-0008 recall/expand/add-triple/contradict/consolidate tools, staged candidate-claim workflow, and observation recall/compaction-summary tools,
 - fixture and BEAM100K evaluation runners.
 
 Partial or planned:

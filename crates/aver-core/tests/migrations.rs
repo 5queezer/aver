@@ -67,3 +67,14 @@ fn fresh_database_has_contradictions_table() {
         "contradictions table should exist after open()"
     );
 }
+
+#[test]
+fn fresh_database_has_observations_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+
+    assert!(
+        store.has_table("observations"),
+        "observations table should exist after open()"
+    );
+}

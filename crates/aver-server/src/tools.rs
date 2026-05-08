@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use aver_core::{
-    AgentKind, CandidateClaim, Claim, ContradictionRecord, EpisodicEvent, NewClaim, Store,
+    AgentKind, CandidateClaim, Claim, ContradictionRecord, EpisodicEvent, NewClaim, Observation,
+    ObservationRecall, ObservationRelevance, Store,
 };
 use serde::{Deserialize, Serialize};
 
@@ -116,6 +117,45 @@ pub struct RejectCandidateClaimParams {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ObservationRelevanceParam {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl From<ObservationRelevanceParam> for ObservationRelevance {
+    fn from(value: ObservationRelevanceParam) -> Self {
+        match value {
+            ObservationRelevanceParam::Low => Self::Low,
+            ObservationRelevanceParam::Medium => Self::Medium,
+            ObservationRelevanceParam::High => Self::High,
+            ObservationRelevanceParam::Critical => Self::Critical,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct RecordObservationParams {
+    pub session_id: String,
+    pub content: String,
+    pub relevance: ObservationRelevanceParam,
+    pub source_event_ids: Vec<i64>,
+    pub derivation: String,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct RecallObservationParams {
+    pub observation_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct AssembleCompactionSummaryParams {
+    pub session_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ClaimView {
     pub id: i64,
@@ -153,6 +193,31 @@ pub struct CandidateClaimView {
     pub status: String,
     pub promoted_claim_id: Option<i64>,
     pub rejection_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ObservationView {
+    pub id: String,
+    pub session_id: String,
+    pub content: String,
+    pub relevance: String,
+    pub source_event_ids: Vec<i64>,
+    pub agent_id: String,
+    pub agent_kind: String,
+    pub derivation: String,
+    pub ts: i64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ObservationRecallView {
+    pub observation: ObservationView,
+    pub events: Vec<EventView>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct CompactionSummaryView {
+    pub session_id: String,
+    pub summary: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -240,6 +305,31 @@ impl From<CandidateClaim> for CandidateClaimView {
             status: candidate.status,
             promoted_claim_id: candidate.promoted_claim_id,
             rejection_reason: candidate.rejection_reason,
+        }
+    }
+}
+
+impl From<Observation> for ObservationView {
+    fn from(observation: Observation) -> Self {
+        Self {
+            id: observation.id,
+            session_id: observation.session_id,
+            content: observation.content,
+            relevance: observation.relevance.as_str().to_string(),
+            source_event_ids: observation.source_event_ids,
+            agent_id: observation.agent_id,
+            agent_kind: observation.agent_kind.as_str().to_string(),
+            derivation: observation.derivation,
+            ts: observation.ts,
+        }
+    }
+}
+
+impl From<ObservationRecall> for ObservationRecallView {
+    fn from(recall: ObservationRecall) -> Self {
+        Self {
+            observation: recall.observation.into(),
+            events: recall.events.into_iter().map(EventView::from).collect(),
         }
     }
 }
@@ -479,6 +569,40 @@ impl AverTools {
         self.store
             .reject_candidate_claim(params.candidate_id, &params.reason)?;
         Ok(self.store.get_candidate_claim(params.candidate_id)?.into())
+    }
+
+    pub fn record_observation(
+        &self,
+        params: RecordObservationParams,
+    ) -> anyhow::Result<ObservationView> {
+        let id = self.store.record_observation(
+            &params.session_id,
+            &params.content,
+            params.relevance.into(),
+            &params.source_event_ids,
+            &params.derivation,
+        )?;
+        Ok(self.store.get_observation(&id)?.into())
+    }
+
+    pub fn recall_observation(
+        &self,
+        params: RecallObservationParams,
+    ) -> anyhow::Result<ObservationRecallView> {
+        Ok(self
+            .store
+            .recall_observation(&params.observation_id)?
+            .into())
+    }
+
+    pub fn assemble_compaction_summary(
+        &self,
+        params: AssembleCompactionSummaryParams,
+    ) -> anyhow::Result<CompactionSummaryView> {
+        Ok(CompactionSummaryView {
+            summary: self.store.assemble_compaction_summary(&params.session_id)?,
+            session_id: params.session_id,
+        })
     }
 }
 

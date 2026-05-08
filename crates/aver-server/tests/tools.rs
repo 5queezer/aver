@@ -1,8 +1,9 @@
 use aver_server::tools::{
-    AddTripleParams, AverTools, ConsolidateParams, ContradictParams, ExpandParams,
-    ListCandidateClaimsParams, PromoteCandidateClaimParams, ProposeCandidateClaimParams,
-    RecallParams, RecordEventParams, RejectCandidateClaimParams, RememberClaimParams,
-    ShouldExtractMemoriesParams,
+    AddTripleParams, AssembleCompactionSummaryParams, AverTools, ConsolidateParams,
+    ContradictParams, ExpandParams, ListCandidateClaimsParams, ObservationRelevanceParam,
+    PromoteCandidateClaimParams, ProposeCandidateClaimParams, RecallObservationParams,
+    RecallParams, RecordEventParams, RecordObservationParams, RejectCandidateClaimParams,
+    RememberClaimParams, ShouldExtractMemoriesParams,
 };
 
 #[test]
@@ -170,6 +171,52 @@ fn episodic_candidate_tools_cover_memory_pipeline() {
         .unwrap();
     assert_eq!(promoted.subject, "Aver");
     assert_eq!(promoted.source_refs, [format!("event:{}", event.id)]);
+}
+
+#[test]
+fn observation_projection_tools_expose_recall_and_compaction_summary() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let event = tools
+        .record_event(RecordEventParams {
+            session_id: "session-1".to_string(),
+            kind: "tool_result".to_string(),
+            payload: "cargo test failed with E0425 before implementation".to_string(),
+            source: Some("cargo test".to_string()),
+            agent_id: Some("claude".to_string()),
+            agent_kind: Some("LLM".to_string()),
+        })
+        .unwrap();
+
+    let observation = tools
+        .record_observation(RecordObservationParams {
+            session_id: "session-1".to_string(),
+            content: "cargo test failed with E0425 before implementation".to_string(),
+            relevance: ObservationRelevanceParam::High,
+            source_event_ids: vec![event.id],
+            derivation: "mock-observer".to_string(),
+        })
+        .unwrap();
+
+    let recalled = tools
+        .recall_observation(RecallObservationParams {
+            observation_id: observation.id.clone(),
+        })
+        .unwrap();
+    assert_eq!(recalled.observation.id, observation.id);
+    assert_eq!(recalled.events, vec![event]);
+
+    let summary = tools
+        .assemble_compaction_summary(AssembleCompactionSummaryParams {
+            session_id: "session-1".to_string(),
+        })
+        .unwrap();
+    assert!(
+        summary
+            .summary
+            .contains("[high] cargo test failed with E0425")
+    );
 }
 
 #[test]

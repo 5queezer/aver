@@ -10,9 +10,10 @@ use rmcp::{
 use serde::Deserialize;
 
 use crate::tools::{
-    AddTripleParams, AverTools, ConsolidateParams, ContradictParams, ExpandParams,
-    ListCandidateClaimsParams, PromoteCandidateClaimParams, ProposeCandidateClaimParams,
-    RecallParams as CoreRecallParams, RecordEventParams, RejectCandidateClaimParams,
+    AddTripleParams, AssembleCompactionSummaryParams, AverTools, ConsolidateParams,
+    ContradictParams, ExpandParams, ListCandidateClaimsParams, PromoteCandidateClaimParams,
+    ProposeCandidateClaimParams, RecallObservationParams, RecallParams as CoreRecallParams,
+    RecordEventParams, RecordObservationParams, RejectCandidateClaimParams,
     RememberClaimParams as CoreRememberClaimParams, ShouldExtractMemoriesParams,
 };
 
@@ -288,6 +289,65 @@ impl AverMcpService {
         json_tool_result(result, "reject_candidate_claim")
     }
 
+    #[tool(description = "Record a source-backed episodic observation projection.")]
+    async fn record_observation(
+        &self,
+        Parameters(params): Parameters<RecordObservationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .record_observation(params);
+        json_tool_result(result, "record_observation")
+    }
+
+    #[tool(
+        description = "Recall an observation and its exact supporting events by observation id."
+    )]
+    async fn recall_observation(
+        &self,
+        Parameters(params): Parameters<RecallObservationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .recall_observation(params);
+        json_tool_result(result, "recall_observation")
+    }
+
+    #[tool(description = "Mechanically assemble a compaction summary from current observations.")]
+    async fn assemble_compaction_summary(
+        &self,
+        Parameters(params): Parameters<AssembleCompactionSummaryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .assemble_compaction_summary(params);
+        json_tool_result(result, "assemble_compaction_summary")
+    }
+
     #[tool(description = "Recall durable Aver claims by text query.")]
     async fn recall(
         &self,
@@ -350,7 +410,7 @@ impl ServerHandler for AverMcpService {
                     .with_icons(vec![Icon::new(icon_url).with_mime_type("image/svg+xml")]),
             )
             .with_instructions(
-                "Available tools: recall, expand, add_triple, contradict, consolidate, remember_claim, record_event, should_extract_memories, propose_candidate_claim, list_candidate_claims, promote_candidate_claim, reject_candidate_claim.".to_string(),
+                "Available tools: recall, expand, add_triple, contradict, consolidate, remember_claim, record_event, should_extract_memories, propose_candidate_claim, list_candidate_claims, promote_candidate_claim, reject_candidate_claim, record_observation, recall_observation, assemble_compaction_summary.".to_string(),
             )
     }
 }

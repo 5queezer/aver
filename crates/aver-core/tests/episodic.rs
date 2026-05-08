@@ -1,4 +1,4 @@
-use aver_core::{AgentKind, Store};
+use aver_core::{AgentKind, MockObserver, ObservationDraft, ObservationRelevance, Store};
 
 #[test]
 fn record_event_persists_episode_event() {
@@ -421,4 +421,197 @@ fn record_event_rejects_empty_source_before_log_write() {
 
     assert!(err.to_string().contains("source"));
     assert!(!dir.path().join("events.jsonl").exists());
+}
+
+#[test]
+fn observer_projects_source_backed_observations() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let first = store
+        .record_event_from_agent(
+            "claude",
+            AgentKind::Llm,
+            "session-1",
+            "user_message",
+            "Use observation projections for compaction continuity.",
+            "conversation",
+        )
+        .unwrap();
+    let second = store
+        .record_event_from_agent(
+            "claude",
+            AgentKind::Llm,
+            "session-1",
+            "tool_result",
+            "ADR-0016 was accepted.",
+            "tool",
+        )
+        .unwrap();
+
+    let observer = MockObserver::new(vec![ObservationDraft {
+        content: "User accepted ADR-0016 for episodic observation projections.".to_string(),
+        relevance: ObservationRelevance::High,
+        source_event_ids: vec![first, second],
+        derivation: "mock-observer".to_string(),
+    }]);
+
+    let ids = store
+        .propose_observations_from_observer("session-1", &observer)
+        .unwrap();
+    let observation = store.get_observation(&ids[0]).unwrap();
+
+    assert_eq!(observation.session_id, "session-1");
+    assert_eq!(observation.agent_id, "claude");
+    assert_eq!(observation.agent_kind, AgentKind::Llm);
+    assert_eq!(observation.relevance, ObservationRelevance::High);
+    assert_eq!(observation.source_event_ids, vec![first, second]);
+    assert_eq!(observation.derivation, "mock-observer");
+}
+
+#[test]
+fn record_observation_rejects_missing_event_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .record_observation(
+            "session-1",
+            "unsupported observation",
+            ObservationRelevance::Medium,
+            &[999],
+            "mock-observer",
+        )
+        .expect_err("observations must cite existing events");
+
+    assert!(err.to_string().contains("event"));
+}
+
+#[test]
+fn record_observation_applies_privacy_filter_before_persistence() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event = store
+        .record_event("session-1", "user_message", "safe payload", "conversation")
+        .unwrap();
+
+    let err = store
+        .record_observation(
+            "session-1",
+            "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz1234567890",
+            ObservationRelevance::Critical,
+            &[event],
+            "mock-observer",
+        )
+        .expect_err("secret-bearing observations must be rejected");
+
+    assert!(err.to_string().contains("privacy"));
+    assert!(
+        store
+            .list_observations_for_session("session-1")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn recall_observation_returns_exact_source_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event = store
+        .record_event(
+            "session-1",
+            "tool_result",
+            "Build failed: E0425 cannot find function assemble_compaction_summary.",
+            "cargo test",
+        )
+        .unwrap();
+    let observation_id = store
+        .record_observation(
+            "session-1",
+            "Build failed: E0425 cannot find function assemble_compaction_summary.",
+            ObservationRelevance::High,
+            &[event],
+            "mock-observer",
+        )
+        .unwrap();
+
+    let recalled = store.recall_observation(&observation_id).unwrap();
+
+    assert_eq!(recalled.observation.id, observation_id);
+    assert_eq!(recalled.events.len(), 1);
+    assert_eq!(recalled.events[0].id, event);
+    assert_eq!(
+        recalled.events[0].payload,
+        "Build failed: E0425 cannot find function assemble_compaction_summary."
+    );
+}
+
+#[test]
+fn assemble_compaction_summary_mechanically_renders_observations() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event = store
+        .record_event(
+            "session-1",
+            "user_message",
+            "Use observations.",
+            "conversation",
+        )
+        .unwrap();
+    store
+        .record_observation(
+            "session-1",
+            "User asked Aver to use observations for session continuity.",
+            ObservationRelevance::Medium,
+            &[event],
+            "mock-observer",
+        )
+        .unwrap();
+
+    let summary = store.assemble_compaction_summary("session-1").unwrap();
+
+    assert!(summary.contains("# Aver session continuity summary"));
+    assert!(summary.contains("[medium] User asked Aver to use observations"));
+    assert!(summary.contains(&format!("source_events=[{event}]")));
+}
+
+#[test]
+fn prune_observations_removes_lowest_relevance_projection_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event = store
+        .record_event(
+            "session-1",
+            "user_message",
+            "Use observations.",
+            "conversation",
+        )
+        .unwrap();
+    let low = store
+        .record_observation(
+            "session-1",
+            "Routine status update.",
+            ObservationRelevance::Low,
+            &[event],
+            "mock-observer",
+        )
+        .unwrap();
+    let high = store
+        .record_observation(
+            "session-1",
+            "User decided observations must preserve source provenance.",
+            ObservationRelevance::High,
+            &[event],
+            "mock-observer",
+        )
+        .unwrap();
+
+    let pruned = store.prune_observations("session-1", 1).unwrap();
+    let remaining = store.list_observations_for_session("session-1").unwrap();
+
+    assert_eq!(pruned, 1);
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, high);
+    assert!(store.get_observation(&low).is_err());
+    assert_eq!(store.get_event(event).unwrap().payload, "Use observations.");
 }

@@ -17,5 +17,8 @@ fn mcp_service_advertises_tools_capability() {
     assert!(instructions.contains("consolidate"));
     assert!(instructions.contains("remember_claim"));
     assert!(instructions.contains("record_event"));
+    assert!(instructions.contains("record_observation"));
+    assert!(instructions.contains("recall_observation"));
+    assert!(instructions.contains("assemble_compaction_summary"));
     assert!(instructions.contains("promote_candidate_claim"));
 }

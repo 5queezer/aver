@@ -683,6 +683,66 @@ fn expand_walks_claim_graph_by_entity_and_predicate() {
 }
 
 #[test]
+fn ontology_bootstrap_supports_transitive_reasoning() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    assert!(store.predicate_implies("calls", "depends_on").unwrap());
+    assert!(store.predicate_implies("calls", "relates_to").unwrap());
+    assert!(!store.predicate_implies("authored", "depends_on").unwrap());
+    assert!(store.entity_type_is_a("Function", "Symbol").unwrap());
+    assert!(store.entity_type_is_a("Human", "Agent").unwrap());
+}
+
+#[test]
+fn add_claim_records_entities_with_fallback_and_prefix_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    store
+        .add_claim("Function:Store::add_claim", "calls", "append_jsonl", "s1")
+        .unwrap();
+
+    assert_eq!(
+        store.entity_type_name("Function:Store::add_claim").unwrap(),
+        "Function"
+    );
+    assert!(
+        store
+            .entity_is_a_type("Function:Store::add_claim", "Symbol")
+            .unwrap()
+    );
+    assert_eq!(store.entity_type_name("append_jsonl").unwrap(), "Thing");
+}
+
+#[test]
+fn expand_predicate_filter_matches_descendant_predicates() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    store
+        .add_claim("PaymentGateway", "calls", "StripeSDK", "s1")
+        .unwrap();
+    store
+        .add_claim("PaymentGateway", "imports", "HttpClient", "s2")
+        .unwrap();
+    store
+        .add_claim("PaymentGateway", "authored", "BillingTeam", "s3")
+        .unwrap();
+
+    let graph = store
+        .expand("PaymentGateway", 1, Some(&["depends_on"]))
+        .unwrap();
+    let predicates: Vec<_> = graph
+        .edges
+        .iter()
+        .map(|edge| edge.predicate.as_str())
+        .collect();
+
+    assert_eq!(predicates, vec!["calls", "imports"]);
+}
+
+#[test]
 fn contradict_records_auditable_contradiction_without_deleting_claim() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

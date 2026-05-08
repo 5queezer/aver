@@ -4,13 +4,13 @@
 pub mod retrieval;
 pub mod vector;
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use rusqlite::{Connection, params, types::Type};
+use rusqlite::{Connection, OptionalExtension, params, types::Type};
 use serde::Serialize;
 
 /// Embedded migrations applied in order on every `Store::open`.
@@ -36,6 +36,54 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0005_contradictions",
         include_str!("../../../migrations/0005_contradictions.sql"),
     ),
+    (
+        "0006_observations",
+        include_str!("../../../migrations/0006_observations.sql"),
+    ),
+    (
+        "0007_entities",
+        include_str!("../../../migrations/0007_entities.sql"),
+    ),
+];
+
+const ENTITY_ONTOLOGY: &[(&str, Option<&str>)] = &[
+    ("Thing", None),
+    ("Asset", Some("Thing")),
+    ("File", Some("Asset")),
+    ("Module", Some("Asset")),
+    ("Config", Some("Asset")),
+    ("Symbol", Some("Thing")),
+    ("Function", Some("Symbol")),
+    ("Class", Some("Symbol")),
+    ("Constant", Some("Symbol")),
+    ("Process", Some("Thing")),
+    ("Service", Some("Process")),
+    ("Test", Some("Process")),
+    ("Job", Some("Process")),
+    ("Agent", Some("Thing")),
+    ("Human", Some("Agent")),
+    ("Bot", Some("Agent")),
+    ("Concept", Some("Thing")),
+    ("Decision", Some("Concept")),
+    ("Bug", Some("Concept")),
+    ("Pref", Some("Concept")),
+    ("Constraint", Some("Concept")),
+];
+
+const PREDICATE_ONTOLOGY: &[(&str, Option<&str>)] = &[
+    ("relates_to", None),
+    ("depends_on", Some("relates_to")),
+    ("calls", Some("depends_on")),
+    ("imports", Some("depends_on")),
+    ("reads_config_from", Some("depends_on")),
+    ("owns", Some("relates_to")),
+    ("owned_by", Some("owns")),
+    ("authored", Some("owns")),
+    ("maintained", Some("owns")),
+    ("concerns", Some("relates_to")),
+    ("fixes", Some("concerns")),
+    ("tests", Some("concerns")),
+    ("decides", Some("concerns")),
 ];
 
 /// Local storage for Aver (ADR-0006).
@@ -47,6 +95,7 @@ pub struct Store {
     conn: Connection,
     log_path: PathBuf,
     event_log_path: PathBuf,
+    observation_log_path: PathBuf,
 }
 
 struct ClaimWrite<'a> {
@@ -113,6 +162,98 @@ pub struct CandidateClaimDraft {
     pub subject: String,
     pub predicate: String,
     pub object: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservationRelevance {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl ObservationRelevance {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Critical => "critical",
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Low => 0,
+            Self::Medium => 1,
+            Self::High => 2,
+            Self::Critical => 3,
+        }
+    }
+}
+
+impl FromStr for ObservationRelevance {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self, Error> {
+        match s {
+            "low" => Ok(Self::Low),
+            "medium" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            "critical" => Ok(Self::Critical),
+            other => Err(Error::EnumParse {
+                kind: "ObservationRelevance",
+                value: other.to_string(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Observation {
+    pub id: String,
+    pub session_id: String,
+    pub content: String,
+    pub relevance: ObservationRelevance,
+    pub source_event_ids: Vec<i64>,
+    pub agent_id: String,
+    pub agent_kind: AgentKind,
+    pub derivation: String,
+    pub ts: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservationDraft {
+    pub content: String,
+    pub relevance: ObservationRelevance,
+    pub source_event_ids: Vec<i64>,
+    pub derivation: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObservationRecall {
+    pub observation: Observation,
+    pub events: Vec<EpisodicEvent>,
+}
+
+pub trait Observer {
+    fn observe(&self, events: &[EpisodicEvent]) -> Result<Vec<ObservationDraft>, Error>;
+}
+
+#[derive(Debug, Clone)]
+pub struct MockObserver {
+    drafts: Vec<ObservationDraft>,
+}
+
+impl MockObserver {
+    pub fn new(drafts: Vec<ObservationDraft>) -> Self {
+        Self { drafts }
+    }
+}
+
+impl Observer for MockObserver {
+    fn observe(&self, _events: &[EpisodicEvent]) -> Result<Vec<ObservationDraft>, Error> {
+        Ok(self.drafts.clone())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -588,6 +729,7 @@ impl Store {
         let db_path = memory_dir.join("db.sqlite");
         let log_path = memory_dir.join("log.jsonl");
         let event_log_path = memory_dir.join("events.jsonl");
+        let observation_log_path = memory_dir.join("observations.jsonl");
 
         let conn = Connection::open(&db_path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -596,11 +738,13 @@ impl Store {
         for (_name, sql) in MIGRATIONS {
             conn.execute_batch(sql)?;
         }
+        seed_ontology(&conn)?;
 
         Ok(Self {
             conn,
             log_path,
             event_log_path,
+            observation_log_path,
         })
     }
 
@@ -613,6 +757,171 @@ impl Store {
                 |_| Ok(()),
             )
             .is_ok()
+    }
+
+    pub fn predicate_implies(&self, predicate: &str, ancestor: &str) -> Result<bool, Error> {
+        validate_claim_field("predicate", predicate)?;
+        validate_claim_field("predicate", ancestor)?;
+        if predicate == ancestor {
+            return Ok(true);
+        }
+        let Some(predicate_id) = self.predicate_type_id(predicate)? else {
+            return Ok(false);
+        };
+        let Some(ancestor_id) = self.predicate_type_id(ancestor)? else {
+            return Ok(false);
+        };
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM predicate_closure WHERE child_id = ?1 AND ancestor_id = ?2",
+                params![predicate_id, ancestor_id],
+                |_| Ok(()),
+            )
+            .is_ok())
+    }
+
+    pub fn entity_type_is_a(&self, type_name: &str, ancestor: &str) -> Result<bool, Error> {
+        validate_claim_field("entity_type", type_name)?;
+        validate_claim_field("entity_type", ancestor)?;
+        if type_name == ancestor {
+            return Ok(true);
+        }
+        let Some(type_id) = self.entity_type_id(type_name)? else {
+            return Ok(false);
+        };
+        let Some(ancestor_id) = self.entity_type_id(ancestor)? else {
+            return Ok(false);
+        };
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM entity_type_closure WHERE child_id = ?1 AND ancestor_id = ?2",
+                params![type_id, ancestor_id],
+                |_| Ok(()),
+            )
+            .is_ok())
+    }
+
+    pub fn entity_type_name(&self, entity: &str) -> Result<String, Error> {
+        validate_claim_field("entity", entity)?;
+        self.conn
+            .query_row(
+                "SELECT entity_types.name
+                   FROM entities
+                   JOIN entity_types ON entity_types.id = entities.type_id
+                  WHERE entities.name = ?1",
+                [entity],
+                |row| row.get(0),
+            )
+            .map_err(|err| match err {
+                rusqlite::Error::QueryReturnedNoRows => Error::MissingEntity {
+                    entity: entity.to_string(),
+                },
+                other => Error::Sqlite(other),
+            })
+    }
+
+    pub fn entity_is_a_type(&self, entity: &str, ancestor: &str) -> Result<bool, Error> {
+        let type_name = self.entity_type_name(entity)?;
+        self.entity_type_is_a(&type_name, ancestor)
+    }
+
+    fn expand_predicate_filter(&self, predicates: &[&str]) -> Result<HashSet<String>, Error> {
+        let mut allowed = HashSet::new();
+        for predicate in predicates {
+            allowed.insert((*predicate).to_string());
+            let mut stmt = self.conn.prepare(
+                "SELECT child.name
+                   FROM predicate_types child
+                   JOIN predicate_closure closure ON closure.child_id = child.id
+                   JOIN predicate_types ancestor ON ancestor.id = closure.ancestor_id
+                  WHERE ancestor.name = ?1
+                  ORDER BY child.id",
+            )?;
+            let rows = stmt.query_map([*predicate], |row| row.get::<_, String>(0))?;
+            for row in rows {
+                allowed.insert(row?);
+            }
+        }
+        Ok(allowed)
+    }
+
+    fn ensure_entity(&self, entity: &str, now: i64) -> Result<(), Error> {
+        let inferred_type = self.infer_entity_type_name(entity)?;
+        let type_id = self.entity_type_id(&inferred_type)?.unwrap_or_else(|| {
+            self.entity_type_id("Thing")
+                .expect("Thing lookup should not fail")
+                .expect("ontology bootstrap should seed Thing")
+        });
+        let thing_id = self
+            .entity_type_id("Thing")?
+            .expect("ontology bootstrap should seed Thing");
+        let current: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT type_id FROM entities WHERE name = ?1",
+                [entity],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match current {
+            None => {
+                self.conn.execute(
+                    "INSERT INTO entities (name, type_id, created_at, last_seen_at)
+                     VALUES (?1, ?2, ?3, ?3)",
+                    params![entity, type_id, now],
+                )?;
+            }
+            Some(existing) if existing == thing_id && type_id != thing_id => {
+                self.conn.execute(
+                    "UPDATE entities SET type_id = ?2, last_seen_at = ?3 WHERE name = ?1",
+                    params![entity, type_id, now],
+                )?;
+            }
+            Some(_) => {
+                self.conn.execute(
+                    "UPDATE entities SET last_seen_at = ?2 WHERE name = ?1",
+                    params![entity, now],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn infer_entity_type_name(&self, entity: &str) -> Result<String, Error> {
+        if let Some((prefix, _rest)) = entity.split_once(':')
+            && self.entity_type_id(prefix)?.is_some()
+        {
+            return Ok(prefix.to_string());
+        }
+        match entity {
+            "User" => Ok("Human".to_string()),
+            "Claude" | "Pi" => Ok("Bot".to_string()),
+            _ => Ok("Thing".to_string()),
+        }
+    }
+
+    fn entity_type_id(&self, name: &str) -> Result<Option<i64>, Error> {
+        self.conn
+            .query_row(
+                "SELECT id FROM entity_types WHERE name = ?1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Error::Sqlite)
+    }
+
+    fn predicate_type_id(&self, name: &str) -> Result<Option<i64>, Error> {
+        self.conn
+            .query_row(
+                "SELECT id FROM predicate_types WHERE name = ?1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Error::Sqlite)
     }
 
     /// Append a USER_ASSERTED claim. Pre-allocates the claim id, writes
@@ -715,6 +1024,9 @@ impl Store {
         };
         append_jsonl(&self.log_path, &entry)?;
         append_jsonl(&self.agent_log_path(write.agent_id), &entry)?;
+
+        self.ensure_entity(write.subject, now)?;
+        self.ensure_entity(write.object, now)?;
 
         let source_refs = serde_json::to_string(&[write.source])?;
         self.conn.execute(
@@ -887,6 +1199,199 @@ impl Store {
         Ok(events)
     }
 
+    pub fn record_observation(
+        &self,
+        session_id: &str,
+        content: &str,
+        relevance: ObservationRelevance,
+        source_event_ids: &[i64],
+        derivation: &str,
+    ) -> Result<String, Error> {
+        validate_event_field("session_id", session_id)?;
+        validate_observation_field("content", content)?;
+        validate_observation_field("derivation", derivation)?;
+        if source_event_ids.is_empty() {
+            return Err(Error::MissingEventProvenance { event_id: 0 });
+        }
+        privacy_filter(&format!("{session_id} {content} {derivation}"))?;
+
+        let mut events = Vec::new();
+        for event_id in source_event_ids {
+            let event = self.get_event(*event_id)?;
+            if event.session_id != session_id {
+                return Err(Error::MissingEventProvenance {
+                    event_id: *event_id,
+                });
+            }
+            events.push(event);
+        }
+        let first_event = events
+            .first()
+            .expect("source_event_ids is checked non-empty before event lookup");
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let id = observation_id(session_id, content, source_event_ids);
+        let source_event_ids_json = serde_json::to_string(source_event_ids)?;
+        let entry = ObservationLogEntry {
+            kind: "record_observation",
+            ts: now,
+            observation_id: &id,
+            session_id,
+            content,
+            relevance: relevance.as_str(),
+            source_event_ids,
+            agent_id: &first_event.agent_id,
+            agent_kind: first_event.agent_kind.as_str(),
+            derivation,
+        };
+        append_jsonl(&self.observation_log_path, &entry)?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO observations
+             (id, session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation, ts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                id,
+                session_id,
+                content,
+                relevance.as_str(),
+                source_event_ids_json,
+                first_event.agent_id,
+                first_event.agent_kind.as_str(),
+                derivation,
+                now
+            ],
+        )?;
+        Ok(id)
+    }
+
+    pub fn propose_observations_from_observer(
+        &self,
+        session_id: &str,
+        observer: &impl Observer,
+    ) -> Result<Vec<String>, Error> {
+        let events = self.list_events_for_session(session_id)?;
+        let drafts = observer.observe(&events)?;
+        let mut ids = Vec::new();
+        for draft in drafts {
+            ids.push(self.record_observation(
+                session_id,
+                &draft.content,
+                draft.relevance,
+                &draft.source_event_ids,
+                &draft.derivation,
+            )?);
+        }
+        Ok(ids)
+    }
+
+    pub fn get_observation(&self, id: &str) -> Result<Observation, Error> {
+        validate_observation_field("id", id)?;
+        self.conn
+            .query_row(
+                "SELECT id, session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation, ts
+                   FROM observations WHERE id = ?1",
+                [id],
+                |row| {
+                    let relevance: String = row.get(3)?;
+                    let relevance = relevance.parse().map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(3, Type::Text, Box::new(err))
+                    })?;
+                    let source_event_ids_json: String = row.get(4)?;
+                    let source_event_ids = serde_json::from_str(&source_event_ids_json).map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(4, Type::Text, Box::new(err))
+                    })?;
+                    let agent_kind: String = row.get(6)?;
+                    let agent_kind = agent_kind.parse().map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(6, Type::Text, Box::new(err))
+                    })?;
+                    Ok(Observation {
+                        id: row.get(0)?,
+                        session_id: row.get(1)?,
+                        content: row.get(2)?,
+                        relevance,
+                        source_event_ids,
+                        agent_id: row.get(5)?,
+                        agent_kind,
+                        derivation: row.get(7)?,
+                        ts: row.get(8)?,
+                    })
+                },
+            )
+            .map_err(|err| match err {
+                rusqlite::Error::QueryReturnedNoRows => Error::MissingObservation {
+                    observation_id: id.to_string(),
+                },
+                other => Error::Sqlite(other),
+            })
+    }
+
+    pub fn list_observations_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<Observation>, Error> {
+        validate_event_field("session_id", session_id)?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM observations WHERE session_id = ?1 ORDER BY ts, id")?;
+        let rows = stmt.query_map([session_id], |row| row.get::<_, String>(0))?;
+        let mut observations = Vec::new();
+        for row in rows {
+            observations.push(self.get_observation(&row?)?);
+        }
+        Ok(observations)
+    }
+
+    pub fn recall_observation(&self, id: &str) -> Result<ObservationRecall, Error> {
+        let observation = self.get_observation(id)?;
+        let mut events = Vec::new();
+        for event_id in &observation.source_event_ids {
+            events.push(self.get_event(*event_id)?);
+        }
+        Ok(ObservationRecall {
+            observation,
+            events,
+        })
+    }
+
+    pub fn assemble_compaction_summary(&self, session_id: &str) -> Result<String, Error> {
+        let observations = self.list_observations_for_session(session_id)?;
+        let mut summary = String::from("# Aver session continuity summary\n\n");
+        if observations.is_empty() {
+            summary.push_str("No observations recorded.\n");
+            return Ok(summary);
+        }
+        for observation in observations {
+            summary.push_str(&format!(
+                "- [{}] {} (id={}, source_events={:?})\n",
+                observation.relevance.as_str(),
+                observation.content,
+                observation.id,
+                observation.source_event_ids
+            ));
+        }
+        Ok(summary)
+    }
+
+    pub fn prune_observations(&self, session_id: &str, keep: usize) -> Result<usize, Error> {
+        validate_event_field("session_id", session_id)?;
+        let mut observations = self.list_observations_for_session(session_id)?;
+        if observations.len() <= keep {
+            return Ok(0);
+        }
+        observations.sort_by_key(|observation| {
+            (
+                observation.relevance.rank(),
+                observation.ts,
+                observation.id.clone(),
+            )
+        });
+        let drop_count = observations.len() - keep;
+        for observation in observations.iter().take(drop_count) {
+            self.conn
+                .execute("DELETE FROM observations WHERE id = ?1", [&observation.id])?;
+        }
+        Ok(drop_count)
+    }
+
     pub fn should_extract_memories(
         &self,
         session_id: &str,
@@ -986,6 +1491,8 @@ impl Store {
         };
         append_jsonl(&self.log_path, &entry)?;
         append_jsonl(&self.agent_log_path(&event.agent_id), &entry)?;
+        self.ensure_entity(&candidate.subject, now)?;
+        self.ensure_entity(&candidate.object, now)?;
 
         let source_refs = serde_json::to_string(&[source])?;
         self.conn.execute(
@@ -1448,7 +1955,7 @@ impl Store {
             if items.is_empty() || items.iter().any(|item| item.trim().is_empty()) {
                 return Err(Error::InvalidPredicateFilter);
             }
-            Some(items.iter().copied().collect::<HashSet<_>>())
+            Some(self.expand_predicate_filter(items)?)
         } else {
             None
         };
@@ -2005,6 +2512,14 @@ fn validate_event_field(field: &'static str, value: &str) -> Result<(), Error> {
     }
 }
 
+fn validate_observation_field(field: &'static str, value: &str) -> Result<(), Error> {
+    if value.trim().is_empty() {
+        Err(Error::InvalidObservationField { field })
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_agent_id(agent_id: &str) -> Result<(), Error> {
     if agent_id.is_empty()
         || !agent_id
@@ -2042,6 +2557,20 @@ struct EventLogEntry<'a> {
 }
 
 #[derive(Serialize)]
+struct ObservationLogEntry<'a> {
+    kind: &'a str,
+    ts: i64,
+    observation_id: &'a str,
+    session_id: &'a str,
+    content: &'a str,
+    relevance: &'a str,
+    source_event_ids: &'a [i64],
+    agent_id: &'a str,
+    agent_kind: &'a str,
+    derivation: &'a str,
+}
+
+#[derive(Serialize)]
 struct LogEntry<'a> {
     kind: &'a str,
     ts: i64,
@@ -2053,6 +2582,94 @@ struct LogEntry<'a> {
     agent_id: &'a str,
     agent_kind: &'a str,
     confidence: f64,
+}
+
+fn observation_id(session_id: &str, content: &str, source_event_ids: &[i64]) -> String {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = FNV_OFFSET;
+    for byte in session_id
+        .as_bytes()
+        .iter()
+        .chain([0xff].iter())
+        .chain(content.as_bytes().iter())
+        .chain([0xfe].iter())
+        .chain(
+            source_event_ids
+                .iter()
+                .flat_map(|id| id.to_le_bytes())
+                .collect::<Vec<_>>()
+                .iter(),
+        )
+    {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")[..12].to_string()
+}
+
+fn seed_ontology(conn: &Connection) -> Result<(), Error> {
+    seed_type_table(conn, "entity_types", ENTITY_ONTOLOGY)?;
+    seed_type_table(conn, "predicate_types", PREDICATE_ONTOLOGY)?;
+    rebuild_closure(conn, "entity_types", "entity_type_closure")?;
+    rebuild_closure(conn, "predicate_types", "predicate_closure")?;
+    Ok(())
+}
+
+fn seed_type_table(
+    conn: &Connection,
+    table: &str,
+    ontology: &[(&str, Option<&str>)],
+) -> Result<(), Error> {
+    for (name, _parent) in ontology {
+        conn.execute(
+            &format!("INSERT OR IGNORE INTO {table} (name) VALUES (?1)"),
+            [name],
+        )?;
+    }
+    for (name, parent) in ontology {
+        let parent_id = if let Some(parent) = parent {
+            conn.query_row(
+                &format!("SELECT id FROM {table} WHERE name = ?1"),
+                [parent],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+        } else {
+            None
+        };
+        conn.execute(
+            &format!("UPDATE {table} SET parent_id = ?2 WHERE name = ?1"),
+            params![name, parent_id],
+        )?;
+    }
+    Ok(())
+}
+
+fn rebuild_closure(conn: &Connection, type_table: &str, closure_table: &str) -> Result<(), Error> {
+    conn.execute(&format!("DELETE FROM {closure_table}"), [])?;
+    let mut stmt = conn.prepare(&format!("SELECT id, parent_id FROM {type_table}"))?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?))
+    })?;
+    let mut parents = HashMap::new();
+    for row in rows {
+        let (id, parent_id) = row?;
+        parents.insert(id, parent_id);
+    }
+    for child_id in parents.keys().copied() {
+        let mut ancestor = Some(child_id);
+        while let Some(ancestor_id) = ancestor {
+            conn.execute(
+                &format!(
+                    "INSERT OR IGNORE INTO {closure_table} (child_id, ancestor_id) VALUES (?1, ?2)"
+                ),
+                params![child_id, ancestor_id],
+            )?;
+            ancestor = parents.get(&ancestor_id).copied().flatten();
+        }
+    }
+    Ok(())
 }
 
 fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
@@ -2093,6 +2710,8 @@ pub enum Error {
     InvalidClaimField { field: &'static str },
     #[error("invalid event {field}: must not be empty")]
     InvalidEventField { field: &'static str },
+    #[error("invalid observation {field}: must not be empty")]
+    InvalidObservationField { field: &'static str },
     #[error("invalid recall query: must not be empty")]
     InvalidRecallQuery,
     #[error("invalid top_k: must be greater than zero")]
@@ -2117,10 +2736,14 @@ pub enum Error {
     MissingEvent { event_id: i64 },
     #[error("missing candidate claim: candidate {candidate_id} does not exist")]
     MissingCandidate { candidate_id: i64 },
+    #[error("missing observation: observation {observation_id} does not exist")]
+    MissingObservation { observation_id: String },
     #[error("invalid candidate claim status for candidate {candidate_id}: {status}")]
     InvalidCandidateStatus { candidate_id: i64, status: String },
     #[error("invalid candidate status filter: {status}")]
     InvalidCandidateStatusFilter { status: String },
+    #[error("missing entity: {entity}")]
+    MissingEntity { entity: String },
     #[error("missing claim: claim {claim_id} does not exist")]
     MissingClaim { claim_id: i64 },
     #[error("missing vector chunk: vector chunk {chunk_id} does not exist")]
