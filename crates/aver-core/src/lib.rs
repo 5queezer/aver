@@ -228,6 +228,8 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
         || path.contains("/.age/")
         || path.starts_with(".gnupg/")
         || path.contains("/.gnupg/")
+        || path == ".netrc"
+        || path.ends_with("/.netrc")
         || path.ends_with(".kdbx")
         || path.ends_with(".kdb")
     {

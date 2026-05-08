@@ -362,3 +362,11 @@ fn privacy_filter_path_rejects_gnupg_private_keys_dir() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_netrc_file() {
+    assert_eq!(
+        privacy_filter_path(".netrc").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
