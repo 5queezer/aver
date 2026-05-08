@@ -232,6 +232,8 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
         || path.ends_with("/.netrc")
         || path == ".git-credentials"
         || path.ends_with("/.git-credentials")
+        || path == ".vault-token"
+        || path.ends_with("/.vault-token")
         || path == ".npmrc"
         || path.ends_with("/.npmrc")
         || path == ".yarnrc.yml"

@@ -466,3 +466,11 @@ fn privacy_filter_path_rejects_oci_config_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_vault_token_file() {
+    assert_eq!(
+        privacy_filter_path(".vault-token").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
