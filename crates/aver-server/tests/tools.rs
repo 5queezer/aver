@@ -386,3 +386,41 @@ fn recall_tool_reports_confidence_floor_for_returned_triples() {
     assert_eq!(recalled.triples.len(), 1);
     assert_eq!(recalled.confidence_floor, 0.4);
 }
+
+#[test]
+fn recall_tool_confidence_floor_includes_subgraph_edges() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    tools
+        .add_triple(AddTripleParams {
+            subject: "PaymentGateway".to_string(),
+            predicate: "status".to_string(),
+            object: "current".to_string(),
+            confidence: Some(0.95),
+            source: "test".to_string(),
+        })
+        .unwrap();
+    tools
+        .add_triple(AddTripleParams {
+            subject: "PaymentGateway".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "StripeSDK".to_string(),
+            confidence: Some(0.4),
+            source: "test".to_string(),
+        })
+        .unwrap();
+
+    let recalled = tools
+        .recall(RecallParams {
+            query: "status current".to_string(),
+            alpha: None,
+            hops: Some(1),
+            top_k: Some(1),
+        })
+        .unwrap();
+
+    assert_eq!(recalled.triples.len(), 1);
+    assert_eq!(recalled.subgraph.edges.len(), 2);
+    assert_eq!(recalled.confidence_floor, 0.4);
+}

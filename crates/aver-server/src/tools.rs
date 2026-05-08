@@ -306,6 +306,7 @@ impl AverTools {
         }
         let confidence_floor = claims
             .iter()
+            .chain(subgraph.edges.iter())
             .map(|claim| claim.confidence)
             .min_by(f64::total_cmp)
             .unwrap_or(0.0);
