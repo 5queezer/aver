@@ -292,3 +292,11 @@ fn privacy_filter_path_rejects_keystore_file() {
         PrivacyRejection::KeyPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_password_database_file() {
+    assert_eq!(
+        privacy_filter_path("vault/team-passwords.kdbx").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
