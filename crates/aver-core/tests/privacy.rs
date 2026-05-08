@@ -268,3 +268,11 @@ fn privacy_filter_path_rejects_pkcs12_file() {
         PrivacyRejection::KeyPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_pfx_file() {
+    assert_eq!(
+        privacy_filter_path("certs/client-identity.pfx").unwrap_err(),
+        PrivacyRejection::KeyPath
+    );
+}
