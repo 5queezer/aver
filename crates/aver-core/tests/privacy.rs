@@ -570,3 +570,11 @@ fn privacy_filter_rejects_tailscale_api_key() {
     let token = synthetic_token(&["ts", "key-api-", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
     assert!(privacy_filter(&format!("TAILSCALE_API_KEY={token}")).is_err());
 }
+
+#[test]
+fn privacy_filter_path_rejects_composer_auth_file() {
+    assert_eq!(
+        privacy_filter_path("auth.json").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
