@@ -442,3 +442,11 @@ fn privacy_filter_path_rejects_git_credentials_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_pypirc_file() {
+    assert_eq!(
+        privacy_filter_path(".pypirc").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
