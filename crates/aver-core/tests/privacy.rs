@@ -200,3 +200,13 @@ fn privacy_filter_path_rejects_envrc_file() {
         PrivacyRejection::EnvPath
     );
 }
+
+#[test]
+fn privacy_filter_rejects_openssh_private_key_header() {
+    let content = synthetic_token(&["-----BEGIN ", "OPENSSH PRIVATE KEY-----"]);
+
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}

@@ -254,7 +254,7 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
     {
         return Err(PrivacyRejection::MemoryIgnore);
     }
-    if content.contains("BEGIN PRIVATE KEY") {
+    if content.contains("BEGIN PRIVATE KEY") || content.contains("BEGIN OPENSSH PRIVATE KEY") {
         return Err(PrivacyRejection::PrivateKey);
     }
     if content
