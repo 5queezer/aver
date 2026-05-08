@@ -286,6 +286,8 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
         || path.ends_with("/.aws/credentials")
         || path == ".aws/config"
         || path.ends_with("/.aws/config")
+        || path.starts_with(".aws/sso/cache/")
+        || path.contains("/.aws/sso/cache/")
     {
         return Err(PrivacyRejection::AwsCredentialsPath);
     }

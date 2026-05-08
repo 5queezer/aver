@@ -618,3 +618,11 @@ fn privacy_filter_path_rejects_gcloud_adc_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_aws_sso_cache_file() {
+    assert_eq!(
+        privacy_filter_path(".aws/sso/cache/token.json").unwrap_err(),
+        PrivacyRejection::AwsCredentialsPath
+    );
+}
