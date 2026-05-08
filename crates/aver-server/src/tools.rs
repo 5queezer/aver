@@ -304,6 +304,11 @@ impl AverTools {
         {
             subgraph = self.store.expand(&first_claim.subject, hops, None)?;
         }
+        let confidence_floor = claims
+            .iter()
+            .map(|claim| claim.confidence)
+            .min_by(f64::total_cmp)
+            .unwrap_or(0.0);
         Ok(RecallView {
             triples: claims.into_iter().map(ClaimView::from).collect(),
             chunks: Vec::new(),
@@ -311,7 +316,7 @@ impl AverTools {
                 nodes: subgraph.nodes,
                 edges: subgraph.edges.into_iter().map(ClaimView::from).collect(),
             },
-            confidence_floor: 0.0,
+            confidence_floor,
         })
     }
 

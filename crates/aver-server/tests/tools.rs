@@ -74,7 +74,7 @@ fn adr0008_five_tool_surface_covers_claim_graph_lifecycle() {
             .iter()
             .any(|claim| claim.id == triple.triple_id)
     );
-    assert_eq!(recalled.confidence_floor, 0.0);
+    assert_eq!(recalled.confidence_floor, 0.95);
 
     let expanded = tools
         .expand(ExpandParams {
@@ -357,4 +357,32 @@ fn recall_tool_expands_graph_from_recalled_claim_subject_when_query_is_phrase() 
     );
     assert!(recalled.subgraph.nodes.contains(&"StripeSDK".to_string()));
     assert_eq!(recalled.subgraph.edges.len(), 1);
+}
+
+#[test]
+fn recall_tool_reports_confidence_floor_for_returned_triples() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    tools
+        .add_triple(AddTripleParams {
+            subject: "PaymentGateway".to_string(),
+            predicate: "status".to_string(),
+            object: "current".to_string(),
+            confidence: Some(0.4),
+            source: "test".to_string(),
+        })
+        .unwrap();
+
+    let recalled = tools
+        .recall(RecallParams {
+            query: "PaymentGateway".to_string(),
+            alpha: None,
+            hops: Some(1),
+            top_k: Some(5),
+        })
+        .unwrap();
+
+    assert_eq!(recalled.triples.len(), 1);
+    assert_eq!(recalled.confidence_floor, 0.4);
 }
