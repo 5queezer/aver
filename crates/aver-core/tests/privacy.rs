@@ -578,3 +578,11 @@ fn privacy_filter_path_rejects_composer_auth_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_nuget_config_file() {
+    assert_eq!(
+        privacy_filter_path(".nuget/NuGet/NuGet.Config").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}

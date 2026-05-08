@@ -234,6 +234,8 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
         || path.ends_with("/.git-credentials")
         || path == "auth.json"
         || path.ends_with("/auth.json")
+        || path == ".nuget/NuGet/NuGet.Config"
+        || path.ends_with("/.nuget/NuGet/NuGet.Config")
         || path == ".vault-token"
         || path.ends_with("/.vault-token")
         || path == ".sentryclirc"
