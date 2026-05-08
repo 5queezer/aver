@@ -373,3 +373,15 @@ fn should_extract_memories_rejects_empty_session_id() {
 
     assert!(err.to_string().contains("session_id"));
 }
+
+#[test]
+fn list_candidate_claims_rejects_empty_session_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .list_candidate_claims(Some(" "), None)
+        .expect_err("blank candidate session filters should be rejected");
+
+    assert!(err.to_string().contains("session_id"));
+}

@@ -906,6 +906,9 @@ impl Store {
         session_id: Option<&str>,
         status: Option<&str>,
     ) -> Result<Vec<CandidateClaim>, Error> {
+        if let Some(session_id) = session_id {
+            validate_event_field("session_id", session_id)?;
+        }
         if let Some(status) = status {
             validate_candidate_status_filter(status)?;
         }
