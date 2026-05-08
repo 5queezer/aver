@@ -404,3 +404,15 @@ fn recall_vector_chunks_rejects_empty_query() {
 
     assert!(err.to_string().contains("query"));
 }
+
+#[test]
+fn rank_vector_chunks_by_embedding_rejects_empty_query_embedding() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .rank_vector_chunks_by_embedding(&[], 1)
+        .expect_err("empty query embeddings should be rejected");
+
+    assert!(err.to_string().contains("embedding vector"));
+}

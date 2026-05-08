@@ -1138,6 +1138,7 @@ impl Store {
         query_embedding: &[f32],
         top_k: usize,
     ) -> Result<Vec<VectorChunk>, Error> {
+        validate_embedding_vector(query_embedding)?;
         let mut stmt = self.conn.prepare(
             "SELECT id, claim_id, text, embedding_model, embedding_json
                FROM vector_chunks
