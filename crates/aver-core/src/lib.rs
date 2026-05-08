@@ -1273,7 +1273,7 @@ impl Store {
         }
 
         let predicate_filter = if let Some(items) = predicates {
-            if items.is_empty() {
+            if items.is_empty() || items.iter().any(|item| item.trim().is_empty()) {
                 return Err(Error::InvalidPredicateFilter);
             }
             Some(items.iter().copied().collect::<HashSet<_>>())

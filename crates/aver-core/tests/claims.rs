@@ -855,3 +855,15 @@ fn expand_rejects_empty_predicate_filter() {
 
     assert!(err.to_string().contains("predicate"));
 }
+
+#[test]
+fn expand_rejects_blank_predicate_filter_item() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .expand("PaymentGateway", 1, Some(&[" "]))
+        .expect_err("blank graph predicate filter items should be rejected");
+
+    assert!(err.to_string().contains("predicate"));
+}
