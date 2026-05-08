@@ -349,6 +349,12 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
     }
     if content
         .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .any(|token| token.starts_with("xoxb-") && token.len() >= 20)
+    {
+        return Err(PrivacyRejection::HighEntropy);
+    }
+    if content
+        .split(|ch: char| ch.is_whitespace() || ch == '=')
         .any(|token| token.starts_with("sk-") && token.len() >= 30)
     {
         return Err(PrivacyRejection::OpenAiKey);

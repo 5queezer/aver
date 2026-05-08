@@ -490,3 +490,15 @@ fn privacy_filter_path_rejects_sentry_cli_config() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_rejects_slack_bot_token() {
+    let token = synthetic_token(&[
+        "xo",
+        "xb-",
+        "111111111111-",
+        "222222222222-",
+        "aaaaaaaaaaaaaaaaaaaaaaaa",
+    ]);
+    assert!(privacy_filter(&format!("SLACK_BOT_TOKEN={token}")).is_err());
+}
