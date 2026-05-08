@@ -394,3 +394,11 @@ fn privacy_filter_path_rejects_yarnrc_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_docker_config_credentials() {
+    assert_eq!(
+        privacy_filter_path(".docker/config.json").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
