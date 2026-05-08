@@ -276,3 +276,11 @@ fn privacy_filter_path_rejects_pfx_file() {
         PrivacyRejection::KeyPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_java_keystore_file() {
+    assert_eq!(
+        privacy_filter_path("certs/production-keystore.jks").unwrap_err(),
+        PrivacyRejection::KeyPath
+    );
+}
