@@ -416,3 +416,19 @@ fn rank_vector_chunks_by_embedding_rejects_empty_query_embedding() {
 
     assert!(err.to_string().contains("embedding vector"));
 }
+
+#[test]
+fn add_vector_chunk_requires_existing_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .add_vector_chunk(
+            42,
+            "PaymentGateway depends_on StripeSDK",
+            "nomic-embed-text",
+        )
+        .expect_err("vector chunks should require an existing claim");
+
+    assert!(err.to_string().contains("claim"));
+}

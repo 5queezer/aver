@@ -1036,6 +1036,7 @@ impl Store {
         text: &str,
         embedding_model: &str,
     ) -> Result<i64, Error> {
+        self.ensure_claim_exists(claim_id)?;
         validate_vector_chunk_text(text)?;
         validate_embedding_model(embedding_model)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
@@ -1068,6 +1069,16 @@ impl Store {
             params![claim_id, text, embedding_model, embedding_json, now],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    fn ensure_claim_exists(&self, claim_id: i64) -> Result<(), Error> {
+        match self.get_claim(claim_id) {
+            Ok(_) => Ok(()),
+            Err(Error::Sqlite(rusqlite::Error::QueryReturnedNoRows)) => {
+                Err(Error::MissingClaim { claim_id })
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// Insert vector chunk metadata using the canonical claim text rendering.
