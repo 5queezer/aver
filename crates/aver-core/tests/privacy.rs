@@ -586,3 +586,11 @@ fn privacy_filter_path_rejects_nuget_config_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_maven_settings_file() {
+    assert_eq!(
+        privacy_filter_path(".m2/settings.xml").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
