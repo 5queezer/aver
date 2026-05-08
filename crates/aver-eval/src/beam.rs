@@ -111,12 +111,11 @@ fn existing_dataset(path: PathBuf) -> Result<PathBuf> {
     }
 }
 
-pub fn answer_prompt(question: &str, reference_answer: &str, contexts: &[String]) -> String {
+pub fn answer_prompt(question: &str, _reference_answer: &str, contexts: &[String]) -> String {
     format!(
         "You answer a BEAM memory benchmark question using only the retrieved memory context.\n\
 If the context is insufficient, say you do not know.\n\n\
 QUESTION:\n{question}\n\n\
-REFERENCE ANSWER FOR EVALUATION TARGET (do not quote unless supported by context):\n{reference_answer}\n\n\
 RETRIEVED MEMORY CONTEXT:\n{}\n\n\
 ANSWER:",
         contexts

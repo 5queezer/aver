@@ -51,14 +51,14 @@ fn beam_redacts_secret_like_tokens_before_ingestion() {
 }
 
 #[test]
-fn beam_answer_prompt_contains_question_reference_and_context() {
+fn beam_answer_prompt_contains_question_and_context_without_reference_answer_leakage() {
     let prompt = aver_eval::beam::answer_prompt(
         "What language?",
-        "Rust",
+        "ground-truth-only-answer",
         &["[March-15-2024] Alice likes Rust".to_string()],
     );
 
     assert!(prompt.contains("What language?"));
-    assert!(prompt.contains("Rust"));
     assert!(prompt.contains("Alice likes Rust"));
+    assert!(!prompt.contains("ground-truth-only-answer"));
 }
