@@ -386,3 +386,11 @@ fn privacy_filter_path_rejects_cargo_credentials_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_yarnrc_file() {
+    assert_eq!(
+        privacy_filter_path(".yarnrc.yml").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
