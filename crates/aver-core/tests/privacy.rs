@@ -152,3 +152,11 @@ fn add_claim_rejects_secret_before_episodic_log_write() {
     ));
     assert!(!dir.path().join("log.jsonl").exists());
 }
+
+#[test]
+fn privacy_filter_path_rejects_relative_env_file() {
+    assert_eq!(
+        privacy_filter_path(".env").unwrap_err(),
+        PrivacyRejection::EnvPath
+    );
+}

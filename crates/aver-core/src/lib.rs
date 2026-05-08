@@ -224,7 +224,7 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
     if path.contains("/.secrets.d/") || path.starts_with("~/.secrets.d/") {
         return Err(PrivacyRejection::SecretsPath);
     }
-    if path.contains("/.env") {
+    if path == ".env" || path.starts_with(".env.") || path.contains("/.env") {
         return Err(PrivacyRejection::EnvPath);
     }
     if path.contains("/.ssh/") {
