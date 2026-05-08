@@ -16,6 +16,7 @@ async fn oauth_metadata_route_returns_discovery_document() {
         base_url: "https://aver.example.com".to_string(),
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: dir.path().join("auth.db").to_string_lossy().to_string(),
+        cors_origins: Vec::new(),
     };
     let app = build_router(config).unwrap();
 
@@ -54,6 +55,7 @@ async fn oauth_token_route_exchanges_authorization_code_with_pkce() {
         base_url: "https://aver.example.com".to_string(),
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: auth_db_path.to_string_lossy().to_string(),
+        cors_origins: Vec::new(),
     };
     let app = build_router(config).unwrap();
     let body = format!(
@@ -96,6 +98,7 @@ async fn protected_health_requires_bearer_token() {
         base_url: "https://aver.example.com".to_string(),
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: auth_db_path.to_string_lossy().to_string(),
+        cors_origins: Vec::new(),
     };
     let app = build_router(config).unwrap();
 
@@ -133,6 +136,7 @@ async fn oauth_register_route_creates_public_client() {
         base_url: "https://aver.example.com".to_string(),
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: dir.path().join("auth.db").to_string_lossy().to_string(),
+        cors_origins: Vec::new(),
     };
     let app = build_router(config).unwrap();
 
@@ -185,6 +189,7 @@ async fn oauth_authorize_route_redirects_with_pkce_code() {
         base_url: "https://aver.example.com".to_string(),
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: auth_db_path.to_string_lossy().to_string(),
+        cors_origins: Vec::new(),
     };
     let app = build_router(config).unwrap();
     let uri = format!(
@@ -217,6 +222,7 @@ async fn mcp_route_requires_bearer_token() {
         base_url: "https://aver.example.com".to_string(),
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: dir.path().join("auth.db").to_string_lossy().to_string(),
+        cors_origins: Vec::new(),
     };
     let app = build_router(config).unwrap();
 

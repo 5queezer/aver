@@ -5,6 +5,121 @@ pub mod beam;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct QuerySuiteThresholds {
+    pub max_drop_fraction: f64,
+}
+
+impl Default for QuerySuiteThresholds {
+    fn default() -> Self {
+        Self {
+            max_drop_fraction: 0.05,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QuerySuiteRegressionFailure {
+    pub metric: String,
+    pub baseline: f64,
+    pub current: f64,
+    pub drop_fraction: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QuerySuiteRegressionReport {
+    pub failed: bool,
+    pub failures: Vec<QuerySuiteRegressionFailure>,
+}
+
+impl QuerySuiteRegressionReport {
+    pub fn compare(
+        thresholds: QuerySuiteThresholds,
+        baseline_recall: f64,
+        current_recall: f64,
+        baseline_precision: f64,
+        current_precision: f64,
+        baseline_mrr: f64,
+        current_mrr: f64,
+    ) -> Self {
+        let mut failures = Vec::new();
+        for (metric, baseline, current) in [
+            ("recall", baseline_recall, current_recall),
+            ("precision", baseline_precision, current_precision),
+            ("mrr", baseline_mrr, current_mrr),
+        ] {
+            if baseline <= 0.0 {
+                continue;
+            }
+            let drop_fraction = (baseline - current) / baseline;
+            if drop_fraction > thresholds.max_drop_fraction {
+                failures.push(QuerySuiteRegressionFailure {
+                    metric: metric.to_string(),
+                    baseline,
+                    current,
+                    drop_fraction,
+                });
+            }
+        }
+        Self {
+            failed: !failures.is_empty(),
+            failures,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HallucinationCaseResult {
+    pub id: String,
+    pub memory_off_accurate: bool,
+    pub memory_on_accurate: bool,
+    pub memory_off_hallucinated: bool,
+    pub memory_on_hallucinated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HallucinationRunReport {
+    pub case_count: usize,
+    pub memory_on_minus_off_accuracy: f64,
+    pub memory_on_hallucination_rate: f64,
+    pub memory_off_hallucination_rate: f64,
+    pub memory_on_worse_case_ids: Vec<String>,
+}
+
+impl HallucinationRunReport {
+    pub fn from_cases(cases: Vec<HallucinationCaseResult>) -> Self {
+        let case_count = cases.len();
+        let denominator = case_count.max(1) as f64;
+        let memory_on_accuracy =
+            cases.iter().filter(|case| case.memory_on_accurate).count() as f64 / denominator;
+        let memory_off_accuracy =
+            cases.iter().filter(|case| case.memory_off_accurate).count() as f64 / denominator;
+        let memory_on_hallucination_rate = cases
+            .iter()
+            .filter(|case| case.memory_on_hallucinated)
+            .count() as f64
+            / denominator;
+        let memory_off_hallucination_rate = cases
+            .iter()
+            .filter(|case| case.memory_off_hallucinated)
+            .count() as f64
+            / denominator;
+        let memory_on_worse_case_ids = cases
+            .iter()
+            .filter(|case| case.memory_off_accurate && !case.memory_on_accurate)
+            .map(|case| case.id.clone())
+            .collect();
+
+        Self {
+            case_count,
+            memory_on_minus_off_accuracy: memory_on_accuracy - memory_off_accuracy,
+            memory_on_hallucination_rate,
+            memory_off_hallucination_rate,
+            memory_on_worse_case_ids,
+        }
+    }
+}
+
 /// A single claim to seed into the Store during a bench run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FixtureClaim {

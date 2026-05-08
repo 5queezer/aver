@@ -17,4 +17,5 @@ fn server_config_reads_aver_environment() {
     assert_eq!(config.base_url, "http://127.0.0.1:3317");
     assert_eq!(config.memory_dir, "/tmp/aver-memory-test");
     assert_eq!(config.auth_db_path, "/tmp/aver-auth-test.db");
+    assert!(config.cors_origins.is_empty());
 }

@@ -2,7 +2,7 @@ use axum::{
     Form, Json, Router,
     body::Body,
     extract::Query,
-    http::{Request, StatusCode, header},
+    http::{HeaderValue, Request, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Redirect},
     routing::{get, post},
@@ -43,18 +43,27 @@ pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
             LocalSessionManager::default().into(),
             StreamableHttpServerConfig::default(),
         );
+    let cors = CorsLayer::new()
+        .allow_methods(CorsAny)
+        .allow_headers(CorsAny);
+    let cors = if state.config.cors_origins.is_empty() {
+        cors.allow_origin(CorsAny)
+    } else {
+        let origins = state
+            .config
+            .cors_origins
+            .iter()
+            .map(|origin| origin.parse::<HeaderValue>())
+            .collect::<Result<Vec<_>, _>>()?;
+        cors.allow_origin(origins)
+    };
     let protected_mcp = Router::new()
         .nest_service("/mcp", mcp_service)
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             validate_bearer_token,
         ))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(CorsAny)
-                .allow_methods(CorsAny)
-                .allow_headers(CorsAny),
-        );
+        .layer(cors);
 
     Ok(Router::new()
         .route(
@@ -179,25 +188,38 @@ async fn oauth_authorize(
 #[derive(Debug, Deserialize)]
 struct TokenRequest {
     grant_type: String,
+    #[serde(default)]
     code: String,
+    #[serde(default)]
     client_id: String,
+    #[serde(default)]
     code_verifier: String,
+    #[serde(default)]
+    refresh_token: String,
 }
 
 async fn oauth_token(
     axum::extract::State(state): axum::extract::State<HttpState>,
     Form(request): Form<TokenRequest>,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    if request.grant_type != "authorization_code" {
-        return Err(axum::http::StatusCode::BAD_REQUEST);
-    }
     let db = AuthDb::open(&state.config.auth_db_path)
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    let access_token = db
-        .exchange_authorization_code(&request.code, &request.client_id, &request.code_verifier)
-        .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+    let tokens = match request.grant_type.as_str() {
+        "authorization_code" => db
+            .exchange_authorization_code_for_tokens(
+                &request.code,
+                &request.client_id,
+                &request.code_verifier,
+            )
+            .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?,
+        "refresh_token" => db
+            .refresh_access_token(&request.refresh_token)
+            .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?,
+        _ => return Err(axum::http::StatusCode::BAD_REQUEST),
+    };
     Ok(Json(serde_json::json!({
-        "access_token": access_token,
+        "access_token": tokens.access_token,
+        "refresh_token": tokens.refresh_token,
         "token_type": "Bearer",
     })))
 }

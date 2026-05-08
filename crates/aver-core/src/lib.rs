@@ -4,7 +4,7 @@
 pub mod retrieval;
 pub mod vector;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -123,7 +123,6 @@ type ClaimRow = (
     i64,
     Option<i64>,
 );
-
 
 struct ClaimWrite<'a> {
     agent_id: &'a str,
@@ -341,6 +340,35 @@ pub struct ConsolidationReport {
     pub decayed: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtractionTriggerReason {
+    ExplicitRemember,
+    EventCountThreshold,
+    ObservationTokenThreshold,
+    SessionEnd,
+    Correction,
+    CommitCompleted,
+    IdleCompaction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractionDecision {
+    pub should_extract: bool,
+    pub reasons: Vec<ExtractionTriggerReason>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphDriftSnapshot {
+    pub claim_count_by_provenance: BTreeMap<String, u64>,
+    pub mean_confidence_by_provenance: BTreeMap<String, f64>,
+    pub contradicts_edge_count: u64,
+    pub ambiguous_ratio: f64,
+    pub entity_count_by_type_id: BTreeMap<String, u64>,
+    pub consolidation_merged: usize,
+    pub consolidation_superseded: usize,
+    pub privacy_rejection_counts: BTreeMap<String, u64>,
+}
+
 pub trait ClaimExtractor {
     fn extract(&self, events: &[EpisodicEvent]) -> Result<Vec<CandidateClaimDraft>, Error>;
 }
@@ -372,7 +400,7 @@ pub struct VectorChunk {
     pub embedding: Option<Vec<f32>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, thiserror::Error)]
 pub enum PrivacyRejection {
     #[error("AWS access key")]
     AwsAccessKey,
@@ -1540,27 +1568,122 @@ impl Store {
         Ok(drop_count)
     }
 
+    pub fn graph_drift_snapshot(
+        &self,
+        consolidation: ConsolidationReport,
+        privacy_rejection_counts: BTreeMap<PrivacyRejection, u64>,
+    ) -> Result<GraphDriftSnapshot, Error> {
+        let mut claim_count_by_provenance = BTreeMap::new();
+        let mut mean_confidence_by_provenance = BTreeMap::new();
+        let mut stmt = self.conn.prepare(
+            "SELECT provenance, COUNT(*), AVG(confidence)
+               FROM claims GROUP BY provenance ORDER BY provenance",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, u64>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        })?;
+        let mut total_claims = 0_u64;
+        let mut ambiguous_claims = 0_u64;
+        for row in rows {
+            let (provenance, count, mean_confidence) = row?;
+            if provenance == Provenance::Ambiguous.as_str() {
+                ambiguous_claims = count;
+            }
+            total_claims += count;
+            claim_count_by_provenance.insert(provenance.clone(), count);
+            mean_confidence_by_provenance.insert(provenance, mean_confidence);
+        }
+
+        let contradicts_edge_count =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM contradictions", [], |row| {
+                    row.get::<_, u64>(0)
+                })?;
+        let mut entity_count_by_type_id = BTreeMap::new();
+        let mut entity_stmt = self.conn.prepare(
+            "SELECT entity_types.name, COUNT(entities.name)
+               FROM entities JOIN entity_types ON entities.type_id = entity_types.id
+              GROUP BY entity_types.name ORDER BY entity_types.name",
+        )?;
+        let entity_rows = entity_stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+        })?;
+        for row in entity_rows {
+            let (type_id, count) = row?;
+            entity_count_by_type_id.insert(type_id, count);
+        }
+
+        Ok(GraphDriftSnapshot {
+            claim_count_by_provenance,
+            mean_confidence_by_provenance,
+            contradicts_edge_count,
+            ambiguous_ratio: if total_claims == 0 {
+                0.0
+            } else {
+                ambiguous_claims as f64 / total_claims as f64
+            },
+            entity_count_by_type_id,
+            consolidation_merged: consolidation.merged,
+            consolidation_superseded: consolidation.superseded,
+            privacy_rejection_counts: privacy_rejection_counts
+                .into_iter()
+                .map(|(rejection, count)| (format!("{rejection:?}"), count))
+                .collect(),
+        })
+    }
+
     pub fn should_extract_memories(
         &self,
         session_id: &str,
         event_threshold: usize,
     ) -> Result<bool, Error> {
+        Ok(self
+            .extraction_decision(session_id, event_threshold, None)?
+            .should_extract)
+    }
+
+    pub fn extraction_decision(
+        &self,
+        session_id: &str,
+        event_threshold: usize,
+        observation_token_threshold: Option<usize>,
+    ) -> Result<ExtractionDecision, Error> {
         validate_event_field("session_id", session_id)?;
         if event_threshold == 0 {
             return Err(Error::InvalidEventThreshold);
         }
-        let explicit_remember = self
-            .conn
-            .query_row(
-                "SELECT 1 FROM episodic_events
-                  WHERE session_id = ?1 AND kind = 'explicit_remember'
-                  LIMIT 1",
-                [session_id],
-                |_| Ok(()),
-            )
-            .is_ok();
-        if explicit_remember {
-            return Ok(true);
+        if observation_token_threshold == Some(0) {
+            return Err(Error::InvalidEventThreshold);
+        }
+
+        let mut reasons = Vec::new();
+        for (kind, reason) in [
+            (
+                "explicit_remember",
+                ExtractionTriggerReason::ExplicitRemember,
+            ),
+            ("session_end", ExtractionTriggerReason::SessionEnd),
+            ("correction", ExtractionTriggerReason::Correction),
+            ("commit_completed", ExtractionTriggerReason::CommitCompleted),
+            ("idle_compaction", ExtractionTriggerReason::IdleCompaction),
+        ] {
+            if self
+                .conn
+                .query_row(
+                    "SELECT 1 FROM episodic_events
+                      WHERE session_id = ?1 AND kind = ?2
+                      LIMIT 1",
+                    params![session_id, kind],
+                    |_| Ok(()),
+                )
+                .is_ok()
+            {
+                reasons.push(reason);
+            }
         }
 
         let event_count: usize = self.conn.query_row(
@@ -1568,7 +1691,30 @@ impl Store {
             [session_id],
             |row| row.get(0),
         )?;
-        Ok(event_count >= event_threshold)
+        if event_count >= event_threshold {
+            reasons.push(ExtractionTriggerReason::EventCountThreshold);
+        }
+
+        if let Some(threshold) = observation_token_threshold {
+            let token_count: usize = self.conn.query_row(
+                "SELECT COALESCE(SUM(
+                    CASE
+                      WHEN TRIM(payload) = '' THEN 0
+                      ELSE LENGTH(TRIM(payload)) - LENGTH(REPLACE(TRIM(payload), ' ', '')) + 1
+                    END), 0)
+                   FROM episodic_events WHERE session_id = ?1",
+                [session_id],
+                |row| row.get(0),
+            )?;
+            if token_count >= threshold {
+                reasons.push(ExtractionTriggerReason::ObservationTokenThreshold);
+            }
+        }
+
+        Ok(ExtractionDecision {
+            should_extract: !reasons.is_empty(),
+            reasons,
+        })
     }
 
     pub fn propose_candidate_claim(

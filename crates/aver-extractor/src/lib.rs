@@ -3,6 +3,8 @@
 pub mod prose;
 
 use std::collections::HashSet;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 use tree_sitter::{Language, Node, Parser};
 
@@ -13,6 +15,83 @@ pub struct ExtractedFact {
     pub subject: String,
     pub predicate: String,
     pub object: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PluginRequest {
+    pub id: u64,
+    pub method: String,
+    pub text: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct JsonRpcPluginResponse {
+    result: ProseExtractionResult,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ProseExtractionResult {
+    facts: Vec<ExtractedFact>,
+}
+
+#[derive(Debug, Clone)]
+pub struct JsonRpcPluginRunner {
+    program: String,
+    args: Vec<String>,
+}
+
+impl JsonRpcPluginRunner {
+    pub fn new(program: impl Into<String>) -> Self {
+        Self {
+            program: program.into(),
+            args: Vec::new(),
+        }
+    }
+
+    pub fn arg(mut self, arg: impl Into<String>) -> Self {
+        self.args.push(arg.into());
+        self
+    }
+
+    pub fn extract(&self, request: PluginRequest) -> Result<Vec<ExtractedFact>, Error> {
+        let mut child = Command::new(&self.program)
+            .args(&self.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": request.id,
+            "method": request.method,
+            "params": { "text": request.text },
+        });
+        {
+            let stdin = child.stdin.as_mut().ok_or(Error::PluginMissingStdin)?;
+            writeln!(stdin, "{request}")?;
+        }
+        let output = child.wait_with_output()?;
+        if !output.status.success() {
+            return Err(Error::PluginFailed(output.status.code()));
+        }
+        let response: JsonRpcPluginResponse = serde_json::from_slice(&output.stdout)?;
+        validate_facts(&response.result.facts)?;
+        Ok(response.result.facts)
+    }
+}
+
+fn validate_facts(facts: &[ExtractedFact]) -> Result<(), Error> {
+    for fact in facts {
+        if fact.subject.trim().is_empty() {
+            return Err(Error::InvalidFact("subject"));
+        }
+        if fact.predicate.trim().is_empty() {
+            return Err(Error::InvalidFact("predicate"));
+        }
+        if fact.object.trim().is_empty() {
+            return Err(Error::InvalidFact("object"));
+        }
+    }
+    Ok(())
 }
 
 pub fn extract_rust_functions(source: &str) -> Result<Vec<String>, Error> {
@@ -1302,4 +1381,10 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("invalid extracted fact field: {0}")]
     InvalidFact(&'static str),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("plugin stdin unavailable")]
+    PluginMissingStdin,
+    #[error("plugin exited unsuccessfully: {0:?}")]
+    PluginFailed(Option<i32>),
 }

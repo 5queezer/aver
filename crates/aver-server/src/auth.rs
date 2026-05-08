@@ -19,6 +19,12 @@ pub struct RegisteredClient {
     pub redirect_uris: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenPair {
+    pub access_token: String,
+    pub refresh_token: String,
+}
+
 pub struct AuthDb {
     conn: Connection,
 }
@@ -50,6 +56,12 @@ impl AuthDb {
                 client_name   TEXT NOT NULL,
                 redirect_uris TEXT NOT NULL,
                 created_at    INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS refresh_tokens (
+                token_hash TEXT PRIMARY KEY,
+                user_id    TEXT NOT NULL,
+                created_at INTEGER NOT NULL
             );",
         )?;
         Ok(Self { conn })
@@ -150,6 +162,17 @@ impl AuthDb {
         client_id: &str,
         code_verifier: &str,
     ) -> anyhow::Result<String> {
+        Ok(self
+            .exchange_authorization_code_for_tokens(code, client_id, code_verifier)?
+            .access_token)
+    }
+
+    pub fn exchange_authorization_code_for_tokens(
+        &self,
+        code: &str,
+        client_id: &str,
+        code_verifier: &str,
+    ) -> anyhow::Result<TokenPair> {
         let (stored_client_id, user_id, code_challenge, used_at): (
             String,
             String,
@@ -175,9 +198,38 @@ impl AuthDb {
             "UPDATE authorization_codes SET used_at = ?1 WHERE code = ?2",
             params![now, code],
         )?;
+        self.issue_token_pair(&user_id, None)
+    }
+
+    fn issue_token_pair(
+        &self,
+        user_id: &str,
+        existing_refresh_token: Option<String>,
+    ) -> anyhow::Result<TokenPair> {
         let access_token = uuid::Uuid::new_v4().to_string();
-        self.store_access_token_hash(&hash_token(&access_token), &user_id)?;
-        Ok(access_token)
+        self.store_access_token_hash(&hash_token(&access_token), user_id)?;
+        let refresh_token =
+            existing_refresh_token.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO refresh_tokens (token_hash, user_id, created_at)
+             VALUES (?1, ?2, ?3)",
+            params![hash_token(&refresh_token), user_id, now],
+        )?;
+        Ok(TokenPair {
+            access_token,
+            refresh_token,
+        })
+    }
+
+    pub fn refresh_access_token(&self, refresh_token: &str) -> anyhow::Result<TokenPair> {
+        let token_hash = hash_token(refresh_token);
+        let user_id: String = self.conn.query_row(
+            "SELECT user_id FROM refresh_tokens WHERE token_hash = ?1",
+            [token_hash],
+            |row| row.get(0),
+        )?;
+        self.issue_token_pair(&user_id, Some(refresh_token.to_string()))
     }
 
     pub fn validate_access_token(&self, token_hash: &str) -> anyhow::Result<Option<String>> {

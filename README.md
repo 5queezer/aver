@@ -141,15 +141,18 @@ Default configuration:
 | `AVER_BASE_URL` | `http://127.0.0.1:3317` | Public base URL used in OAuth metadata. |
 | `AVER_MEMORY_DIR` | `.aver` | Memory store directory. |
 | `AVER_AUTH_DB_PATH` | `aver-auth.db` | SQLite auth database path. |
+| `AVER_CORS_ORIGINS` | *(allow any origin)* | Optional comma-separated allowed origins for protected MCP CORS responses. |
 
 Useful endpoints:
 
 - `GET /.well-known/oauth-authorization-server`
 - `POST /oauth/register`
 - `GET /oauth/authorize`
-- `POST /oauth/token`
+- `POST /oauth/token` for authorization-code + PKCE token exchange and refresh-token grants
 - `GET /api/health` with `Authorization: Bearer <token>`
 - `/mcp` with `Authorization: Bearer <token>`
+
+`/oauth/token` returns both `access_token` and `refresh_token`. Refresh grants issue a new access token while preserving the existing refresh token. Provider-backed login remains a boundary: external identity providers should only create local authorization codes after provider validation; they must not receive direct access to Aver's memory store or bypass the validated MCP/core write paths.
 
 MCP tools currently include the ADR-0008 stable memory surface:
 
@@ -194,6 +197,8 @@ Run fixture evaluation:
 cargo run -p aver-eval -- <fixture.json> [fixture.json ...]
 ```
 
+The eval crate also exposes deterministic data structures for ADR-0012 query-suite regression threshold checks, hallucination-rate memory-on/off reports, and graph-stat drift snapshots with privacy-rejection counters. These are offline runner boundaries; live judge/provider integrations should feed recorded case results into these structures.
+
 Run BEAM100K with local Ollama:
 
 ```bash
@@ -206,6 +211,10 @@ cargo run -p aver-eval --bin aver-beam100k -- \
 ```
 
 The BEAM runner expects Ollama to provide both the embedding model and generation/judge model.
+
+## Prose/document plugin boundary
+
+ADR-0013 permits non-Rust prose/document extraction plugins only behind stdin/stdout JSON-RPC. `aver-extractor::JsonRpcPluginRunner` sends one JSON-RPC request to a child process, parses the response, validates extracted fact fields, and returns facts to Rust callers. Plugins are extraction-only: they do not write memory directly, share filesystem state, or bypass core privacy/log-first validation.
 
 ## Project Structure
 
