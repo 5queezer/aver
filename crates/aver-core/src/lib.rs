@@ -904,6 +904,9 @@ impl Store {
         session_id: Option<&str>,
         status: Option<&str>,
     ) -> Result<Vec<CandidateClaim>, Error> {
+        if let Some(status) = status {
+            validate_candidate_status_filter(status)?;
+        }
         let mut stmt = self
             .conn
             .prepare("SELECT id FROM candidate_claims ORDER BY id")?;
@@ -1756,6 +1759,15 @@ fn validate_claim_field(field: &'static str, value: &str) -> Result<(), Error> {
     }
 }
 
+fn validate_candidate_status_filter(value: &str) -> Result<(), Error> {
+    match value {
+        "PENDING" | "PROMOTED" | "REJECTED" => Ok(()),
+        _ => Err(Error::InvalidCandidateStatusFilter {
+            status: value.to_string(),
+        }),
+    }
+}
+
 fn validate_recall_query(value: &str) -> Result<(), Error> {
     if query_tokens_for_recall(value).is_empty() {
         Err(Error::InvalidRecallQuery)
@@ -1882,4 +1894,6 @@ pub enum Error {
     MissingCandidate { candidate_id: i64 },
     #[error("invalid candidate claim status for candidate {candidate_id}: {status}")]
     InvalidCandidateStatus { candidate_id: i64, status: String },
+    #[error("invalid candidate status filter: {status}")]
+    InvalidCandidateStatusFilter { status: String },
 }

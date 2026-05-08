@@ -337,3 +337,15 @@ fn should_extract_memories_rejects_zero_threshold() {
 
     assert!(err.to_string().contains("event threshold"));
 }
+
+#[test]
+fn list_candidate_claims_rejects_unknown_status_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .list_candidate_claims(None, Some("UNKNOWN"))
+        .expect_err("unknown candidate status filters should be rejected");
+
+    assert!(err.to_string().contains("candidate status"));
+}
