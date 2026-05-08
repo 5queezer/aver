@@ -350,6 +350,12 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
         return Err(PrivacyRejection::GitHubPat);
     }
     if content
+        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .any(|token| token.starts_with("ghu_") && token.len() >= 30)
+    {
+        return Err(PrivacyRejection::GitHubPat);
+    }
+    if content
         .split_whitespace()
         .any(|token| token.starts_with("github_pat_") && token.len() >= 40)
     {
