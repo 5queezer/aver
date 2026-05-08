@@ -285,3 +285,24 @@ fn reject_candidate_claim_rejects_empty_reason() {
 
     assert!(err.to_string().contains("rejection reason"));
 }
+
+#[test]
+fn promote_candidate_claim_rejects_rejected_candidate() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event_id = store
+        .record_event("s1", "message", "remember something", "test")
+        .unwrap();
+    let candidate_id = store
+        .propose_candidate_claim(event_id, "PaymentGateway", "depends_on", "StripeSDK")
+        .unwrap();
+    store
+        .reject_candidate_claim(candidate_id, "not supported by source")
+        .unwrap();
+
+    let err = store
+        .promote_candidate_claim(candidate_id)
+        .expect_err("rejected candidates should not be promoted");
+
+    assert!(err.to_string().contains("candidate"));
+}

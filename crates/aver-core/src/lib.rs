@@ -807,6 +807,12 @@ impl Store {
 
     pub fn promote_candidate_claim(&self, candidate_id: i64) -> Result<i64, Error> {
         let candidate = self.get_candidate_claim(candidate_id)?;
+        if candidate.status == "REJECTED" {
+            return Err(Error::InvalidCandidateStatus {
+                candidate_id,
+                status: candidate.status,
+            });
+        }
         if let Some(claim_id) = candidate.promoted_claim_id {
             return Ok(claim_id);
         }
@@ -1844,4 +1850,6 @@ pub enum Error {
     MissingEventProvenance { event_id: i64 },
     #[error("missing candidate claim: candidate {candidate_id} does not exist")]
     MissingCandidate { candidate_id: i64 },
+    #[error("invalid candidate claim status for candidate {candidate_id}: {status}")]
+    InvalidCandidateStatus { candidate_id: i64, status: String },
 }
