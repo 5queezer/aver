@@ -184,3 +184,11 @@ fn privacy_filter_path_rejects_relative_config_dir() {
         PrivacyRejection::ConfigPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_relative_secrets_dir() {
+    assert_eq!(
+        privacy_filter_path(".secrets.d/token").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}

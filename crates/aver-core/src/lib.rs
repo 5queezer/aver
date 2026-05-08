@@ -221,7 +221,10 @@ pub enum PrivacyRejection {
 
 pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejection> {
     let path = path.as_ref().to_string_lossy();
-    if path.contains("/.secrets.d/") || path.starts_with("~/.secrets.d/") {
+    if path.starts_with(".secrets.d/")
+        || path.contains("/.secrets.d/")
+        || path.starts_with("~/.secrets.d/")
+    {
         return Err(PrivacyRejection::SecretsPath);
     }
     if path == ".env" || path.starts_with(".env.") || path.contains("/.env") {
