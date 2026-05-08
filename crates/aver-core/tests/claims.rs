@@ -843,3 +843,15 @@ fn expand_rejects_zero_hops() {
 
     assert!(err.to_string().contains("hops"));
 }
+
+#[test]
+fn expand_rejects_empty_predicate_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .expand("PaymentGateway", 1, Some(&[]))
+        .expect_err("empty graph predicate filters should be rejected");
+
+    assert!(err.to_string().contains("predicate"));
+}

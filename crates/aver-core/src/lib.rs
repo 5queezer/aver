@@ -1272,8 +1272,14 @@ impl Store {
             return Err(Error::InvalidGraphHops);
         }
 
-        let predicate_filter =
-            predicates.map(|items| items.iter().copied().collect::<HashSet<_>>());
+        let predicate_filter = if let Some(items) = predicates {
+            if items.is_empty() {
+                return Err(Error::InvalidPredicateFilter);
+            }
+            Some(items.iter().copied().collect::<HashSet<_>>())
+        } else {
+            None
+        };
         let mut nodes = vec![entity.to_string()];
         let mut seen_nodes = HashSet::from([entity.to_string()]);
         let mut seen_edges = HashSet::new();
@@ -1907,6 +1913,8 @@ pub enum Error {
     InvalidGraphEntity,
     #[error("invalid graph hops: must be greater than zero")]
     InvalidGraphHops,
+    #[error("invalid predicate filter: must not be empty")]
+    InvalidPredicateFilter,
     #[error("invalid event threshold: must be greater than zero")]
     InvalidEventThreshold,
     #[error("invalid rejection reason: must not be empty")]
