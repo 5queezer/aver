@@ -1023,6 +1023,8 @@ impl Store {
         embedding_model: &str,
         embedding: &[f32],
     ) -> Result<i64, Error> {
+        validate_vector_chunk_text(text)?;
+        validate_embedding_model(embedding_model)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let embedding_json = serde_json::to_string(embedding)?;
         self.conn.execute(
