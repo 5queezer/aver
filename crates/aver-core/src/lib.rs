@@ -269,6 +269,7 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
         || content.contains("BEGIN RSA PRIVATE KEY")
         || content.contains("BEGIN EC PRIVATE KEY")
         || content.contains("BEGIN DSA PRIVATE KEY")
+        || content.contains("BEGIN SSH2 ENCRYPTED PRIVATE KEY")
         || content.contains("PuTTY-User-Key-File-")
     {
         return Err(PrivacyRejection::PrivateKey);

@@ -317,3 +317,12 @@ fn privacy_filter_rejects_putty_private_key_header() {
         PrivacyRejection::PrivateKey
     );
 }
+
+#[test]
+fn privacy_filter_rejects_ssh2_private_key_header() {
+    let content = synthetic_token(&["---- BEGIN SSH2 ENCRYPTED ", "PRIVATE KEY ----"]);
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}
