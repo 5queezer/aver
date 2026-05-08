@@ -171,3 +171,20 @@ fn episodic_candidate_tools_cover_memory_pipeline() {
     assert_eq!(promoted.subject, "Aver");
     assert_eq!(promoted.source_refs, [format!("event:{}", event.id)]);
 }
+
+#[test]
+fn recall_tool_rejects_alpha_outside_unit_interval() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .recall(RecallParams {
+            query: "Stripe".to_string(),
+            alpha: Some(1.5),
+            hops: None,
+            top_k: Some(5),
+        })
+        .expect_err("invalid alpha should be rejected");
+
+    assert!(err.to_string().contains("alpha"));
+}

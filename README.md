@@ -24,7 +24,7 @@ The goal is a trustworthy substrate for coding agents that can:
 - **Structured claims** — memories are stored as `(subject, predicate, object)` claims with source references, confidence, status, and agent provenance.
 - **Privacy gate** — token/path/entropy checks run before writes; rejected content is not persisted.
 - **Keyword, vector, and hybrid recall primitives** — text recall is available through the CLI; vector chunks and hybrid ranking over active claims are implemented in the core crate.
-- **Adaptive HybridRAG weights** — structural graph questions lean toward graph context; broad summary questions lean toward vectors.
+- **Adaptive HybridRAG weights** — structural graph questions lean toward graph context; broad summary questions lean toward vectors; explicit alpha overrides are range-validated.
 - **Graph expansion and communities** — local claim neighborhoods and deterministic connected-component communities are available in core.
 - **Contradiction records and confidence decay** — contradictions are explicit audit records; consolidation can decay contradicted active claims and report merged/superseded/decayed counts.
 - **Deterministic code extraction** — `aver-extractor` uses Tree-sitter Rust to extract functions, imports, calls, structs, enums, traits, impl methods, tests, and code facts.

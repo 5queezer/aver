@@ -290,9 +290,13 @@ impl AverTools {
         let top_k = params.top_k.unwrap_or(5).clamp(1, 100);
         let mut claims = self.store.recall_text(&params.query)?;
         claims.truncate(top_k);
-        let _alpha = params
-            .alpha
-            .unwrap_or_else(|| aver_core::retrieval::HybridWeights::for_query(&params.query).alpha);
+        let _alpha = if let Some(alpha) = params.alpha {
+            aver_core::retrieval::HybridWeights::try_new(alpha)
+                .map_err(|err| anyhow::anyhow!("invalid alpha: {err}"))?
+                .alpha
+        } else {
+            aver_core::retrieval::HybridWeights::for_query(&params.query).alpha
+        };
         let _hops = params.hops.unwrap_or(2).clamp(1, 8);
         Ok(RecallView {
             triples: claims.into_iter().map(ClaimView::from).collect(),
