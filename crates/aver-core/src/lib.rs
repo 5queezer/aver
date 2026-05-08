@@ -238,6 +238,8 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
         || path.ends_with("/.sentryclirc")
         || path == ".npmrc"
         || path.ends_with("/.npmrc")
+        || path == ".pnpmrc"
+        || path.ends_with("/.pnpmrc")
         || path == ".yarnrc.yml"
         || path.ends_with("/.yarnrc.yml")
         || path == ".pypirc"

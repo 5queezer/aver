@@ -550,3 +550,11 @@ fn privacy_filter_rejects_npm_access_token() {
     let token = synthetic_token(&["npm", "_", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
     assert!(privacy_filter(&format!("NPM_TOKEN={token}")).is_err());
 }
+
+#[test]
+fn privacy_filter_path_rejects_pnpmrc_file() {
+    assert_eq!(
+        privacy_filter_path(".pnpmrc").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
