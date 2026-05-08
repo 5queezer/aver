@@ -1713,7 +1713,7 @@ fn validate_embedding_model(value: &str) -> Result<(), Error> {
 }
 
 fn validate_embedding_vector(value: &[f32]) -> Result<(), Error> {
-    if value.is_empty() {
+    if value.is_empty() || value.iter().any(|component| !component.is_finite()) {
         Err(Error::InvalidEmbeddingVector)
     } else {
         Ok(())
