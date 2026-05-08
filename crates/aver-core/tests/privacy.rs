@@ -240,3 +240,13 @@ fn privacy_filter_rejects_dsa_private_key_header() {
         PrivacyRejection::PrivateKey
     );
 }
+
+#[test]
+fn privacy_filter_rejects_encrypted_private_key_header() {
+    let content = synthetic_token(&["-----BEGIN ", "ENCRYPTED PRIVATE KEY-----"]);
+
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}
