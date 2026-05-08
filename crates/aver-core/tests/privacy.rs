@@ -2,59 +2,75 @@
 
 use aver_core::{Error, PrivacyRejection, Store, privacy_filter, privacy_filter_path};
 
+fn synthetic_token(parts: &[&str]) -> String {
+    parts.concat()
+}
+
 #[test]
 fn privacy_filter_rejects_aws_access_key() {
-    let result = privacy_filter("deploy key AWS_ACCESS_KEY_TEST_TOKEN should never persist");
+    let token = synthetic_token(&["AK", "IA", "ABCDEFGHIJKLMNOP"]);
+    let result = privacy_filter(&format!("deploy key {token} should never persist"));
 
     assert_eq!(result, Err(PrivacyRejection::AwsAccessKey));
 }
 
 #[test]
 fn privacy_filter_rejects_github_pat() {
-    let result = privacy_filter("token GITHUB_PAT_TEST_TOKEN");
+    let token = synthetic_token(&["gh", "p_", "abcdefghijklmnopqrstuvwxyz1234567890abcd"]);
+    let result = privacy_filter(&format!("token {token}"));
 
     assert_eq!(result, Err(PrivacyRejection::GitHubPat));
 }
 
 #[test]
 fn privacy_filter_rejects_fine_grained_github_pat() {
-    let result = privacy_filter("token GITHUB_FINE_GRAINED_PAT_TEST_TOKEN");
+    let token = synthetic_token(&["github", "_pat_", "11ABCDEFG0abcdefghijklmnopqrstuvwxyz"]);
+    let result = privacy_filter(&format!("token {token}"));
 
     assert_eq!(result, Err(PrivacyRejection::GitHubFineGrainedPat));
 }
 
 #[test]
 fn privacy_filter_rejects_jwt() {
-    let result =
-        privacy_filter("bearer JWT_TEST_TOKEN");
+    let token = synthetic_token(&[
+        "eyJhbGciOiJIUzI1NiJ9",
+        ".",
+        "eyJzdWIiOiIxMjM0NTY3ODkw",
+        ".signature123",
+    ]);
+    let result = privacy_filter(&format!("bearer {token}"));
 
     assert_eq!(result, Err(PrivacyRejection::Jwt));
 }
 
 #[test]
 fn privacy_filter_rejects_openai_key() {
-    let result = privacy_filter("OPENAI_API_KEY=OPENAI_TEST_TOKEN");
+    let token = synthetic_token(&["sk", "-", "abcdefghijklmnopqrstuvwxyz1234567890"]);
+    let result = privacy_filter(&format!("OPENAI_API_KEY={token}"));
 
     assert_eq!(result, Err(PrivacyRejection::OpenAiKey));
 }
 
 #[test]
 fn privacy_filter_rejects_anthropic_key() {
-    let result = privacy_filter("ANTHROPIC_API_KEY=ANTHROPIC_TEST_TOKEN");
+    let token = synthetic_token(&["sk", "-ant-", "abcdefghijklmnopqrstuvwxyz1234567890"]);
+    let result = privacy_filter(&format!("ANTHROPIC_API_KEY={token}"));
 
     assert_eq!(result, Err(PrivacyRejection::AnthropicKey));
 }
 
 #[test]
 fn privacy_filter_rejects_stripe_live_key() {
-    let result = privacy_filter("STRIPE_SECRET=STRIPE_TEST_TOKEN");
+    let token = synthetic_token(&["sk", "_live_", "abcdefghijklmnopqrstuvwxyz123456"]);
+    let result = privacy_filter(&format!("STRIPE_SECRET={token}"));
 
     assert_eq!(result, Err(PrivacyRejection::StripeLiveKey));
 }
 
 #[test]
 fn privacy_filter_rejects_private_key_header() {
-    let result = privacy_filter("PRIVATE_KEY_HEADER_TEST_TOKEN\nabc\n-----END PRIVATE KEY-----");
+    let marker = synthetic_token(&["-----BEGIN ", "PRIVATE KEY-----"]);
+    let result = privacy_filter(&format!("{marker}\nabc\n-----END PRIVATE KEY-----"));
 
     assert_eq!(result, Err(PrivacyRejection::PrivateKey));
 }
@@ -127,12 +143,8 @@ fn add_claim_rejects_secret_before_episodic_log_write() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
 
-    let result = store.add_claim(
-        "deployment",
-        "uses_key",
-        "AWS_ACCESS_KEY_TEST_TOKEN",
-        "test_session",
-    );
+    let token = synthetic_token(&["AK", "IA", "ABCDEFGHIJKLMNOP"]);
+    let result = store.add_claim("deployment", "uses_key", &token, "test_session");
 
     assert!(matches!(
         result,
