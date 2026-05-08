@@ -378,3 +378,11 @@ fn privacy_filter_path_rejects_npmrc_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_cargo_credentials_file() {
+    assert_eq!(
+        privacy_filter_path(".cargo/credentials.toml").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
