@@ -168,3 +168,11 @@ fn privacy_filter_path_rejects_relative_ssh_dir() {
         PrivacyRejection::SshPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_relative_aws_credentials_file() {
+    assert_eq!(
+        privacy_filter_path(".aws/credentials").unwrap_err(),
+        PrivacyRejection::AwsCredentialsPath
+    );
+}

@@ -230,7 +230,7 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
     if path.starts_with(".ssh/") || path.contains("/.ssh/") {
         return Err(PrivacyRejection::SshPath);
     }
-    if path.ends_with("/.aws/credentials") {
+    if path == ".aws/credentials" || path.ends_with("/.aws/credentials") {
         return Err(PrivacyRejection::AwsCredentialsPath);
     }
     if path.contains("/.config/") {
