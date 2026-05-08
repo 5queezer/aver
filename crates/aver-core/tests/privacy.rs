@@ -526,3 +526,9 @@ fn privacy_filter_rejects_slack_app_token() {
     ]);
     assert!(privacy_filter(&format!("SLACK_APP_TOKEN={token}")).is_err());
 }
+
+#[test]
+fn privacy_filter_rejects_gitlab_pat() {
+    let token = synthetic_token(&["gl", "pat-", "aaaaaaaaaaaaaaaaaaaa"]);
+    assert!(privacy_filter(&format!("GITLAB_TOKEN={token}")).is_err());
+}
