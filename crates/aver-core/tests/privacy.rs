@@ -210,3 +210,13 @@ fn privacy_filter_rejects_openssh_private_key_header() {
         PrivacyRejection::PrivateKey
     );
 }
+
+#[test]
+fn privacy_filter_rejects_rsa_private_key_header() {
+    let content = synthetic_token(&["-----BEGIN ", "RSA PRIVATE KEY-----"]);
+
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}
