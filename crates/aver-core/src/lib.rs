@@ -349,7 +349,9 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
     }
     if content
         .split(|ch: char| ch.is_whitespace() || ch == '=')
-        .any(|token| token.starts_with("xoxb-") && token.len() >= 20)
+        .any(|token| {
+            (token.starts_with("xoxb-") || token.starts_with("xoxp-")) && token.len() >= 20
+        })
     {
         return Err(PrivacyRejection::HighEntropy);
     }

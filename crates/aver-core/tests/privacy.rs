@@ -502,3 +502,15 @@ fn privacy_filter_rejects_slack_bot_token() {
     ]);
     assert!(privacy_filter(&format!("SLACK_BOT_TOKEN={token}")).is_err());
 }
+
+#[test]
+fn privacy_filter_rejects_slack_user_token() {
+    let token = synthetic_token(&[
+        "xo",
+        "xp-",
+        "111111111111-",
+        "222222222222-",
+        "aaaaaaaaaaaaaaaaaaaaaaaa",
+    ]);
+    assert!(privacy_filter(&format!("SLACK_USER_TOKEN={token}")).is_err());
+}
