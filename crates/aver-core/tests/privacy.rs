@@ -482,3 +482,11 @@ fn privacy_filter_path_rejects_pulumi_credentials() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_sentry_cli_config() {
+    assert_eq!(
+        privacy_filter_path(".sentryclirc").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
