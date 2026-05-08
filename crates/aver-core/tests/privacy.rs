@@ -308,3 +308,12 @@ fn privacy_filter_path_rejects_legacy_password_database_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_rejects_putty_private_key_header() {
+    let content = synthetic_token(&["PuTTY-User-Key-", "File-3: ssh-rsa"]);
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}
