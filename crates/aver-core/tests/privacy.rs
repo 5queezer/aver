@@ -602,3 +602,11 @@ fn privacy_filter_path_rejects_gradle_properties_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_bundle_config_file() {
+    assert_eq!(
+        privacy_filter_path(".bundle/config").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}

@@ -240,6 +240,8 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
         || path.ends_with("/.m2/settings.xml")
         || path == ".gradle/gradle.properties"
         || path.ends_with("/.gradle/gradle.properties")
+        || path == ".bundle/config"
+        || path.ends_with("/.bundle/config")
         || path == ".vault-token"
         || path.ends_with("/.vault-token")
         || path == ".sentryclirc"
