@@ -864,12 +864,15 @@ impl Store {
 
     pub fn reject_candidate_claim(&self, candidate_id: i64, reason: &str) -> Result<(), Error> {
         privacy_filter(reason)?;
-        self.conn.execute(
+        let rows_changed = self.conn.execute(
             "UPDATE candidate_claims
                 SET status = 'REJECTED', rejection_reason = ?1
               WHERE id = ?2",
             params![reason, candidate_id],
         )?;
+        if rows_changed == 0 {
+            return Err(Error::MissingCandidate { candidate_id });
+        }
         Ok(())
     }
 
@@ -1828,4 +1831,6 @@ pub enum Error {
     InvalidConfidence { value: f64 },
     #[error("candidate claim must cite an existing event: {event_id}")]
     MissingEventProvenance { event_id: i64 },
+    #[error("missing candidate claim: candidate {candidate_id} does not exist")]
+    MissingCandidate { candidate_id: i64 },
 }

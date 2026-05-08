@@ -255,3 +255,15 @@ fn propose_candidate_claim_rejects_empty_subject() {
 
     assert!(err.to_string().contains("subject"));
 }
+
+#[test]
+fn reject_candidate_claim_requires_existing_candidate() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .reject_candidate_claim(42, "not supported")
+        .expect_err("rejecting a missing candidate should fail");
+
+    assert!(err.to_string().contains("candidate"));
+}
