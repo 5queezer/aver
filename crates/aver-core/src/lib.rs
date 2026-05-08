@@ -539,6 +539,7 @@ impl Store {
         validate_claim_field("subject", write.subject)?;
         validate_claim_field("predicate", write.predicate)?;
         validate_claim_field("object", write.object)?;
+        validate_claim_field("source", write.source)?;
         if !(0.0..=1.0).contains(&write.confidence) {
             return Err(Error::InvalidConfidence {
                 value: write.confidence,

@@ -891,3 +891,16 @@ fn get_claim_requires_existing_claim() {
 
     assert!(err.to_string().contains("claim"));
 }
+
+#[test]
+fn add_claim_rejects_empty_source_before_log_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .add_claim("PaymentGateway", "depends_on", "StripeSDK", " ")
+        .expect_err("blank claim sources should be rejected before audit logging");
+
+    assert!(err.to_string().contains("source"));
+    assert!(!dir.path().join("log.jsonl").exists());
+}
