@@ -300,3 +300,11 @@ fn privacy_filter_path_rejects_password_database_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_legacy_password_database_file() {
+    assert_eq!(
+        privacy_filter_path("vault/team-passwords.kdb").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
