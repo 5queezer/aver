@@ -338,8 +338,14 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
         return Err(PrivacyRejection::AwsAccessKey);
     }
     if content
-        .split_whitespace()
+        .split(|ch: char| ch.is_whitespace() || ch == '=')
         .any(|token| token.starts_with("ghp_") && token.len() >= 40)
+    {
+        return Err(PrivacyRejection::GitHubPat);
+    }
+    if content
+        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .any(|token| token.starts_with("gho_") && token.len() >= 30)
     {
         return Err(PrivacyRejection::GitHubPat);
     }

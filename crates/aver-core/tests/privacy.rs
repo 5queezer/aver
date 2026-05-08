@@ -634,3 +634,9 @@ fn privacy_filter_path_rejects_azure_msal_cache_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_rejects_github_oauth_token() {
+    let token = synthetic_token(&["gh", "o_", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+    assert!(privacy_filter(&format!("GITHUB_OAUTH_TOKEN={token}")).is_err());
+}
