@@ -409,3 +409,16 @@ fn get_candidate_claim_requires_existing_candidate() {
 
     assert!(err.to_string().contains("candidate"));
 }
+
+#[test]
+fn record_event_rejects_empty_source_before_log_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .record_event("session-1", "message", "hello", " ")
+        .expect_err("blank event sources should be rejected before audit logging");
+
+    assert!(err.to_string().contains("source"));
+    assert!(!dir.path().join("events.jsonl").exists());
+}

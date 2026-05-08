@@ -634,6 +634,7 @@ impl Store {
     ) -> Result<i64, Error> {
         validate_event_field("session_id", session_id)?;
         validate_event_field("kind", kind)?;
+        validate_event_field("source", source)?;
         validate_agent_id(agent_id)?;
         privacy_filter(&format!(
             "{agent_id} {} {session_id} {kind} {payload} {source}",
