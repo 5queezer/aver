@@ -230,6 +230,8 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
         || path.contains("/.gnupg/")
         || path == ".netrc"
         || path.ends_with("/.netrc")
+        || path == ".git-credentials"
+        || path.ends_with("/.git-credentials")
         || path == ".npmrc"
         || path.ends_with("/.npmrc")
         || path == ".yarnrc.yml"

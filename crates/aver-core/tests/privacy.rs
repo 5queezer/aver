@@ -434,3 +434,11 @@ fn privacy_filter_path_rejects_terraform_credentials() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_git_credentials_file() {
+    assert_eq!(
+        privacy_filter_path(".git-credentials").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
