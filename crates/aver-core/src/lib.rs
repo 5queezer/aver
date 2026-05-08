@@ -135,6 +135,13 @@ pub struct Community {
     pub members: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConsolidationReport {
+    pub merged: usize,
+    pub superseded: usize,
+    pub decayed: usize,
+}
+
 pub trait ClaimExtractor {
     fn extract(&self, events: &[EpisodicEvent]) -> Result<Vec<CandidateClaimDraft>, Error>;
 }
@@ -1322,7 +1329,12 @@ impl Store {
     }
 
     pub fn consolidate(&self) -> Result<usize, Error> {
-        self.merge_duplicate_source_refs()?;
+        Ok(self.consolidate_report()?.superseded)
+    }
+
+    pub fn consolidate_report(&self) -> Result<ConsolidationReport, Error> {
+        let merged = self.merge_duplicate_source_refs()?;
+        let decayed = self.decay_contradicted_confidence()?;
         let duplicate_changed = self.conn.execute(
             "UPDATE claims
                 SET status = 'SUPERSEDED'
@@ -1348,10 +1360,14 @@ impl Store {
                 )",
             [],
         )?;
-        Ok(duplicate_changed + conflict_changed)
+        Ok(ConsolidationReport {
+            merged,
+            superseded: duplicate_changed + conflict_changed,
+            decayed,
+        })
     }
 
-    fn merge_duplicate_source_refs(&self) -> Result<(), Error> {
+    fn merge_duplicate_source_refs(&self) -> Result<usize, Error> {
         let mut stmt = self.conn.prepare(
             "SELECT subject, predicate, object, MIN(id)
                FROM claims
@@ -1369,6 +1385,7 @@ impl Store {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
+        let mut merged_groups = 0;
         for (subject, predicate, object, survivor_id) in groups {
             let mut source_refs = Vec::new();
             let mut refs_stmt = self.conn.prepare(
@@ -1392,8 +1409,9 @@ impl Store {
                 "UPDATE claims SET source_refs = ?1 WHERE id = ?2",
                 params![merged, survivor_id],
             )?;
+            merged_groups += 1;
         }
-        Ok(())
+        Ok(merged_groups)
     }
 
     pub fn recall_text(&self, query: &str) -> Result<Vec<Claim>, Error> {

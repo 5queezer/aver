@@ -349,12 +349,11 @@ impl AverTools {
     }
 
     pub fn consolidate(&self, _params: ConsolidateParams) -> anyhow::Result<ConsolidateView> {
-        let decayed = self.store.decay_contradicted_confidence()?;
-        let superseded = self.store.consolidate()?;
+        let report = self.store.consolidate_report()?;
         Ok(ConsolidateView {
-            merged: 0,
-            superseded,
-            decayed,
+            merged: report.merged,
+            superseded: report.superseded,
+            decayed: report.decayed,
         })
     }
 

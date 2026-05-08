@@ -723,3 +723,43 @@ fn confidence_decay_lowers_active_contradicted_claim_confidence() {
     assert_eq!(decayed, 1);
     assert_eq!(store.get_claim(claim_id).unwrap().confidence, 0.85);
 }
+
+#[test]
+fn consolidate_report_counts_merged_superseded_and_decayed_claims() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let duplicate_a = store
+        .add_claim("PaymentGateway", "depends_on", "StripeSDK", "session-1")
+        .unwrap();
+    let duplicate_b = store
+        .add_claim("PaymentGateway", "depends_on", "StripeSDK", "session-2")
+        .unwrap();
+    let stale = store
+        .add_claim("StripeSDK", "status", "deprecated", "session-3")
+        .unwrap();
+    store
+        .add_claim("StripeSDK", "status", "current", "session-4")
+        .unwrap();
+    store
+        .contradict(stale, "vendor docs now say current", None)
+        .unwrap();
+
+    let report = store.consolidate_report().unwrap();
+
+    assert_eq!(report.merged, 1);
+    assert_eq!(report.superseded, 2);
+    assert_eq!(report.decayed, 1);
+    assert_eq!(
+        store.get_claim(duplicate_a).unwrap().source_refs,
+        vec!["session-1".to_string(), "session-2".to_string()]
+    );
+    assert_eq!(
+        store.get_claim(duplicate_b).unwrap().status,
+        ClaimStatus::Superseded
+    );
+    assert_eq!(
+        store.get_claim(stale).unwrap().status,
+        ClaimStatus::Superseded
+    );
+    assert_eq!(store.get_claim(stale).unwrap().confidence, 0.85);
+}

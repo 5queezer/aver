@@ -26,7 +26,7 @@ The goal is a trustworthy substrate for coding agents that can:
 - **Keyword, vector, and hybrid recall primitives** — text recall is available through the CLI; vector chunks and hybrid ranking are implemented in the core crate.
 - **Adaptive HybridRAG weights** — structural graph questions lean toward graph context; broad summary questions lean toward vectors.
 - **Graph expansion and communities** — local claim neighborhoods and deterministic connected-component communities are available in core.
-- **Contradiction records and confidence decay** — contradictions are explicit audit records; consolidation can decay contradicted active claims.
+- **Contradiction records and confidence decay** — contradictions are explicit audit records; consolidation can decay contradicted active claims and report merged/superseded/decayed counts.
 - **Deterministic code extraction** — `aver-extractor` uses Tree-sitter Rust to extract functions, imports, calls, structs, enums, traits, impl methods, tests, and code facts.
 - **Candidate claim workflow** — episodic events can produce staged claims that are promoted or rejected explicitly.
 - **MCP/OAuth server** — `aver-server` exposes memory tools over Streamable HTTP MCP behind a local OAuth-style token flow, including the ADR-0008 five-tool surface.
@@ -91,7 +91,7 @@ The design maps to the ADRs:
 - **Vector store** — `vector_chunks` with JSON-serialized embeddings today; sqlite-vss-backed nearest-neighbor indexing is planned.
 - **Extraction** — Rust Tree-sitter extractor turns source code into structured facts.
 - **Graph tools** — recall, expand, add-triple, contradict, and consolidate map the ADR-0008 surface onto the local claim store.
-- **Consolidation** — duplicate/conflict handling supersedes older claims, and explicit contradictions can decay confidence.
+- **Consolidation** — duplicate/conflict handling supersedes older claims, explicit contradictions can decay confidence, and report counts summarize merged, superseded, and decayed claims.
 
 For a deeper implementation walkthrough, see [`doc/how-it-works.md`](doc/how-it-works.md). For design rationale, see the ADRs in [`doc/adr/`](doc/adr/).
 
