@@ -4,7 +4,7 @@ use aver_core::Store;
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "aver", about = "Aver local-first claim memory CLI")]
+#[command(name = "aver", version, about = "Aver local-first claim memory CLI")]
 struct Cli {
     /// Directory containing db.sqlite and log.jsonl.
     #[arg(long, default_value = ".aver")]
