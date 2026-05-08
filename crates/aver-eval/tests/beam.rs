@@ -38,6 +38,19 @@ fn beam_judge_response_parses_and_clamps_scores() {
 }
 
 #[test]
+fn beam_redacts_secret_like_tokens_before_ingestion() {
+    let raw = "Configure API_KEY=q7Zp9Lm2Kx8Vn4Rb6Ty0Wc3Ae5Gu for local testing";
+
+    let sanitized = aver_eval::beam::sanitize_memory_text(raw);
+
+    assert_eq!(
+        sanitized,
+        "Configure API_KEY=[REDACTED_SECRET] for local testing"
+    );
+    assert!(aver_core::privacy_filter(&sanitized).is_ok());
+}
+
+#[test]
 fn beam_answer_prompt_contains_question_reference_and_context() {
     let prompt = aver_eval::beam::answer_prompt(
         "What language?",

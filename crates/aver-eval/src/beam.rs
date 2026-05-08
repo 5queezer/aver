@@ -264,10 +264,11 @@ fn ingest_conversation(
         if message.content.trim().is_empty() {
             continue;
         }
+        let content = sanitize_memory_text(&message.content);
         let object = if message.time_anchor.trim().is_empty() {
-            message.content.clone()
+            content
         } else {
-            format!("[{}] {}", message.time_anchor, message.content)
+            format!("[{}] {}", message.time_anchor, content)
         };
         let id = store.add_claim(
             &format!("conversation:{}:message:{i}", conv.id),
@@ -332,6 +333,44 @@ impl OllamaGenerateClient {
             .map_err(|err| anyhow::anyhow!("ollama generate: {err}"))?
             .into_json::<OllamaGenerateResponse>()?;
         Ok(response.response)
+    }
+}
+
+pub fn sanitize_memory_text(content: &str) -> String {
+    let mut sanitized = String::with_capacity(content.len());
+    let mut token = String::new();
+    for ch in content.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.') {
+            token.push(ch);
+        } else {
+            push_sanitized_token(&mut sanitized, &token);
+            token.clear();
+            sanitized.push(ch);
+        }
+    }
+    push_sanitized_token(&mut sanitized, &token);
+    sanitized
+}
+
+fn push_sanitized_token(output: &mut String, token: &str) {
+    if token.is_empty() {
+        return;
+    }
+    if token.len() >= 20
+        && matches!(
+            aver_core::privacy_filter(&format!("secret {token}")),
+            Err(aver_core::PrivacyRejection::HighEntropy)
+                | Err(aver_core::PrivacyRejection::AwsAccessKey)
+                | Err(aver_core::PrivacyRejection::GitHubPat)
+                | Err(aver_core::PrivacyRejection::Jwt)
+                | Err(aver_core::PrivacyRejection::OpenAiKey)
+                | Err(aver_core::PrivacyRejection::AnthropicKey)
+                | Err(aver_core::PrivacyRejection::StripeLiveKey)
+        )
+    {
+        output.push_str("[REDACTED_SECRET]");
+    } else {
+        output.push_str(token);
     }
 }
 

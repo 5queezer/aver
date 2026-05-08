@@ -5,6 +5,41 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
+if [ "${AVER_AUTORESEARCH_TARGET:-}" = "beam" ]; then
+  BEAM_JSON=$(mktemp /tmp/aver-beam100k-autoresearch.XXXXXX.json)
+  BEAM_ARGS=(
+    --dataset "${BEAM_DATASET_PATH:-../karta/data/beam-100k.json}"
+    --embedding-model "${BEAM_EMBEDDING_MODEL:-nomic-embed-text}"
+    --generation-model "${BEAM_GENERATION_MODEL:-gemma4}"
+    --top-k "${BEAM_TOP_K:-12}"
+  )
+  if [ -n "${BEAM_LIMIT_CONVERSATIONS:-}" ]; then
+    BEAM_ARGS+=(--limit-conversations "$BEAM_LIMIT_CONVERSATIONS")
+  fi
+  if [ -n "${BEAM_LIMIT_QUESTIONS:-}" ]; then
+    BEAM_ARGS+=(--limit-questions "$BEAM_LIMIT_QUESTIONS")
+  fi
+
+  cargo run -q -p aver-eval --bin aver-beam100k -- "${BEAM_ARGS[@]}" > "$BEAM_JSON"
+  BEAM_EXIT=$?
+  if [ "$BEAM_EXIT" -eq 0 ]; then
+    cat "$BEAM_JSON"
+    python3 - "$BEAM_JSON" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+print("METRIC beam_score_pct={}".format(data["mean_score"] * 100.0))
+print("METRIC beam_questions={}".format(data["questions"]))
+print("METRIC beam_rubric_checks={}".format(data["rubric_checks"]))
+for ability, score in sorted(data.get("ability_scores", {}).items()):
+    safe = ability.replace("-", "_")
+    print("METRIC beam_{}_pct={}".format(safe, score.get("mean_score", 0.0) * 100.0))
+PY
+  fi
+  rm -f "$BEAM_JSON"
+  exit "$BEAM_EXIT"
+fi
+
 TEST_OUT=$(cargo test --workspace -q 2>&1)
 TEST_EXIT=$?
 
