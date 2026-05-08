@@ -298,7 +298,12 @@ impl AverTools {
             aver_core::retrieval::HybridWeights::for_query(&params.query).alpha
         };
         let hops = validate_hops(params.hops.unwrap_or(2))?;
-        let subgraph = self.store.expand(&params.query, hops, None)?;
+        let mut subgraph = self.store.expand(&params.query, hops, None)?;
+        if subgraph.edges.is_empty()
+            && let Some(first_claim) = claims.first()
+        {
+            subgraph = self.store.expand(&first_claim.subject, hops, None)?;
+        }
         Ok(RecallView {
             triples: claims.into_iter().map(ClaimView::from).collect(),
             chunks: Vec::new(),
