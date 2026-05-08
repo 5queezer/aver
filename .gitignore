@@ -1,3 +1,4 @@
 /target
+.aver/
 **/*.rs.bk
 Cargo.lock.bak
