@@ -426,3 +426,11 @@ fn privacy_filter_path_rejects_aws_config_file() {
         PrivacyRejection::AwsCredentialsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_terraform_credentials() {
+    assert_eq!(
+        privacy_filter_path(".terraform.d/credentials.tfrc.json").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
