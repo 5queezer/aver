@@ -326,7 +326,11 @@ impl AverTools {
     }
 
     pub fn add_triple(&self, params: AddTripleParams) -> anyhow::Result<AddTripleView> {
-        let _confidence = params.confidence.unwrap_or(0.95).clamp(0.0, 1.0);
+        if let Some(confidence) = params.confidence
+            && !(0.0..=1.0).contains(&confidence)
+        {
+            anyhow::bail!("invalid confidence: must be between 0 and 1");
+        }
         let id = self.store.add_claim(
             &params.subject,
             &params.predicate,

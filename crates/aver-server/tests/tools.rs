@@ -188,3 +188,21 @@ fn recall_tool_rejects_alpha_outside_unit_interval() {
 
     assert!(err.to_string().contains("alpha"));
 }
+
+#[test]
+fn add_triple_rejects_confidence_outside_unit_interval() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .add_triple(AddTripleParams {
+            subject: "PaymentGateway".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "StripeSDK".to_string(),
+            confidence: Some(-0.1),
+            source: "agent-test".to_string(),
+        })
+        .expect_err("invalid confidence should be rejected");
+
+    assert!(err.to_string().contains("confidence"));
+}
