@@ -461,3 +461,15 @@ fn list_vector_chunks_for_claim_requires_existing_claim() {
 
     assert!(err.to_string().contains("claim"));
 }
+
+#[test]
+fn get_vector_chunk_requires_existing_chunk() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .get_vector_chunk(42)
+        .expect_err("getting a missing vector chunk should fail with chunk context");
+
+    assert!(err.to_string().contains("vector chunk"));
+}

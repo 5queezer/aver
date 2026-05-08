@@ -1122,7 +1122,10 @@ impl Store {
                     })
                 },
             )
-            .map_err(Error::from)
+            .map_err(|err| match err {
+                rusqlite::Error::QueryReturnedNoRows => Error::MissingVectorChunk { chunk_id: id },
+                other => Error::Sqlite(other),
+            })
     }
 
     /// List vector chunk metadata for a claim in stable insertion order.
@@ -1952,4 +1955,6 @@ pub enum Error {
     InvalidCandidateStatusFilter { status: String },
     #[error("missing claim: claim {claim_id} does not exist")]
     MissingClaim { claim_id: i64 },
+    #[error("missing vector chunk: vector chunk {chunk_id} does not exist")]
+    MissingVectorChunk { chunk_id: i64 },
 }
