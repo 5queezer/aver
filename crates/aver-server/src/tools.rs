@@ -405,6 +405,9 @@ impl AverTools {
         &self,
         params: ShouldExtractMemoriesParams,
     ) -> anyhow::Result<ShouldExtractMemoriesView> {
+        if params.event_threshold == 0 {
+            anyhow::bail!("invalid event_threshold: must be at least 1");
+        }
         Ok(ShouldExtractMemoriesView {
             should_extract: self
                 .store

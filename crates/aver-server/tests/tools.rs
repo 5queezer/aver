@@ -438,3 +438,18 @@ fn consolidate_tool_rejects_unsupported_scope() {
 
     assert!(err.to_string().contains("scope"));
 }
+
+#[test]
+fn should_extract_memories_rejects_zero_event_threshold() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .should_extract_memories(ShouldExtractMemoriesParams {
+            session_id: "s1".to_string(),
+            event_threshold: 0,
+        })
+        .expect_err("zero threshold should be rejected");
+
+    assert!(err.to_string().contains("event_threshold"));
+}
