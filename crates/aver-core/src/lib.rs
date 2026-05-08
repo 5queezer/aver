@@ -264,6 +264,7 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
         || path.ends_with("/.kube/config")
         || path == ".azure/accessTokens.json"
         || path.ends_with("/.azure/accessTokens.json")
+        || path.ends_with("application_default_credentials.json")
         || path == ".terraform.d/credentials.tfrc.json"
         || path.ends_with("/.terraform.d/credentials.tfrc.json")
         || path == ".pulumi/credentials.json"

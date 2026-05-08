@@ -610,3 +610,11 @@ fn privacy_filter_path_rejects_bundle_config_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_gcloud_adc_file() {
+    assert_eq!(
+        privacy_filter_path("gcloud/application_default_credentials.json").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
