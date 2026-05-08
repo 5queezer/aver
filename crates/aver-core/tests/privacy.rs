@@ -458,3 +458,11 @@ fn privacy_filter_path_rejects_rubygems_credentials() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_oci_config_file() {
+    assert_eq!(
+        privacy_filter_path(".oci/config").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}

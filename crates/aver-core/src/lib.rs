@@ -250,6 +250,8 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
         || path.ends_with("/.azure/accessTokens.json")
         || path == ".terraform.d/credentials.tfrc.json"
         || path.ends_with("/.terraform.d/credentials.tfrc.json")
+        || path == ".oci/config"
+        || path.ends_with("/.oci/config")
         || path.ends_with(".kdbx")
         || path.ends_with(".kdb")
     {
