@@ -1,6 +1,7 @@
 //! Aver core: storage, episodic log, claim CRUD.
 //! See doc/adr/ for architecture decisions.
 
+pub mod extractor;
 pub mod retrieval;
 pub mod vector;
 
@@ -72,6 +73,14 @@ const ENTITY_ONTOLOGY: &[(&str, Option<&str>)] = &[
     ("Bug", Some("Concept")),
     ("Pref", Some("Concept")),
     ("Constraint", Some("Concept")),
+    // Agent-history entity types (ADR-0016)
+    ("ClaudeSession", Some("Process")),
+    ("ClaudeEvent", Some("Concept")),
+    ("ClaudeContent", Some("Asset")),
+    ("Project", Some("Asset")),
+    ("ProjectPath", Some("File")),
+    ("ClaudeHistory", Some("Asset")),
+    ("ClaudeHistoryFile", Some("File")),
 ];
 
 const PREDICATE_ONTOLOGY: &[(&str, Option<&str>)] = &[
@@ -1180,7 +1189,7 @@ impl Store {
             confidence: write.confidence,
         };
         append_jsonl(&self.log_path, &entry)?;
-        append_jsonl(&self.agent_log_path(write.agent_id), &entry)?;
+        append_jsonl(&self.agent_log_path(write.agent_id)?, &entry)?;
 
         self.ensure_entity(write.subject, now)?;
         self.ensure_entity(write.object, now)?;
@@ -1245,13 +1254,15 @@ impl Store {
             .unwrap_or(0))
     }
 
-    fn agent_log_path(&self, agent_id: &str) -> PathBuf {
-        self.log_path
+    fn agent_log_path(&self, agent_id: &str) -> Result<PathBuf, Error> {
+        validate_agent_id(agent_id)?;
+        Ok(self
+            .log_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("agents")
             .join(agent_id)
-            .join("log.jsonl")
+            .join("log.jsonl"))
     }
 
     pub fn record_event(
@@ -1816,7 +1827,7 @@ impl Store {
             confidence: candidate.confidence,
         };
         append_jsonl(&self.log_path, &entry)?;
-        append_jsonl(&self.agent_log_path(&event.agent_id), &entry)?;
+        append_jsonl(&self.agent_log_path(&event.agent_id)?, &entry)?;
         self.ensure_entity(&candidate.subject, now)?;
         self.ensure_entity(&candidate.object, now)?;
 
@@ -1887,27 +1898,133 @@ impl Store {
         if let Some(status) = status {
             validate_candidate_status_filter(status)?;
         }
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id FROM candidate_claims ORDER BY id")?;
-        let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
+        const CANDIDATE_COLUMNS: &str = "candidate_claims.id, candidate_claims.event_id,
+            candidate_claims.subject, candidate_claims.predicate, candidate_claims.object,
+            candidate_claims.provenance, candidate_claims.confidence, candidate_claims.status,
+            candidate_claims.promoted_claim_id, candidate_claims.rejection_reason";
+        let (sql, bind_status, bind_session): (String, Option<&str>, Option<&str>) = match (
+            status, session_id,
+        ) {
+            (Some(status), Some(session_id)) => (
+                format!(
+                    "SELECT {CANDIDATE_COLUMNS}
+                           FROM candidate_claims
+                           JOIN episodic_events ON episodic_events.id = candidate_claims.event_id
+                          WHERE candidate_claims.status = ?1 AND episodic_events.session_id = ?2
+                          ORDER BY candidate_claims.id"
+                ),
+                Some(status),
+                Some(session_id),
+            ),
+            (Some(status), None) => (
+                format!(
+                    "SELECT {CANDIDATE_COLUMNS} FROM candidate_claims WHERE status = ?1 ORDER BY id"
+                ),
+                Some(status),
+                None,
+            ),
+            (None, Some(session_id)) => (
+                format!(
+                    "SELECT {CANDIDATE_COLUMNS}
+                           FROM candidate_claims
+                           JOIN episodic_events ON episodic_events.id = candidate_claims.event_id
+                          WHERE episodic_events.session_id = ?1
+                          ORDER BY candidate_claims.id"
+                ),
+                None,
+                Some(session_id),
+            ),
+            (None, None) => (
+                format!("SELECT {CANDIDATE_COLUMNS} FROM candidate_claims ORDER BY id"),
+                None,
+                None,
+            ),
+        };
+        let mut stmt = self.conn.prepare(&sql)?;
+        let map_candidate = |row: &rusqlite::Row<'_>| {
+            let provenance_str = row.get::<usize, String>(5)?;
+            let provenance = Provenance::from_str(&provenance_str).map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(err))
+            })?;
+            Ok(CandidateClaim {
+                id: row.get(0)?,
+                event_id: row.get(1)?,
+                subject: row.get(2)?,
+                predicate: row.get(3)?,
+                object: row.get(4)?,
+                provenance,
+                confidence: row.get(6)?,
+                status: row.get(7)?,
+                promoted_claim_id: row.get(8)?,
+                rejection_reason: row.get(9)?,
+            })
+        };
+        let rows = match (bind_status, bind_session) {
+            (Some(status), Some(session_id)) => stmt
+                .query_map(params![status, session_id], map_candidate)?
+                .collect::<Result<Vec<_>, _>>()?,
+            (Some(status), None) => stmt
+                .query_map([status], map_candidate)?
+                .collect::<Result<Vec<_>, _>>()?,
+            (None, Some(session_id)) => stmt
+                .query_map([session_id], map_candidate)?
+                .collect::<Result<Vec<_>, _>>()?,
+            (None, None) => stmt
+                .query_map([], map_candidate)?
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        Ok(rows)
+    }
+
+    /// List candidate claims for a specific event.
+    pub fn list_candidate_claims_for_event(
+        &self,
+        event_id: i64,
+    ) -> Result<Vec<CandidateClaim>, Error> {
+        if !self.event_exists(event_id)? {
+            return Err(Error::MissingEventProvenance { event_id });
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT id, event_id, subject, predicate, object, provenance, confidence, status, promoted_claim_id, rejection_reason
+             FROM candidate_claims WHERE event_id = ?1",
+        )?;
+        let rows = stmt.query_map([event_id], |row| {
+            let provenance_str = row.get::<usize, String>(5)?;
+            let provenance = Provenance::from_str(&provenance_str).map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(err))
+            })?;
+            Ok(CandidateClaim {
+                id: row.get(0)?,
+                event_id: row.get(1)?,
+                subject: row.get(2)?,
+                predicate: row.get(3)?,
+                object: row.get(4)?,
+                provenance,
+                confidence: row.get(6)?,
+                status: row.get(7)?,
+                promoted_claim_id: row.get(8)?,
+                rejection_reason: row.get(9)?,
+            })
+        })?;
         let mut candidates = Vec::new();
         for row in rows {
-            let candidate = self.get_candidate_claim(row?)?;
-            if let Some(status) = status
-                && candidate.status != status
-            {
-                continue;
-            }
-            if let Some(session_id) = session_id {
-                let event = self.get_event(candidate.event_id)?;
-                if event.session_id != session_id {
-                    continue;
-                }
-            }
-            candidates.push(candidate);
+            candidates.push(row?);
         }
         Ok(candidates)
+    }
+
+    /// Add a contradiction record for a claim.
+    pub fn add_contradiction(&self, claim_id: i64, reason: &str) -> Result<i64, Error> {
+        validate_claim_field("reason", reason)?;
+        self.privacy_filter_recording(reason)?;
+        self.ensure_claim_exists(claim_id)?;
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.conn.execute(
+            "INSERT INTO contradictions (claim_id, reason, created_at)
+             VALUES (?1, ?2, ?3)",
+            params![claim_id, reason, now],
+        )?;
+        Ok(self.conn.last_insert_rowid())
     }
 
     pub fn get_candidate_claim(&self, id: i64) -> Result<CandidateClaim, Error> {
@@ -2132,6 +2249,105 @@ impl Store {
             chunks.push(row?);
         }
         Ok(chunks)
+    }
+
+    /// Returns how many vector_chunks have non-null embeddings vs total.
+    pub fn vector_chunk_embedding_status(&self) -> Result<(usize, usize), Error> {
+        let total: usize =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM vector_chunks", [], |row| row.get(0))?;
+        let indexed: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM vector_chunks WHERE embedding_json IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok((indexed, total))
+    }
+
+    /// Backfill stored embeddings for any vector_chunks that have no embedding yet,
+    /// using the provided EmbeddingClient. Returns how many were backfilled.
+    pub fn backfill_vector_embeddings(
+        &self,
+        client: &dyn crate::vector::EmbeddingClient,
+    ) -> Result<usize, Error> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, text FROM vector_chunks WHERE embedding_json IS NULL")?;
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        let mut count = 0;
+        for (id, text) in rows {
+            let embedding = client.embed(&text)?;
+            let embedding_json = serde_json::to_string(&embedding)?;
+            self.conn.execute(
+                "UPDATE vector_chunks SET embedding_json = ?1 WHERE id = ?2",
+                params![embedding_json, id],
+            )?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Recall claims ranked by cosine similarity to the query embedding,
+    /// combined with text-search results (best score per claim_id wins).
+    pub fn recall_text_with_embedding(
+        &self,
+        query: &str,
+        client: &dyn crate::vector::EmbeddingClient,
+    ) -> Result<Vec<Claim>, Error> {
+        let query_embedding = client.embed(query)?;
+
+        // Score each claim that has a stored embedding.
+        let mut scores: HashMap<i64, f64> = HashMap::new();
+        let mut stmt = self.conn.prepare(
+            "SELECT claim_id, embedding_json
+               FROM vector_chunks
+              WHERE embedding_json IS NOT NULL
+              ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+        for row in rows {
+            let (claim_id, embedding_json) = row?;
+            if let Some(embedding) = parse_optional_embedding(embedding_json)?
+                && let Some(score) = vector::normalized_cosine_score(&query_embedding, &embedding)
+            {
+                scores
+                    .entry(claim_id)
+                    .and_modify(|current| *current = current.max(f64::from(score)))
+                    .or_insert(f64::from(score));
+            }
+        }
+        drop(stmt);
+
+        // Merge with text-search results.
+        let text_claims = self.recall_text(query).unwrap_or_default();
+        let text_score_base = 0.5_f64;
+        for claim in &text_claims {
+            scores
+                .entry(claim.id)
+                .and_modify(|current| *current = current.max(text_score_base))
+                .or_insert(text_score_base);
+        }
+
+        let mut candidates: Vec<(f64, Claim)> = scores
+            .keys()
+            .copied()
+            .filter_map(|claim_id| {
+                self.get_claim(claim_id)
+                    .ok()
+                    .filter(|c| c.status == ClaimStatus::Active)
+                    .map(|c| (scores[&claim_id], c))
+            })
+            .collect();
+        candidates.sort_by(|(a_score, a_claim), (b_score, b_claim)| {
+            b_score
+                .total_cmp(a_score)
+                .then_with(|| a_claim.id.cmp(&b_claim.id))
+        });
+        Ok(candidates.into_iter().map(|(_, c)| c).collect())
     }
 
     /// Rank persisted vector chunks by normalized cosine similarity to the

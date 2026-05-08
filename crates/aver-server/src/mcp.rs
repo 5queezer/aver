@@ -10,11 +10,12 @@ use rmcp::{
 use serde::Deserialize;
 
 use crate::tools::{
-    AddTripleParams, AssembleCompactionSummaryParams, AverTools, ConsolidateParams,
-    ContradictParams, ExpandParams, ListCandidateClaimsParams, PromoteCandidateClaimParams,
-    ProposeCandidateClaimParams, RecallObservationParams, RecallParams as CoreRecallParams,
-    RecordEventParams, RecordObservationParams, RejectCandidateClaimParams,
-    RememberClaimParams as CoreRememberClaimParams, ShouldExtractMemoriesParams,
+    AddTripleParams, AddVectorChunkParams, AssembleCompactionSummaryParams, AverTools,
+    ConsolidateParams, ContradictParams, ExpandParams, ListCandidateClaimsParams,
+    PromoteCandidateClaimParams, ProposeCandidateClaimParams, RecallObservationParams,
+    RecallParams as CoreRecallParams, RecordEventParams, RecordObservationParams,
+    RejectCandidateClaimParams, RememberClaimParams as CoreRememberClaimParams,
+    ShouldExtractMemoriesParams,
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -348,6 +349,25 @@ impl AverMcpService {
         json_tool_result(result, "assemble_compaction_summary")
     }
 
+    #[tool(description = "Attach a text chunk to a claim for vector indexing.")]
+    async fn add_vector_chunk(
+        &self,
+        Parameters(params): Parameters<AddVectorChunkParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .add_vector_chunk(params);
+        json_tool_result(result, "add_vector_chunk")
+    }
+
     #[tool(description = "Recall durable Aver claims by text query.")]
     async fn recall(
         &self,
@@ -410,7 +430,7 @@ impl ServerHandler for AverMcpService {
                     .with_icons(vec![Icon::new(icon_url).with_mime_type("image/svg+xml")]),
             )
             .with_instructions(
-                "Available tools: recall, expand, add_triple, contradict, consolidate, remember_claim, record_event, should_extract_memories, propose_candidate_claim, list_candidate_claims, promote_candidate_claim, reject_candidate_claim, record_observation, recall_observation, assemble_compaction_summary.".to_string(),
+                "Available tools: recall, expand, add_triple, contradict, consolidate, remember_claim, record_event, should_extract_memories, propose_candidate_claim, list_candidate_claims, promote_candidate_claim, reject_candidate_claim, record_observation, recall_observation, assemble_compaction_summary, add_vector_chunk.".to_string(),
             )
     }
 }

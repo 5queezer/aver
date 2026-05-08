@@ -46,7 +46,12 @@ async fn oauth_token_route_exchanges_authorization_code_with_pkce() {
     let db = AuthDb::open(&auth_db_path).unwrap();
     let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
     let code = db
-        .store_authorization_code("client-1", "user-1", &pkce_s256_challenge(verifier))
+        .store_authorization_code(
+            "client-1",
+            "user-1",
+            &pkce_s256_challenge(verifier),
+            "http://localhost:8080/callback",
+        )
         .unwrap();
     drop(db);
 
@@ -60,8 +65,9 @@ async fn oauth_token_route_exchanges_authorization_code_with_pkce() {
         local_authorization_token: None,
     };
     let app = build_router(config).unwrap();
+    let redirect = "http://localhost:8080/callback";
     let body = format!(
-        "grant_type=authorization_code&code={code}&client_id=client-1&code_verifier={verifier}"
+        "grant_type=authorization_code&code={code}&client_id=client-1&code_verifier={verifier}&redirect_uri={redirect}"
     );
 
     let response = app

@@ -47,7 +47,9 @@ impl AuthDb {
                 client_id      TEXT NOT NULL,
                 user_id        TEXT NOT NULL,
                 code_challenge TEXT NOT NULL,
+                redirect_uri   TEXT NOT NULL DEFAULT '',
                 used_at        INTEGER,
+                expires_at     INTEGER NOT NULL DEFAULT 0,
                 created_at     INTEGER NOT NULL
             );
 
@@ -64,6 +66,14 @@ impl AuthDb {
                 created_at INTEGER NOT NULL
             );",
         )?;
+        // Migrate existing DBs that lack the new columns (SQLite returns an
+        // error if the column already exists; we intentionally ignore it).
+        let _ = conn.execute_batch(
+            "ALTER TABLE authorization_codes ADD COLUMN redirect_uri TEXT NOT NULL DEFAULT '';",
+        );
+        let _ = conn.execute_batch(
+            "ALTER TABLE authorization_codes ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0;",
+        );
         Ok(Self { conn })
     }
 
@@ -145,13 +155,24 @@ impl AuthDb {
         client_id: &str,
         user_id: &str,
         code_challenge: &str,
+        redirect_uri: &str,
     ) -> anyhow::Result<String> {
         let code = uuid::Uuid::new_v4().to_string();
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let expires_at = now + 600; // 10 minutes
         self.conn.execute(
-            "INSERT INTO authorization_codes (code, client_id, user_id, code_challenge, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![code, client_id, user_id, code_challenge, now],
+            "INSERT INTO authorization_codes
+             (code, client_id, user_id, code_challenge, redirect_uri, expires_at, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                code,
+                client_id,
+                user_id,
+                code_challenge,
+                redirect_uri,
+                expires_at,
+                now
+            ],
         )?;
         Ok(code)
     }
@@ -161,9 +182,10 @@ impl AuthDb {
         code: &str,
         client_id: &str,
         code_verifier: &str,
+        redirect_uri: &str,
     ) -> anyhow::Result<String> {
         Ok(self
-            .exchange_authorization_code_for_tokens(code, client_id, code_verifier)?
+            .exchange_authorization_code_for_tokens(code, client_id, code_verifier, redirect_uri)?
             .access_token)
     }
 
@@ -172,18 +194,30 @@ impl AuthDb {
         code: &str,
         client_id: &str,
         code_verifier: &str,
+        redirect_uri: &str,
     ) -> anyhow::Result<TokenPair> {
-        let (stored_client_id, user_id, code_challenge, used_at): (
+        let (stored_client_id, user_id, code_challenge, stored_redirect_uri, used_at, expires_at): (
+            String,
             String,
             String,
             String,
             Option<i64>,
+            i64,
         ) = self.conn.query_row(
-            "SELECT client_id, user_id, code_challenge, used_at
+            "SELECT client_id, user_id, code_challenge, redirect_uri, used_at, expires_at
                FROM authorization_codes
               WHERE code = ?1",
             [code],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
         )?;
 
         anyhow::ensure!(used_at.is_none(), "authorization code already used");
@@ -192,8 +226,10 @@ impl AuthDb {
             verify_pkce_s256(code_verifier, &code_challenge),
             "PKCE verifier mismatch"
         );
-
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        anyhow::ensure!(now < expires_at, "authorization code expired");
+        anyhow::ensure!(stored_redirect_uri == redirect_uri, "redirect_uri mismatch");
+
         self.conn.execute(
             "UPDATE authorization_codes SET used_at = ?1 WHERE code = ?2",
             params![now, code],

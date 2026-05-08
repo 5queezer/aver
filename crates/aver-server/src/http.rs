@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use axum::{
     Form, Json, Router,
     body::Body,
@@ -24,10 +26,12 @@ use crate::{
 #[derive(Clone)]
 struct HttpState {
     config: ServerConfig,
+    auth_db: Arc<Mutex<AuthDb>>,
 }
 
 pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
-    let state = HttpState { config };
+    let auth_db = Arc::new(Mutex::new(AuthDb::open(&config.auth_db_path)?));
+    let state = HttpState { config, auth_db };
     let protected_api = Router::new().route("/api/health", get(health)).route_layer(
         axum::middleware::from_fn_with_state(state.clone(), validate_bearer_token),
     );
@@ -101,13 +105,20 @@ async fn validate_bearer_token(
     let Some(token) = token else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    let Ok(db) = AuthDb::open(&state.config.auth_db_path) else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    let token_is_valid = {
+        let Ok(db) = state.auth_db.lock() else {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        match db.validate_access_token(&hash_token(token)) {
+            Ok(Some(_)) => true,
+            Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
     };
-    match db.validate_access_token(&hash_token(token)) {
-        Ok(Some(_)) => next.run(request).await.into_response(),
-        Ok(None) => StatusCode::UNAUTHORIZED.into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    if token_is_valid {
+        next.run(request).await.into_response()
+    } else {
+        StatusCode::UNAUTHORIZED.into_response()
     }
 }
 
@@ -122,8 +133,10 @@ async fn oauth_register(
     axum::extract::State(state): axum::extract::State<HttpState>,
     Json(request): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
-    let db =
-        AuthDb::open(&state.config.auth_db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db = state
+        .auth_db
+        .lock()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let client = db
         .register_client(
             request.client_name.as_deref().unwrap_or("Aver MCP client"),
@@ -167,8 +180,10 @@ async fn oauth_authorize(
     if request.approval_token.as_deref() != Some(expected_approval_token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    let db =
-        AuthDb::open(&state.config.auth_db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db = state
+        .auth_db
+        .lock()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if !db
         .client_allows_redirect_uri(&request.client_id, &request.redirect_uri)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -176,7 +191,12 @@ async fn oauth_authorize(
         return Err(StatusCode::BAD_REQUEST);
     }
     let code = db
-        .store_authorization_code(&request.client_id, "local", &request.code_challenge)
+        .store_authorization_code(
+            &request.client_id,
+            "local",
+            &request.code_challenge,
+            &request.redirect_uri,
+        )
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut redirect_url =
         url::Url::parse(&request.redirect_uri).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -197,6 +217,8 @@ struct TokenRequest {
     #[serde(default)]
     code_verifier: String,
     #[serde(default)]
+    redirect_uri: String,
+    #[serde(default)]
     refresh_token: String,
 }
 
@@ -204,7 +226,9 @@ async fn oauth_token(
     axum::extract::State(state): axum::extract::State<HttpState>,
     Form(request): Form<TokenRequest>,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    let db = AuthDb::open(&state.config.auth_db_path)
+    let db = state
+        .auth_db
+        .lock()
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     let tokens = match request.grant_type.as_str() {
         "authorization_code" => db
@@ -212,6 +236,7 @@ async fn oauth_token(
                 &request.code,
                 &request.client_id,
                 &request.code_verifier,
+                &request.redirect_uri,
             )
             .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?,
         "refresh_token" => db

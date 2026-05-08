@@ -156,6 +156,12 @@ pub struct AssembleCompactionSummaryParams {
     pub session_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct AddVectorChunkParams {
+    pub claim_id: i64,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ClaimView {
     pub id: i64,
@@ -259,6 +265,13 @@ pub struct ConsolidateView {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ShouldExtractMemoriesView {
     pub should_extract: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct VectorChunkView {
+    pub id: i64,
+    pub claim_id: i64,
+    pub text: String,
 }
 
 impl From<Claim> for ClaimView {
@@ -602,6 +615,23 @@ impl AverTools {
         Ok(CompactionSummaryView {
             summary: self.store.assemble_compaction_summary(&params.session_id)?,
             session_id: params.session_id,
+        })
+    }
+
+    pub fn add_vector_chunk(
+        &self,
+        params: AddVectorChunkParams,
+    ) -> anyhow::Result<VectorChunkView> {
+        if params.text.trim().is_empty() {
+            anyhow::bail!("invalid text: must not be empty");
+        }
+        let chunk_id =
+            self.store
+                .add_vector_chunk(params.claim_id, &params.text, "nomic-embed-text")?;
+        Ok(VectorChunkView {
+            id: chunk_id,
+            claim_id: params.claim_id,
+            text: params.text,
         })
     }
 }
