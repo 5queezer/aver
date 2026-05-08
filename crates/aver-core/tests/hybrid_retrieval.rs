@@ -1,7 +1,9 @@
 //! T16 — v0.2 HybridRAG starts with the hardcoded alpha from ADR-0004 before
 //! adaptive classification exists.
 
+use aver_core::Store;
 use aver_core::retrieval::{HybridWeights, RetrievalCandidate, rank_candidates, top_k_candidates};
+use aver_core::vector::MockEmbeddingClient;
 
 #[test]
 fn default_hybrid_weights_use_hardcoded_v0_2_alpha() {
@@ -155,4 +157,84 @@ fn rank_candidates_puts_nan_scores_last() {
 
     let ids: Vec<i64> = ranked.into_iter().map(|c| c.claim_id).collect();
     assert_eq!(ids, vec![2, 1]);
+}
+
+#[test]
+fn hybrid_recall_alpha_zero_prefers_graph_match_over_vector_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let graph_match = store
+        .add_claim("auth_service", "calls", "validate_token", "test")
+        .unwrap();
+    let vector_match = store
+        .add_claim("billing", "mentions", "token validation", "test")
+        .unwrap();
+    store
+        .add_vector_chunk_with_embedding(
+            graph_match,
+            "auth_service calls validate_token",
+            "mock",
+            &[0.0, 1.0],
+        )
+        .unwrap();
+    store
+        .add_vector_chunk_with_embedding(
+            vector_match,
+            "billing mentions token validation",
+            "mock",
+            &[1.0, 0.0],
+        )
+        .unwrap();
+    let client = MockEmbeddingClient::new(vec![1.0, 0.0]);
+
+    let graph_first = store
+        .recall_hybrid_claims_with_alpha(
+            "auth_service",
+            &client,
+            2,
+            HybridWeights::try_new(0.0).unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(graph_first[0].id, graph_match);
+}
+
+#[test]
+fn hybrid_recall_alpha_one_prefers_vector_match_over_graph_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let graph_match = store
+        .add_claim("auth_service", "calls", "validate_token", "test")
+        .unwrap();
+    let vector_match = store
+        .add_claim("billing", "mentions", "token validation", "test")
+        .unwrap();
+    store
+        .add_vector_chunk_with_embedding(
+            graph_match,
+            "auth_service calls validate_token",
+            "mock",
+            &[0.0, 1.0],
+        )
+        .unwrap();
+    store
+        .add_vector_chunk_with_embedding(
+            vector_match,
+            "billing mentions token validation",
+            "mock",
+            &[1.0, 0.0],
+        )
+        .unwrap();
+    let client = MockEmbeddingClient::new(vec![1.0, 0.0]);
+
+    let vector_first = store
+        .recall_hybrid_claims_with_alpha(
+            "auth_service",
+            &client,
+            2,
+            HybridWeights::try_new(1.0).unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(vector_first[0].id, vector_match);
 }

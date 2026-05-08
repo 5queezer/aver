@@ -98,6 +98,13 @@ pub struct Store {
     observation_log_path: PathBuf,
 }
 
+/// Runtime availability of the optional sqlite-vss extension (ADR-0006).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SqliteVssStatus {
+    Available,
+    Unavailable { reason: String },
+}
+
 struct ClaimWrite<'a> {
     agent_id: &'a str,
     agent_kind: AgentKind,
@@ -757,6 +764,38 @@ impl Store {
                 |_| Ok(()),
             )
             .is_ok()
+    }
+
+    /// Probe sqlite-vss capability without requiring a network or system service.
+    pub fn sqlite_vss_status(&self) -> Result<SqliteVssStatus, Error> {
+        let available = self
+            .conn
+            .query_row("SELECT vss_version()", [], |_| Ok(()))
+            .is_ok();
+        if available {
+            Ok(SqliteVssStatus::Available)
+        } else {
+            Ok(SqliteVssStatus::Unavailable {
+                reason: "sqlite-vss extension is not loaded".to_string(),
+            })
+        }
+    }
+
+    /// Prepare the optional sqlite-vss vector index when the extension exists.
+    pub fn prepare_sqlite_vss_index(&self, dimensions: usize) -> Result<SqliteVssStatus, Error> {
+        match self.sqlite_vss_status()? {
+            SqliteVssStatus::Available => {
+                self.conn.execute_batch(&format!(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS vector_index USING vss0(embedding({dimensions}))"
+                ))?;
+                Ok(SqliteVssStatus::Available)
+            }
+            unavailable => Ok(unavailable),
+        }
+    }
+
+    pub fn vector_index_table_exists(&self) -> Result<bool, Error> {
+        Ok(self.has_table("vector_index"))
     }
 
     pub fn predicate_implies(&self, predicate: &str, ancestor: &str) -> Result<bool, Error> {
@@ -1918,21 +1957,71 @@ impl Store {
         client: &impl vector::EmbeddingClient,
         top_k: usize,
     ) -> Result<Vec<Claim>, Error> {
+        self.recall_hybrid_claims_with_alpha(
+            query,
+            client,
+            top_k,
+            retrieval::HybridWeights::for_query(query),
+        )
+    }
+
+    pub fn recall_hybrid_claims_with_alpha(
+        &self,
+        query: &str,
+        client: &impl vector::EmbeddingClient,
+        top_k: usize,
+        weights: retrieval::HybridWeights,
+    ) -> Result<Vec<Claim>, Error> {
         if top_k == 0 {
             return Ok(Vec::new());
         }
+        validate_recall_query(query)?;
+        let query_embedding = client.embed(query)?;
 
-        let mut claims = self.recall_vector_claims(query, client, top_k)?;
-        let mut seen: HashSet<i64> = claims.iter().map(|claim| claim.id).collect();
-        for claim in self.recall_text(query)? {
-            if claims.len() == top_k {
-                break;
-            }
-            if seen.insert(claim.id) {
-                claims.push(claim);
+        let mut vector_scores = HashMap::new();
+        let mut stmt = self.conn.prepare(
+            "SELECT claim_id, embedding_json
+               FROM vector_chunks
+              WHERE embedding_json IS NOT NULL
+              ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+        for row in rows {
+            let (claim_id, embedding_json) = row?;
+            if let Some(embedding) = parse_optional_embedding(embedding_json)?
+                && let Some(score) = vector::normalized_cosine_score(&query_embedding, &embedding)
+            {
+                vector_scores
+                    .entry(claim_id)
+                    .and_modify(|current: &mut f64| *current = current.max(f64::from(score)))
+                    .or_insert(f64::from(score));
             }
         }
-        Ok(claims)
+        drop(stmt);
+
+        let text_claims = self.recall_text(query).unwrap_or_default();
+        let mut candidate_ids: HashSet<i64> = text_claims.iter().map(|claim| claim.id).collect();
+        candidate_ids.extend(vector_scores.keys().copied());
+
+        let mut candidates = Vec::new();
+        for claim_id in candidate_ids {
+            let claim = self.get_claim(claim_id)?;
+            if claim.status != ClaimStatus::Active {
+                continue;
+            }
+            let vector_score = vector_scores.get(&claim_id).copied().unwrap_or(0.0);
+            let graph_score = graph_score_for_query_claim(query, &claim);
+            candidates.push((weights.blend(vector_score, graph_score), claim));
+        }
+        candidates.sort_by(|(a_score, a_claim), (b_score, b_claim)| {
+            b_score
+                .total_cmp(a_score)
+                .then_with(|| a_claim.id.cmp(&b_claim.id))
+        });
+        candidates.truncate(top_k);
+        Ok(candidates.into_iter().map(|(_, claim)| claim).collect())
     }
 
     /// Text-only keyword recall over active claims. This is the v0.1
@@ -2112,6 +2201,10 @@ impl Store {
             .map_err(Error::from)
     }
 
+    pub fn should_merge_synonym(similarity: f64) -> bool {
+        similarity >= 0.92
+    }
+
     pub fn decay_contradicted_confidence(&self) -> Result<usize, Error> {
         Ok(self.conn.execute(
             "UPDATE claims
@@ -2125,6 +2218,43 @@ impl Store {
                 )",
             [],
         )?)
+    }
+
+    pub fn decay_inferred_confidence_at(
+        &self,
+        now_ts: i64,
+        tau_seconds: f64,
+    ) -> Result<usize, Error> {
+        if tau_seconds <= 0.0 || !tau_seconds.is_finite() {
+            return Err(Error::InvalidDecayTau { value: tau_seconds });
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT id, confidence, last_seen_at
+               FROM claims
+              WHERE status = 'ACTIVE' AND provenance = 'INFERRED'",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+
+        let mut changed = 0;
+        for (id, confidence, last_seen_at) in rows {
+            let delta = now_ts.saturating_sub(last_seen_at) as f64;
+            let decayed = confidence * (-delta / tau_seconds).exp();
+            self.conn.execute(
+                "UPDATE claims SET confidence = ?1 WHERE id = ?2",
+                params![decayed, id],
+            )?;
+            changed += 1;
+        }
+        Ok(changed)
     }
 
     pub fn consolidate(&self) -> Result<usize, Error> {
@@ -2204,10 +2334,22 @@ impl Store {
                 }
             }
             let merged = serde_json::to_string(&source_refs)?;
-            self.conn.execute(
-                "UPDATE claims SET source_refs = ?1 WHERE id = ?2",
-                params![merged, survivor_id],
-            )?;
+            let survivor = self.get_claim(survivor_id)?;
+            let should_promote =
+                survivor.provenance == Provenance::Inferred && source_refs.len() >= 2;
+            if should_promote {
+                self.conn.execute(
+                    "UPDATE claims
+                        SET source_refs = ?1, provenance = 'EXTRACTED', confidence = MAX(confidence, 0.75)
+                      WHERE id = ?2",
+                    params![merged, survivor_id],
+                )?;
+            } else {
+                self.conn.execute(
+                    "UPDATE claims SET source_refs = ?1 WHERE id = ?2",
+                    params![merged, survivor_id],
+                )?;
+            }
             merged_groups += 1;
         }
         Ok(merged_groups)
@@ -2316,6 +2458,22 @@ impl Store {
         });
         Ok(scored_claims.into_iter().map(|(_, claim)| claim).collect())
     }
+}
+
+fn graph_score_for_query_claim(query: &str, claim: &Claim) -> f64 {
+    let query_tokens: HashSet<String> = query_tokens_for_recall(query).into_iter().collect();
+    if query_tokens.is_empty() {
+        return 0.0;
+    }
+    let endpoint_tokens: HashSet<String> =
+        tokenize_for_recall(&format!("{} {}", claim.subject, claim.object))
+            .into_iter()
+            .collect();
+    if endpoint_tokens.is_empty() {
+        return 0.0;
+    }
+    let overlap = query_tokens.intersection(&endpoint_tokens).count() as f64;
+    overlap / query_tokens.len() as f64
 }
 
 fn query_tokens_for_recall(query: &str) -> Vec<String> {
@@ -2730,6 +2888,8 @@ pub enum Error {
     InvalidContradictionReason,
     #[error("invalid confidence value: {value}")]
     InvalidConfidence { value: f64 },
+    #[error("invalid decay tau: {value}")]
+    InvalidDecayTau { value: f64 },
     #[error("candidate claim must cite an existing event: {event_id}")]
     MissingEventProvenance { event_id: i64 },
     #[error("missing event: event {event_id} does not exist")]
