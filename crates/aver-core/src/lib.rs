@@ -1269,10 +1269,7 @@ impl Store {
             return Err(Error::InvalidGraphEntity);
         }
         if hops == 0 {
-            return Ok(GraphExpansion {
-                nodes: Vec::new(),
-                edges: Vec::new(),
-            });
+            return Err(Error::InvalidGraphHops);
         }
 
         let predicate_filter =
@@ -1908,6 +1905,8 @@ pub enum Error {
     InvalidRecallQuery,
     #[error("invalid graph entity: must not be empty")]
     InvalidGraphEntity,
+    #[error("invalid graph hops: must be greater than zero")]
+    InvalidGraphHops,
     #[error("invalid event threshold: must be greater than zero")]
     InvalidEventThreshold,
     #[error("invalid rejection reason: must not be empty")]

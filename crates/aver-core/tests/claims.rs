@@ -831,3 +831,15 @@ fn expand_rejects_empty_entity() {
 
     assert!(err.to_string().contains("entity"));
 }
+
+#[test]
+fn expand_rejects_zero_hops() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .expand("PaymentGateway", 0, None)
+        .expect_err("zero graph expansion hops should be rejected");
+
+    assert!(err.to_string().contains("hops"));
+}
