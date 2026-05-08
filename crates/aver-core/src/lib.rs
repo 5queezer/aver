@@ -239,7 +239,7 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
     if path.starts_with(".config/") || path.contains("/.config/") {
         return Err(PrivacyRejection::ConfigPath);
     }
-    if path.ends_with(".pem") || path.ends_with(".key") {
+    if path.ends_with(".pem") || path.ends_with(".key") || path.ends_with(".p12") {
         return Err(PrivacyRejection::KeyPath);
     }
     Ok(())

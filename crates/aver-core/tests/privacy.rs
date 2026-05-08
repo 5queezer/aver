@@ -260,3 +260,11 @@ fn privacy_filter_rejects_pgp_private_key_block_header() {
         PrivacyRejection::PrivateKey
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_pkcs12_file() {
+    assert_eq!(
+        privacy_filter_path("certs/client-identity.p12").unwrap_err(),
+        PrivacyRejection::KeyPath
+    );
+}
