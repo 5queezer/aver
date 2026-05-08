@@ -763,3 +763,20 @@ fn consolidate_report_counts_merged_superseded_and_decayed_claims() {
     );
     assert_eq!(store.get_claim(stale).unwrap().confidence, 0.85);
 }
+
+#[test]
+fn add_claim_rejects_empty_subject_before_log_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .add_claim(" ", "depends_on", "StripeSDK", "test")
+        .expect_err("blank subjects should be rejected");
+
+    assert!(err.to_string().contains("subject"));
+    let log_path = dir.path().join("log.jsonl");
+    assert!(
+        !log_path.exists(),
+        "invalid claims must not reach the audit log"
+    );
+}

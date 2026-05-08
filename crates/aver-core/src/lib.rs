@@ -536,6 +536,9 @@ impl Store {
     }
 
     fn insert_claim(&self, write: ClaimWrite<'_>) -> Result<i64, Error> {
+        validate_claim_field("subject", write.subject)?;
+        validate_claim_field("predicate", write.predicate)?;
+        validate_claim_field("object", write.object)?;
         if !(0.0..=1.0).contains(&write.confidence) {
             return Err(Error::InvalidConfidence {
                 value: write.confidence,
@@ -1683,6 +1686,14 @@ fn recall_token_score(query_tokens: &[String], claim: &Claim) -> usize {
         .sum()
 }
 
+fn validate_claim_field(field: &'static str, value: &str) -> Result<(), Error> {
+    if value.trim().is_empty() {
+        Err(Error::InvalidClaimField { field })
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_agent_id(agent_id: &str) -> Result<(), Error> {
     if agent_id.is_empty()
         || !agent_id
@@ -1761,6 +1772,8 @@ pub enum Error {
     EnumParse { kind: &'static str, value: String },
     #[error("invalid agent_id for partitioned log path: {value:?}")]
     InvalidAgentId { value: String },
+    #[error("invalid claim {field}: must not be empty")]
+    InvalidClaimField { field: &'static str },
     #[error("invalid confidence value: {value}")]
     InvalidConfidence { value: f64 },
     #[error("candidate claim must cite an existing event: {event_id}")]
