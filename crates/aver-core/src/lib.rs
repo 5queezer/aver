@@ -358,6 +358,12 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
     {
         return Err(PrivacyRejection::HighEntropy);
     }
+    if content
+        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .any(|token| token.starts_with("tskey-auth-") && token.len() >= 30)
+    {
+        return Err(PrivacyRejection::HighEntropy);
+    }
     if content.split_whitespace().any(is_jwt) {
         return Err(PrivacyRejection::Jwt);
     }

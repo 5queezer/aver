@@ -558,3 +558,9 @@ fn privacy_filter_path_rejects_pnpmrc_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_rejects_tailscale_auth_key() {
+    let token = synthetic_token(&["ts", "key-auth-", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+    assert!(privacy_filter(&format!("TAILSCALE_AUTHKEY={token}")).is_err());
+}
