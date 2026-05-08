@@ -223,3 +223,20 @@ fn should_extract_memories_triggers_on_event_count_threshold() {
         .unwrap();
     assert!(store.should_extract_memories("session-1", 2).unwrap());
 }
+
+#[test]
+fn record_event_rejects_empty_session_id_before_log_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .record_event(" ", "message", "hello", "test")
+        .expect_err("blank session ids should be rejected");
+
+    assert!(err.to_string().contains("session_id"));
+    let log_path = dir.path().join("events.jsonl");
+    assert!(
+        !log_path.exists(),
+        "invalid events must not reach the event log"
+    );
+}

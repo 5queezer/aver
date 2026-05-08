@@ -631,6 +631,8 @@ impl Store {
         payload: &str,
         source: &str,
     ) -> Result<i64, Error> {
+        validate_event_field("session_id", session_id)?;
+        validate_event_field("kind", kind)?;
         validate_agent_id(agent_id)?;
         privacy_filter(&format!(
             "{agent_id} {} {session_id} {kind} {payload} {source}",
@@ -1694,6 +1696,14 @@ fn validate_claim_field(field: &'static str, value: &str) -> Result<(), Error> {
     }
 }
 
+fn validate_event_field(field: &'static str, value: &str) -> Result<(), Error> {
+    if value.trim().is_empty() {
+        Err(Error::InvalidEventField { field })
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_agent_id(agent_id: &str) -> Result<(), Error> {
     if agent_id.is_empty()
         || !agent_id
@@ -1774,6 +1784,8 @@ pub enum Error {
     InvalidAgentId { value: String },
     #[error("invalid claim {field}: must not be empty")]
     InvalidClaimField { field: &'static str },
+    #[error("invalid event {field}: must not be empty")]
+    InvalidEventField { field: &'static str },
     #[error("invalid confidence value: {value}")]
     InvalidConfidence { value: f64 },
     #[error("candidate claim must cite an existing event: {event_id}")]
