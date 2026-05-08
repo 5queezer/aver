@@ -340,6 +340,9 @@ impl AverTools {
         if params.subject.trim().is_empty() {
             anyhow::bail!("invalid subject: must not be empty");
         }
+        if params.predicate.trim().is_empty() {
+            anyhow::bail!("invalid predicate: must not be empty");
+        }
         if let Some(confidence) = params.confidence
             && !(0.0..=1.0).contains(&confidence)
         {
