@@ -336,6 +336,21 @@ fn extract_rust_facts_emits_module_defines_enum_triple() {
 }
 
 #[test]
+fn extract_rust_facts_emits_module_qualified_enum_variant_triple() {
+    let facts = extract_rust_facts(
+        "src/lib.rs",
+        "mod errors { enum MemoryError { ParseFailed } }",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Enum:errors::MemoryError".to_string(),
+        predicate: "defines".to_string(),
+        object: "Variant:errors::MemoryError::ParseFailed".to_string(),
+    }));
+}
+
+#[test]
 fn extract_rust_facts_emits_module_qualified_test_covers_function_triple() {
     let facts = extract_rust_facts(
         "src/lib.rs",

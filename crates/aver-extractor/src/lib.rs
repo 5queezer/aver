@@ -791,11 +791,19 @@ fn collect_module_enum_facts(
         && let Some(name) = node.child_by_field_name("name")
     {
         let enum_name = name.utf8_text(source)?;
+        let qualified_enum = format!("{module_path}::{enum_name}");
         facts.push(ExtractedFact {
             subject: format!("Module:{module_path}"),
             predicate: "defines".to_string(),
-            object: format!("Enum:{module_path}::{enum_name}"),
+            object: format!("Enum:{qualified_enum}"),
         });
+        let mut variants = Vec::new();
+        collect_enum_variants(node, source, &mut variants)?;
+        facts.extend(variants.into_iter().map(|variant| ExtractedFact {
+            subject: format!("Enum:{qualified_enum}"),
+            predicate: "defines".to_string(),
+            object: format!("Variant:{qualified_enum}::{variant}"),
+        }));
     }
 
     let mut cursor = node.walk();
