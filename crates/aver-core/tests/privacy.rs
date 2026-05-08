@@ -544,3 +544,9 @@ fn privacy_filter_rejects_linear_api_key() {
     let token = synthetic_token(&["lin", "_api_", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
     assert!(privacy_filter(&format!("LINEAR_API_KEY={token}")).is_err());
 }
+
+#[test]
+fn privacy_filter_rejects_npm_access_token() {
+    let token = synthetic_token(&["npm", "_", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+    assert!(privacy_filter(&format!("NPM_TOKEN={token}")).is_err());
+}
