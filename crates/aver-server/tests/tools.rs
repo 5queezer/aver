@@ -491,3 +491,21 @@ fn record_event_tool_rejects_empty_kind() {
 
     assert!(err.to_string().contains("kind"));
 }
+
+#[test]
+fn add_triple_rejects_empty_subject() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .add_triple(AddTripleParams {
+            subject: " ".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "StripeSDK".to_string(),
+            confidence: None,
+            source: "test".to_string(),
+        })
+        .expect_err("empty subjects should be rejected");
+
+    assert!(err.to_string().contains("subject"));
+}

@@ -337,6 +337,9 @@ impl AverTools {
     }
 
     pub fn add_triple(&self, params: AddTripleParams) -> anyhow::Result<AddTripleView> {
+        if params.subject.trim().is_empty() {
+            anyhow::bail!("invalid subject: must not be empty");
+        }
         if let Some(confidence) = params.confidence
             && !(0.0..=1.0).contains(&confidence)
         {
