@@ -325,3 +325,15 @@ fn reject_candidate_claim_rejects_promoted_candidate() {
 
     assert!(err.to_string().contains("candidate"));
 }
+
+#[test]
+fn should_extract_memories_rejects_zero_threshold() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .should_extract_memories("s1", 0)
+        .expect_err("zero extraction thresholds should be rejected");
+
+    assert!(err.to_string().contains("event threshold"));
+}

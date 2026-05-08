@@ -749,6 +749,9 @@ impl Store {
         session_id: &str,
         event_threshold: usize,
     ) -> Result<bool, Error> {
+        if event_threshold == 0 {
+            return Err(Error::InvalidEventThreshold);
+        }
         let explicit_remember = self
             .conn
             .query_row(
@@ -768,7 +771,7 @@ impl Store {
             [session_id],
             |row| row.get(0),
         )?;
-        Ok(event_threshold > 0 && event_count >= event_threshold)
+        Ok(event_count >= event_threshold)
     }
 
     pub fn propose_candidate_claim(
@@ -1855,6 +1858,8 @@ pub enum Error {
     InvalidClaimField { field: &'static str },
     #[error("invalid event {field}: must not be empty")]
     InvalidEventField { field: &'static str },
+    #[error("invalid event threshold: must be greater than zero")]
+    InvalidEventThreshold,
     #[error("invalid rejection reason: must not be empty")]
     InvalidRejectionReason,
     #[error("invalid confidence value: {value}")]
