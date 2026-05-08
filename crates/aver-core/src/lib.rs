@@ -1361,6 +1361,7 @@ impl Store {
         new_claim: Option<NewClaim<'_>>,
     ) -> Result<ContradictionRecord, Error> {
         self.get_claim(claim_id)?;
+        validate_contradiction_reason(reason)?;
         privacy_filter(reason)?;
         let new_claim_id = if let Some(claim) = new_claim {
             Some(self.add_claim(claim.subject, claim.predicate, claim.object, claim.source)?)
@@ -1764,6 +1765,14 @@ fn validate_claim_field(field: &'static str, value: &str) -> Result<(), Error> {
     }
 }
 
+fn validate_contradiction_reason(value: &str) -> Result<(), Error> {
+    if value.trim().is_empty() {
+        Err(Error::InvalidContradictionReason)
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_candidate_status_filter(value: &str) -> Result<(), Error> {
     match value {
         "PENDING" | "PROMOTED" | "REJECTED" => Ok(()),
@@ -1891,6 +1900,8 @@ pub enum Error {
     InvalidEventThreshold,
     #[error("invalid rejection reason: must not be empty")]
     InvalidRejectionReason,
+    #[error("invalid contradiction reason: must not be empty")]
+    InvalidContradictionReason,
     #[error("invalid confidence value: {value}")]
     InvalidConfidence { value: f64 },
     #[error("candidate claim must cite an existing event: {event_id}")]

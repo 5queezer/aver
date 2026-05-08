@@ -792,3 +792,18 @@ fn recall_text_rejects_empty_queries() {
 
     assert!(err.to_string().contains("query"));
 }
+
+#[test]
+fn contradict_rejects_empty_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim("PaymentGateway", "depends_on", "StripeSDK", "test")
+        .unwrap();
+
+    let err = store
+        .contradict(claim_id, " ", None)
+        .expect_err("blank contradiction reasons should be rejected");
+
+    assert!(err.to_string().contains("contradiction reason"));
+}
