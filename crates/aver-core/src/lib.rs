@@ -44,6 +44,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0007_entities",
         include_str!("../../../migrations/0007_entities.sql"),
     ),
+    (
+        "0008_privacy_rejections",
+        include_str!("../../../migrations/0008_privacy_rejections.sql"),
+    ),
 ];
 
 const ENTITY_ONTOLOGY: &[(&str, Option<&str>)] = &[
@@ -105,9 +109,26 @@ pub enum SqliteVssStatus {
     Unavailable { reason: String },
 }
 
+type ClaimRow = (
+    i64,
+    String,
+    String,
+    String,
+    String,
+    f64,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    Option<i64>,
+);
+
+
 struct ClaimWrite<'a> {
     agent_id: &'a str,
     agent_kind: AgentKind,
+    provenance: Provenance,
     subject: &'a str,
     predicate: &'a str,
     object: &'a str,
@@ -129,11 +150,20 @@ pub struct Claim {
     pub agent_id: String,
     pub agent_kind: AgentKind,
     pub write_ts: i64,
+    pub last_verified_at: Option<i64>,
 }
 
 impl Claim {
     pub fn text(&self) -> String {
         format!("{} {} {}", self.subject, self.predicate, self.object)
+    }
+
+    pub fn verification_weighted_confidence(&self) -> f64 {
+        if self.last_verified_at.is_some() {
+            self.confidence
+        } else {
+            self.confidence * 0.5
+        }
     }
 }
 
@@ -294,6 +324,17 @@ pub struct Community {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorageMode {
+    Local,
+    Shared,
+}
+
+pub trait GraphStorageAdapter {
+    fn mode(&self) -> StorageMode;
+    fn detect_communities(&self) -> Result<Vec<Community>, Error>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConsolidationReport {
     pub merged: usize,
     pub superseded: usize,
@@ -365,6 +406,37 @@ pub enum PrivacyRejection {
     AwsCredentialsPath,
     #[error("config path")]
     ConfigPath,
+}
+
+impl PrivacyRejection {
+    pub fn telemetry_reason(self) -> &'static str {
+        match self {
+            Self::AwsAccessKey => "regex:aws",
+            Self::GitHubPat => "regex:github-pat",
+            Self::GitHubFineGrainedPat => "regex:github-fine-grained-pat",
+            Self::Jwt => "regex:jwt",
+            Self::OpenAiKey => "regex:openai",
+            Self::AnthropicKey => "regex:anthropic",
+            Self::StripeLiveKey => "regex:stripe-live",
+            Self::PrivateKey => "regex:private-key",
+            Self::HighEntropy => "entropy",
+            Self::SecretsPath => "path:secrets-dir",
+            Self::EnvPath => "path:env",
+            Self::MemoryIgnore => "marker:memory-ignore",
+            Self::SshPath => "path:ssh",
+            Self::KeyPath => "path:key-file",
+            Self::AwsCredentialsPath => "path:aws-credentials",
+            Self::ConfigPath => "path:config",
+        }
+    }
+}
+
+fn provenance_for_agent_kind(agent_kind: AgentKind) -> Provenance {
+    match agent_kind {
+        AgentKind::Human => Provenance::UserAsserted,
+        AgentKind::DeterministicParser | AgentKind::ExternalTool => Provenance::Extracted,
+        AgentKind::Llm => Provenance::Inferred,
+    }
 }
 
 pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejection> {
@@ -673,6 +745,15 @@ impl Provenance {
             Self::Extracted => "EXTRACTED",
             Self::Inferred => "INFERRED",
             Self::Ambiguous => "AMBIGUOUS",
+        }
+    }
+
+    pub fn policy_confidence(self) -> f64 {
+        match self {
+            Self::UserAsserted => 0.95,
+            Self::Extracted => 0.90,
+            Self::Inferred => 0.45,
+            Self::Ambiguous => 0.20,
         }
     }
 }
@@ -989,6 +1070,7 @@ impl Store {
         self.insert_claim(ClaimWrite {
             agent_id: "local",
             agent_kind: AgentKind::Human,
+            provenance: Provenance::UserAsserted,
             subject,
             predicate,
             object,
@@ -1006,14 +1088,16 @@ impl Store {
         object: &str,
         source: &str,
     ) -> Result<i64, Error> {
+        let provenance = provenance_for_agent_kind(agent_kind);
         self.insert_claim(ClaimWrite {
             agent_id,
             agent_kind,
+            provenance,
             subject,
             predicate,
             object,
             source,
-            confidence: 0.95,
+            confidence: provenance.policy_confidence(),
         })
     }
 
@@ -1028,7 +1112,7 @@ impl Store {
             });
         }
         validate_agent_id(write.agent_id)?;
-        privacy_filter(&format!(
+        if let Err(rejection) = privacy_filter(&format!(
             "{} {} {} {} {} {}",
             write.agent_id,
             write.agent_kind.as_str(),
@@ -1036,7 +1120,10 @@ impl Store {
             write.predicate,
             write.object,
             write.source
-        ))?;
+        )) {
+            self.record_privacy_rejection(rejection)?;
+            return Err(Error::Privacy(rejection));
+        }
 
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
@@ -1071,14 +1158,15 @@ impl Store {
         self.conn.execute(
             "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
                                  status, source_refs, agent_id, agent_kind, write_ts,
-                                 created_at, last_seen_at)
-             VALUES (?1, ?2, ?3, ?4, 'USER_ASSERTED', ?5, 'ACTIVE', ?6,
-                     ?7, ?8, ?9, ?9, ?9)",
+                                 created_at, last_seen_at, last_verified_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7,
+                     ?8, ?9, ?10, ?10, ?10, ?10)",
             params![
                 claim_id,
                 write.subject,
                 write.predicate,
                 write.object,
+                write.provenance.as_str(),
                 write.confidence,
                 source_refs,
                 write.agent_id,
@@ -1087,6 +1175,27 @@ impl Store {
             ],
         )?;
         Ok(claim_id)
+    }
+
+    fn record_privacy_rejection(&self, rejection: PrivacyRejection) -> Result<(), Error> {
+        self.conn.execute(
+            "INSERT INTO privacy_rejections (reason, count) VALUES (?1, 1)
+             ON CONFLICT(reason) DO UPDATE SET count = count + 1",
+            [rejection.telemetry_reason()],
+        )?;
+        Ok(())
+    }
+
+    pub fn privacy_rejection_count(&self, rejection: PrivacyRejection) -> Result<i64, Error> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT count FROM privacy_rejections WHERE reason = ?1",
+                [rejection.telemetry_reason()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0))
     }
 
     fn agent_log_path(&self, agent_id: &str) -> PathBuf {
@@ -1671,23 +1780,12 @@ impl Store {
             agent_id,
             agent_kind,
             write_ts,
-        ): (
-            i64,
-            String,
-            String,
-            String,
-            String,
-            f64,
-            String,
-            String,
-            String,
-            String,
-            i64,
-        ) = self
+            last_verified_at,
+        ): ClaimRow = self
             .conn
             .query_row(
                 "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs,
-                    agent_id, agent_kind, write_ts
+                    agent_id, agent_kind, write_ts, last_verified_at
                FROM claims WHERE id = ?1",
                 [id],
                 |row| {
@@ -1703,6 +1801,7 @@ impl Store {
                         row.get(8)?,
                         row.get(9)?,
                         row.get(10)?,
+                        row.get(11)?,
                     ))
                 },
             )
@@ -1723,6 +1822,7 @@ impl Store {
             agent_id,
             agent_kind: agent_kind.parse()?,
             write_ts,
+            last_verified_at,
         })
     }
 
@@ -2115,17 +2215,36 @@ impl Store {
                 continue;
             }
             let graph = self.expand(&claim.subject, usize::MAX, None)?;
-            let members: Vec<String> = graph
+            let mut members: Vec<String> = graph
                 .nodes
                 .into_iter()
                 .filter(|node| seen_nodes.insert(node.clone()))
                 .collect();
             if !members.is_empty() {
-                let id = format!("community:{}", members[0]);
+                members.sort();
+                let id = format!("community:{}", members.join("-"));
                 communities.push(Community { id, members });
             }
         }
+        communities.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(communities)
+    }
+
+    pub fn agent_trust_score(&self, agent_id: &str) -> Result<f64, Error> {
+        validate_agent_id(agent_id)?;
+        let (active, total): (i64, i64) = self.conn.query_row(
+            "SELECT
+                 SUM(CASE WHEN status = 'ACTIVE' THEN 1 ELSE 0 END),
+                 COUNT(*)
+               FROM claims
+              WHERE agent_id = ?1",
+            [agent_id],
+            |row| Ok((row.get::<_, Option<i64>>(0)?.unwrap_or(0), row.get(1)?)),
+        )?;
+        if total == 0 {
+            return Ok(0.5);
+        }
+        Ok(((active as f64) / (total as f64)).clamp(0.1, 1.0))
     }
 
     pub fn contradict(
@@ -2363,7 +2482,7 @@ impl Store {
 
         let mut stmt = self.conn.prepare(
             "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs,
-                    agent_id, agent_kind, write_ts
+                    agent_id, agent_kind, write_ts, last_verified_at
                FROM claims
               WHERE status = 'ACTIVE'
               ORDER BY id",
@@ -2382,6 +2501,7 @@ impl Store {
                 row.get::<_, String>(8)?,
                 row.get::<_, String>(9)?,
                 row.get::<_, i64>(10)?,
+                row.get::<_, Option<i64>>(11)?,
             ))
         })?;
 
@@ -2399,6 +2519,7 @@ impl Store {
                 agent_id,
                 agent_kind,
                 write_ts,
+                last_verified_at,
             ) = row?;
             let claim = Claim {
                 id,
@@ -2412,6 +2533,7 @@ impl Store {
                 agent_id,
                 agent_kind: agent_kind.parse()?,
                 write_ts,
+                last_verified_at,
             };
             let score = recall_token_score(&query_tokens, &claim);
             if score > 0 {
@@ -2626,6 +2748,16 @@ fn validate_claim_field(field: &'static str, value: &str) -> Result<(), Error> {
         Err(Error::InvalidClaimField { field })
     } else {
         Ok(())
+    }
+}
+
+impl GraphStorageAdapter for Store {
+    fn mode(&self) -> StorageMode {
+        StorageMode::Local
+    }
+
+    fn detect_communities(&self) -> Result<Vec<Community>, Error> {
+        Store::detect_communities(self)
     }
 }
 

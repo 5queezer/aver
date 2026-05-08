@@ -4,7 +4,7 @@ pub mod prose;
 
 use std::collections::HashSet;
 
-use tree_sitter::{Node, Parser};
+use tree_sitter::{Language, Node, Parser};
 
 pub use prose::parse_prose_facts;
 
@@ -124,6 +124,98 @@ pub fn map_rust_tests_to_functions(source: &str) -> Result<Vec<(String, String)>
         }
     }
     Ok(mappings)
+}
+
+pub fn extract_python_functions(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_python::language())?;
+    let mut functions = Vec::new();
+    collect_named_nodes(
+        tree.root_node(),
+        source.as_bytes(),
+        &["function_definition"],
+        &mut functions,
+    )?;
+    Ok(functions)
+}
+
+pub fn extract_python_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    Ok(extract_python_functions(source)?
+        .into_iter()
+        .map(|function| ExtractedFact {
+            subject: path.to_string(),
+            predicate: "defines".to_string(),
+            object: format!("Function:{function}"),
+        })
+        .collect())
+}
+
+pub fn extract_typescript_functions(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_typescript::language_typescript())?;
+    let mut functions = Vec::new();
+    collect_named_nodes(
+        tree.root_node(),
+        source.as_bytes(),
+        &["function_declaration", "method_definition"],
+        &mut functions,
+    )?;
+    Ok(functions)
+}
+
+pub fn extract_typescript_classes(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_typescript::language_typescript())?;
+    let mut classes = Vec::new();
+    collect_named_nodes(
+        tree.root_node(),
+        source.as_bytes(),
+        &["class_declaration"],
+        &mut classes,
+    )?;
+    Ok(classes)
+}
+
+pub fn extract_typescript_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut facts = extract_typescript_functions(source)?
+        .into_iter()
+        .map(|function| ExtractedFact {
+            subject: path.to_string(),
+            predicate: "defines".to_string(),
+            object: format!("Function:{function}"),
+        })
+        .collect::<Vec<_>>();
+    facts.extend(
+        extract_typescript_classes(source)?
+            .into_iter()
+            .map(|class_name| ExtractedFact {
+                subject: path.to_string(),
+                predicate: "defines".to_string(),
+                object: format!("Class:{class_name}"),
+            }),
+    );
+    facts.extend(extract_typescript_extends_facts(source));
+    Ok(facts)
+}
+
+pub fn extract_go_functions(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_go::language())?;
+    let mut functions = Vec::new();
+    collect_named_nodes(
+        tree.root_node(),
+        source.as_bytes(),
+        &["function_declaration", "method_declaration"],
+        &mut functions,
+    )?;
+    Ok(functions)
+}
+
+pub fn extract_go_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    Ok(extract_go_functions(source)?
+        .into_iter()
+        .map(|function| ExtractedFact {
+            subject: path.to_string(),
+            predicate: "defines".to_string(),
+            object: format!("Function:{function}"),
+        })
+        .collect())
 }
 
 pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
@@ -359,6 +451,56 @@ fn extract_rust_module_test_mapping_facts(source: &str) -> Result<Vec<ExtractedF
     let mut facts = Vec::new();
     collect_module_test_mapping_facts(tree.root_node(), source.as_bytes(), "", &mut facts)?;
     Ok(facts)
+}
+
+fn parse_with_language(source: &str, language: Language) -> Result<tree_sitter::Tree, Error> {
+    let mut parser = Parser::new();
+    parser.set_language(&language)?;
+    parser.parse(source, None).ok_or(Error::ParseFailed)
+}
+
+fn collect_named_nodes(
+    node: Node<'_>,
+    source: &[u8],
+    kinds: &[&str],
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    if kinds.contains(&node.kind())
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        names.push(name.utf8_text(source)?.to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_named_nodes(child, source, kinds, names)?;
+    }
+    Ok(())
+}
+
+fn extract_typescript_extends_facts(source: &str) -> Vec<ExtractedFact> {
+    source
+        .lines()
+        .filter_map(|line| {
+            let mut tokens = line
+                .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'))
+                .filter(|token| !token.is_empty());
+            while let Some(token) = tokens.next() {
+                if token == "class" {
+                    let class_name = tokens.next()?;
+                    if tokens.next()? == "extends" {
+                        let base = tokens.next()?;
+                        return Some(ExtractedFact {
+                            subject: format!("Class:{class_name}"),
+                            predicate: "extends".to_string(),
+                            object: format!("Class:{base}"),
+                        });
+                    }
+                }
+            }
+            None
+        })
+        .collect()
 }
 
 fn collect_function_names(

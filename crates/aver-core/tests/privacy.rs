@@ -151,6 +151,32 @@ fn add_claim_rejects_secret_before_episodic_log_write() {
         Err(Error::Privacy(PrivacyRejection::AwsAccessKey))
     ));
     assert!(!dir.path().join("log.jsonl").exists());
+    assert_eq!(
+        store
+            .privacy_rejection_count(PrivacyRejection::AwsAccessKey)
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn privacy_rejection_telemetry_never_stores_secret_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let token = synthetic_token(&["gh", "p_", "abcdefghijklmnopqrstuvwxyz1234567890abcd"]);
+    let _ = store.add_claim("deployment", "uses_key", &token, "test_session");
+
+    let db_bytes = std::fs::read(dir.path().join("db.sqlite")).unwrap();
+    let db_text = String::from_utf8_lossy(&db_bytes);
+    assert_eq!(
+        store
+            .privacy_rejection_count(PrivacyRejection::GitHubPat)
+            .unwrap(),
+        1
+    );
+    assert!(!db_text.contains(&token));
+    assert!(!dir.path().join("log.jsonl").exists());
 }
 
 #[test]

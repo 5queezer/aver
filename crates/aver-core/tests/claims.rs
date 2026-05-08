@@ -550,7 +550,45 @@ fn add_claim_from_agent_records_explicit_agent_provenance() {
 
     assert_eq!(claim.agent_id, "parser_agent");
     assert_eq!(claim.agent_kind, aver_core::AgentKind::DeterministicParser);
+    assert_eq!(claim.provenance, Provenance::Extracted);
+    assert_eq!(claim.confidence, 0.90);
     assert!(claim.write_ts > 0);
+}
+
+#[test]
+fn add_claim_from_llm_agent_applies_inferred_confidence_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let claim_id = store
+        .add_claim_from_agent(
+            "summary_bot",
+            aver_core::AgentKind::Llm,
+            "project",
+            "prefers",
+            "offline_tests",
+            "prose_extractor",
+        )
+        .unwrap();
+
+    let claim = store.get_claim(claim_id).unwrap();
+
+    assert_eq!(claim.provenance, Provenance::Inferred);
+    assert_eq!(claim.confidence, 0.45);
+}
+
+#[test]
+fn add_claim_records_last_verified_at_for_policy_scoring() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let claim_id = store
+        .add_claim("project", "language", "Rust", "test_session")
+        .unwrap();
+    let claim = store.get_claim(claim_id).unwrap();
+
+    assert!(claim.last_verified_at.is_some());
+    assert_eq!(claim.verification_weighted_confidence(), claim.confidence);
 }
 
 #[test]
