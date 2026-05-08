@@ -879,3 +879,15 @@ fn contradict_requires_existing_claim() {
 
     assert!(err.to_string().contains("claim"));
 }
+
+#[test]
+fn get_claim_requires_existing_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .get_claim(42)
+        .expect_err("fetching a missing claim should return a domain error");
+
+    assert!(err.to_string().contains("claim"));
+}

@@ -1001,27 +1001,33 @@ impl Store {
             String,
             String,
             i64,
-        ) = self.conn.query_row(
-            "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs,
+        ) = self
+            .conn
+            .query_row(
+                "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs,
                     agent_id, agent_kind, write_ts
                FROM claims WHERE id = ?1",
-            [id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                    row.get(8)?,
-                    row.get(9)?,
-                    row.get(10)?,
-                ))
-            },
-        )?;
+                [id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                        row.get(10)?,
+                    ))
+                },
+            )
+            .map_err(|err| match err {
+                rusqlite::Error::QueryReturnedNoRows => Error::MissingClaim { claim_id: id },
+                other => Error::Sqlite(other),
+            })?;
 
         Ok(Claim {
             id,
