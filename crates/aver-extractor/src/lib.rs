@@ -154,6 +154,7 @@ pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
                 object: format!("Enum:{enum_name}"),
             }),
     );
+    facts.extend(extract_rust_enum_variant_facts(source)?);
     facts.extend(
         extract_rust_traits(source)?
             .into_iter()
@@ -277,6 +278,16 @@ fn extract_rust_module_const_facts(source: &str) -> Result<Vec<ExtractedFact>, E
 
     let mut facts = Vec::new();
     collect_module_const_facts(tree.root_node(), source.as_bytes(), "", &mut facts)?;
+    Ok(facts)
+}
+
+fn extract_rust_enum_variant_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_rust::language())?;
+    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+
+    let mut facts = Vec::new();
+    collect_enum_variant_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -790,6 +801,49 @@ fn collect_module_enum_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_module_enum_facts(child, source, module_path, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_enum_variant_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "enum_item"
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        let enum_name = name.utf8_text(source)?;
+        let mut variants = Vec::new();
+        collect_enum_variants(node, source, &mut variants)?;
+        facts.extend(variants.into_iter().map(|variant| ExtractedFact {
+            subject: format!("Enum:{enum_name}"),
+            predicate: "defines".to_string(),
+            object: format!("Variant:{enum_name}::{variant}"),
+        }));
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_enum_variant_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_enum_variants(
+    node: Node<'_>,
+    source: &[u8],
+    variants: &mut Vec<String>,
+) -> Result<(), Error> {
+    if node.kind() == "enum_variant"
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        variants.push(name.utf8_text(source)?.to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_enum_variants(child, source, variants)?;
     }
     Ok(())
 }
