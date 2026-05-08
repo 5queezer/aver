@@ -257,6 +257,7 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
     if content.contains("BEGIN PRIVATE KEY")
         || content.contains("BEGIN OPENSSH PRIVATE KEY")
         || content.contains("BEGIN RSA PRIVATE KEY")
+        || content.contains("BEGIN EC PRIVATE KEY")
     {
         return Err(PrivacyRejection::PrivateKey);
     }
