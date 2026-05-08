@@ -1366,7 +1366,13 @@ impl Store {
         reason: &str,
         new_claim: Option<NewClaim<'_>>,
     ) -> Result<ContradictionRecord, Error> {
-        self.get_claim(claim_id)?;
+        match self.get_claim(claim_id) {
+            Ok(_) => {}
+            Err(Error::Sqlite(rusqlite::Error::QueryReturnedNoRows)) => {
+                return Err(Error::MissingClaim { claim_id });
+            }
+            Err(err) => return Err(err),
+        }
         validate_contradiction_reason(reason)?;
         privacy_filter(reason)?;
         let new_claim_id = if let Some(claim) = new_claim {

@@ -867,3 +867,15 @@ fn expand_rejects_blank_predicate_filter_item() {
 
     assert!(err.to_string().contains("predicate"));
 }
+
+#[test]
+fn contradict_requires_existing_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .contradict(42, "vendor docs say current", None)
+        .expect_err("contradicting a missing claim should fail");
+
+    assert!(err.to_string().contains("claim"));
+}
