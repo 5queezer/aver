@@ -284,3 +284,11 @@ fn privacy_filter_path_rejects_java_keystore_file() {
         PrivacyRejection::KeyPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_keystore_file() {
+    assert_eq!(
+        privacy_filter_path("android/release.keystore").unwrap_err(),
+        PrivacyRejection::KeyPath
+    );
+}
