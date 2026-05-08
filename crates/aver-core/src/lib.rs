@@ -1058,6 +1058,7 @@ impl Store {
         embedding_model: &str,
         embedding: &[f32],
     ) -> Result<i64, Error> {
+        self.ensure_claim_exists(claim_id)?;
         validate_vector_chunk_text(text)?;
         validate_embedding_model(embedding_model)?;
         validate_embedding_vector(embedding)?;

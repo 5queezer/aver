@@ -432,3 +432,20 @@ fn add_vector_chunk_requires_existing_claim() {
 
     assert!(err.to_string().contains("claim"));
 }
+
+#[test]
+fn add_vector_chunk_with_embedding_requires_existing_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .add_vector_chunk_with_embedding(
+            42,
+            "PaymentGateway depends_on StripeSDK",
+            "nomic-embed-text",
+            &[0.1, 0.2],
+        )
+        .expect_err("embedded vector chunks should require an existing claim");
+
+    assert!(err.to_string().contains("claim"));
+}
