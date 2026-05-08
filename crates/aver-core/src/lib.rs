@@ -863,6 +863,7 @@ impl Store {
     }
 
     pub fn reject_candidate_claim(&self, candidate_id: i64, reason: &str) -> Result<(), Error> {
+        validate_rejection_reason(reason)?;
         privacy_filter(reason)?;
         let rows_changed = self.conn.execute(
             "UPDATE candidate_claims
@@ -1731,6 +1732,14 @@ fn validate_claim_field(field: &'static str, value: &str) -> Result<(), Error> {
     }
 }
 
+fn validate_rejection_reason(value: &str) -> Result<(), Error> {
+    if value.trim().is_empty() {
+        Err(Error::InvalidRejectionReason)
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_event_field(field: &'static str, value: &str) -> Result<(), Error> {
     if value.trim().is_empty() {
         Err(Error::InvalidEventField { field })
@@ -1827,6 +1836,8 @@ pub enum Error {
     InvalidClaimField { field: &'static str },
     #[error("invalid event {field}: must not be empty")]
     InvalidEventField { field: &'static str },
+    #[error("invalid rejection reason: must not be empty")]
+    InvalidRejectionReason,
     #[error("invalid confidence value: {value}")]
     InvalidConfidence { value: f64 },
     #[error("candidate claim must cite an existing event: {event_id}")]

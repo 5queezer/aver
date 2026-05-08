@@ -267,3 +267,21 @@ fn reject_candidate_claim_requires_existing_candidate() {
 
     assert!(err.to_string().contains("candidate"));
 }
+
+#[test]
+fn reject_candidate_claim_rejects_empty_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event_id = store
+        .record_event("s1", "message", "remember something", "test")
+        .unwrap();
+    let candidate_id = store
+        .propose_candidate_claim(event_id, "PaymentGateway", "depends_on", "StripeSDK")
+        .unwrap();
+
+    let err = store
+        .reject_candidate_claim(candidate_id, " ")
+        .expect_err("blank rejection reasons should be rejected");
+
+    assert!(err.to_string().contains("rejection reason"));
+}
