@@ -4,7 +4,7 @@
 pub mod retrieval;
 pub mod vector;
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -31,6 +31,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
     (
         "0004_episodic_candidates",
         include_str!("../../../migrations/0004_episodic_candidates.sql"),
+    ),
+    (
+        "0005_contradictions",
+        include_str!("../../../migrations/0005_contradictions.sql"),
     ),
 ];
 
@@ -99,6 +103,36 @@ pub struct CandidateClaimDraft {
     pub subject: String,
     pub predicate: String,
     pub object: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GraphExpansion {
+    pub nodes: Vec<String>,
+    pub edges: Vec<Claim>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContradictionRecord {
+    pub id: i64,
+    pub claim_id: i64,
+    pub reason: String,
+    pub new_claim_id: Option<i64>,
+    pub status: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NewClaim<'a> {
+    pub subject: &'a str,
+    pub predicate: &'a str,
+    pub object: &'a str,
+    pub source: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Community {
+    pub id: String,
+    pub members: Vec<String>,
 }
 
 pub trait ClaimExtractor {
@@ -1118,6 +1152,175 @@ impl Store {
     /// Text-only keyword recall over active claims. This is the v0.1
     /// precursor to HybridRAG: cheap SQLite substring matching across the
     /// claim triple fields, ordered deterministically by id.
+    pub fn expand(
+        &self,
+        entity: &str,
+        hops: usize,
+        predicates: Option<&[&str]>,
+    ) -> Result<GraphExpansion, Error> {
+        if entity.trim().is_empty() || hops == 0 {
+            return Ok(GraphExpansion {
+                nodes: Vec::new(),
+                edges: Vec::new(),
+            });
+        }
+
+        let predicate_filter =
+            predicates.map(|items| items.iter().copied().collect::<HashSet<_>>());
+        let mut nodes = vec![entity.to_string()];
+        let mut seen_nodes = HashSet::from([entity.to_string()]);
+        let mut seen_edges = HashSet::new();
+        let mut queue = VecDeque::from([(entity.to_string(), 0usize)]);
+        let mut edges = Vec::new();
+
+        while let Some((current, depth)) = queue.pop_front() {
+            if depth == hops {
+                continue;
+            }
+            for claim in self.active_claim_edges_for_entity(&current)? {
+                if predicate_filter
+                    .as_ref()
+                    .is_some_and(|allowed| !allowed.contains(claim.predicate.as_str()))
+                {
+                    continue;
+                }
+                if seen_edges.insert(claim.id) {
+                    for node in [&claim.subject, &claim.object] {
+                        if seen_nodes.insert(node.clone()) {
+                            nodes.push(node.clone());
+                            queue.push_back((node.clone(), depth + 1));
+                        }
+                    }
+                    edges.push(claim);
+                }
+            }
+        }
+
+        Ok(GraphExpansion { nodes, edges })
+    }
+
+    fn active_claim_edges_for_entity(&self, entity: &str) -> Result<Vec<Claim>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id
+               FROM claims
+              WHERE status = 'ACTIVE'
+                AND (subject = ?1 OR object = ?1)
+              ORDER BY id",
+        )?;
+        let ids = stmt
+            .query_map([entity], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        ids.into_iter().map(|id| self.get_claim(id)).collect()
+    }
+
+    pub fn detect_communities(&self) -> Result<Vec<Community>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id
+               FROM claims
+              WHERE status = 'ACTIVE'
+              ORDER BY id",
+        )?;
+        let claims = stmt
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|id| self.get_claim(id))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut seen_nodes = HashSet::new();
+        let mut communities = Vec::new();
+        for claim in &claims {
+            if seen_nodes.contains(&claim.subject) && seen_nodes.contains(&claim.object) {
+                continue;
+            }
+            let graph = self.expand(&claim.subject, usize::MAX, None)?;
+            let members: Vec<String> = graph
+                .nodes
+                .into_iter()
+                .filter(|node| seen_nodes.insert(node.clone()))
+                .collect();
+            if !members.is_empty() {
+                let id = format!("community:{}", members[0]);
+                communities.push(Community { id, members });
+            }
+        }
+        Ok(communities)
+    }
+
+    pub fn contradict(
+        &self,
+        claim_id: i64,
+        reason: &str,
+        new_claim: Option<NewClaim<'_>>,
+    ) -> Result<ContradictionRecord, Error> {
+        self.get_claim(claim_id)?;
+        privacy_filter(reason)?;
+        let new_claim_id = if let Some(claim) = new_claim {
+            Some(self.add_claim(claim.subject, claim.predicate, claim.object, claim.source)?)
+        } else {
+            None
+        };
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.conn.execute(
+            "INSERT INTO contradictions (claim_id, reason, new_claim_id, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![claim_id, reason, new_claim_id, now],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        self.get_contradiction(id)
+    }
+
+    pub fn list_contradictions(&self, claim_id: i64) -> Result<Vec<ContradictionRecord>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id
+               FROM contradictions
+              WHERE claim_id = ?1
+              ORDER BY id",
+        )?;
+        let ids = stmt
+            .query_map([claim_id], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        ids.into_iter()
+            .map(|id| self.get_contradiction(id))
+            .collect()
+    }
+
+    fn get_contradiction(&self, id: i64) -> Result<ContradictionRecord, Error> {
+        self.conn
+            .query_row(
+                "SELECT id, claim_id, reason, new_claim_id, status, created_at
+               FROM contradictions
+              WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok(ContradictionRecord {
+                        id: row.get(0)?,
+                        claim_id: row.get(1)?,
+                        reason: row.get(2)?,
+                        new_claim_id: row.get(3)?,
+                        status: row.get(4)?,
+                        created_at: row.get(5)?,
+                    })
+                },
+            )
+            .map_err(Error::from)
+    }
+
+    pub fn decay_contradicted_confidence(&self) -> Result<usize, Error> {
+        Ok(self.conn.execute(
+            "UPDATE claims
+                SET confidence = MAX(0.0, ROUND(confidence - 0.10, 2))
+              WHERE status = 'ACTIVE'
+                AND EXISTS (
+                    SELECT 1
+                      FROM contradictions
+                     WHERE contradictions.claim_id = claims.id
+                       AND contradictions.status = 'RECORDED'
+                )",
+            [],
+        )?)
+    }
+
     pub fn consolidate(&self) -> Result<usize, Error> {
         self.merge_duplicate_source_refs()?;
         let duplicate_changed = self.conn.execute(

@@ -10,6 +10,11 @@ fn mcp_service_advertises_tools_capability() {
 
     assert_eq!(info.server_info.name, "aver");
     let instructions = info.instructions.unwrap();
+    assert!(instructions.contains("recall"));
+    assert!(instructions.contains("expand"));
+    assert!(instructions.contains("add_triple"));
+    assert!(instructions.contains("contradict"));
+    assert!(instructions.contains("consolidate"));
     assert!(instructions.contains("remember_claim"));
     assert!(instructions.contains("record_event"));
     assert!(instructions.contains("promote_candidate_claim"));

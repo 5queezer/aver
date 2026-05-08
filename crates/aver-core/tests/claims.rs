@@ -650,3 +650,76 @@ fn consolidate_supersedes_older_conflicting_claim() {
     );
     assert_eq!(store.get_claim(newer).unwrap().status, ClaimStatus::Active);
 }
+
+#[test]
+fn expand_walks_claim_graph_by_entity_and_predicate() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    store
+        .add_claim("PaymentGateway", "depends_on", "StripeSDK", "s1")
+        .unwrap();
+    store
+        .add_claim("StripeSDK", "owned_by", "BillingTeam", "s2")
+        .unwrap();
+    store
+        .add_claim("Unrelated", "depends_on", "Other", "s3")
+        .unwrap();
+
+    let graph = store
+        .expand("PaymentGateway", 2, Some(&["depends_on", "owned_by"]))
+        .unwrap();
+
+    assert_eq!(
+        graph.nodes,
+        vec![
+            "PaymentGateway".to_string(),
+            "StripeSDK".to_string(),
+            "BillingTeam".to_string()
+        ]
+    );
+    assert_eq!(graph.edges.len(), 2);
+    assert_eq!(graph.edges[0].predicate, "depends_on");
+    assert_eq!(graph.edges[1].predicate, "owned_by");
+}
+
+#[test]
+fn contradict_records_auditable_contradiction_without_deleting_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim("stripe-python", "status", "deprecated", "s1")
+        .unwrap();
+
+    let contradiction = store
+        .contradict(claim_id, "vendor docs say current", None)
+        .unwrap();
+
+    assert_eq!(contradiction.claim_id, claim_id);
+    assert_eq!(contradiction.reason, "vendor docs say current");
+    assert_eq!(contradiction.new_claim_id, None);
+    assert_eq!(
+        store.get_claim(claim_id).unwrap().status,
+        ClaimStatus::Active
+    );
+    assert_eq!(
+        store.list_contradictions(claim_id).unwrap(),
+        vec![contradiction]
+    );
+}
+
+#[test]
+fn confidence_decay_lowers_active_contradicted_claim_confidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim("stripe-python", "status", "deprecated", "s1")
+        .unwrap();
+    store
+        .contradict(claim_id, "vendor docs say current", None)
+        .unwrap();
+
+    let decayed = store.decay_contradicted_confidence().unwrap();
+
+    assert_eq!(decayed, 1);
+    assert_eq!(store.get_claim(claim_id).unwrap().confidence, 0.85);
+}

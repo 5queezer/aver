@@ -1,5 +1,6 @@
 use aver_server::tools::{
-    AverTools, ListCandidateClaimsParams, PromoteCandidateClaimParams, ProposeCandidateClaimParams,
+    AddTripleParams, AverTools, ConsolidateParams, ContradictParams, ExpandParams,
+    ListCandidateClaimsParams, PromoteCandidateClaimParams, ProposeCandidateClaimParams,
     RecallParams, RecordEventParams, RejectCandidateClaimParams, RememberClaimParams,
     ShouldExtractMemoriesParams,
 };
@@ -23,14 +24,80 @@ fn remember_claim_tool_writes_claim_and_recall_returns_it() {
     let recalled = tools
         .recall(RecallParams {
             query: "MCP_tools".to_string(),
+            alpha: None,
+            hops: None,
             top_k: Some(5),
         })
         .unwrap();
 
-    assert_eq!(recalled.len(), 1);
-    assert_eq!(recalled[0].id, remembered.id);
-    assert_eq!(recalled[0].subject, "Aver");
-    assert_eq!(recalled[0].agent_id, "claude");
+    assert_eq!(recalled.triples.len(), 1);
+    assert_eq!(recalled.triples[0].id, remembered.id);
+    assert_eq!(recalled.triples[0].subject, "Aver");
+    assert_eq!(recalled.triples[0].agent_id, "claude");
+}
+
+#[test]
+fn adr0008_five_tool_surface_covers_claim_graph_lifecycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let triple = tools
+        .add_triple(AddTripleParams {
+            subject: "PaymentGateway".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "StripeSDK".to_string(),
+            confidence: None,
+            source: "agent-test".to_string(),
+        })
+        .unwrap();
+    tools
+        .add_triple(AddTripleParams {
+            subject: "StripeSDK".to_string(),
+            predicate: "owned_by".to_string(),
+            object: "BillingTeam".to_string(),
+            confidence: None,
+            source: "agent-test".to_string(),
+        })
+        .unwrap();
+
+    let recalled = tools
+        .recall(RecallParams {
+            query: "Stripe".to_string(),
+            alpha: None,
+            hops: Some(2),
+            top_k: Some(5),
+        })
+        .unwrap();
+    assert!(
+        recalled
+            .triples
+            .iter()
+            .any(|claim| claim.id == triple.triple_id)
+    );
+    assert_eq!(recalled.confidence_floor, 0.0);
+
+    let expanded = tools
+        .expand(ExpandParams {
+            entity: "PaymentGateway".to_string(),
+            hops: Some(2),
+            predicates: None,
+        })
+        .unwrap();
+    assert!(expanded.nodes.contains(&"BillingTeam".to_string()));
+
+    let contradiction = tools
+        .contradict(ContradictParams {
+            triple_id: triple.triple_id,
+            reason: "vendor migration completed".to_string(),
+            new_claim: None,
+        })
+        .unwrap();
+    assert_eq!(contradiction.status, "recorded");
+
+    let consolidated = tools
+        .consolidate(ConsolidateParams { scope: None })
+        .unwrap();
+    assert_eq!(consolidated.decayed, 1);
 }
 
 #[test]

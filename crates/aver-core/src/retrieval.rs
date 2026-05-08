@@ -33,6 +33,37 @@ impl HybridWeights {
         }
     }
 
+    pub fn for_query(query: &str) -> Self {
+        let lower = query.to_ascii_lowercase();
+        let structural = [
+            "depends on",
+            "depends_on",
+            "calls",
+            "imports",
+            "implements",
+            "owned by",
+            "owned_by",
+            "related to",
+            "connected to",
+        ];
+        if structural.iter().any(|needle| lower.contains(needle)) {
+            return Self { alpha: 0.35 };
+        }
+
+        let semantic = [
+            "summarize",
+            "explain",
+            "everything about",
+            "overview",
+            "context",
+        ];
+        if semantic.iter().any(|needle| lower.contains(needle)) {
+            return Self { alpha: 0.75 };
+        }
+
+        Self::default()
+    }
+
     pub fn vector_weight(self) -> f64 {
         self.alpha
     }

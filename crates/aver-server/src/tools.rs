@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use aver_core::{AgentKind, CandidateClaim, Claim, EpisodicEvent, Store};
+use aver_core::{
+    AgentKind, CandidateClaim, Claim, ContradictionRecord, EpisodicEvent, NewClaim, Store,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -20,7 +22,52 @@ pub struct RememberClaimParams {
 pub struct RecallParams {
     pub query: String,
     #[serde(default)]
+    pub alpha: Option<f64>,
+    #[serde(default)]
+    pub hops: Option<usize>,
+    #[serde(default)]
     pub top_k: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct ExpandParams {
+    pub entity: String,
+    #[serde(default)]
+    pub hops: Option<usize>,
+    #[serde(default)]
+    pub predicates: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct AddTripleParams {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    #[serde(default)]
+    pub confidence: Option<f64>,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct ContradictNewClaimParams {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct ContradictParams {
+    pub triple_id: i64,
+    pub reason: String,
+    #[serde(default)]
+    pub new_claim: Option<ContradictNewClaimParams>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct ConsolidateParams {
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -109,6 +156,42 @@ pub struct CandidateClaimView {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RecallView {
+    pub triples: Vec<ClaimView>,
+    pub chunks: Vec<String>,
+    pub subgraph: GraphView,
+    pub confidence_floor: f64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct GraphView {
+    pub nodes: Vec<String>,
+    pub edges: Vec<ClaimView>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct AddTripleView {
+    pub triple_id: i64,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ContradictionView {
+    pub contradiction_id: i64,
+    pub claim_id: i64,
+    pub reason: String,
+    pub new_claim_id: Option<i64>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ConsolidateView {
+    pub merged: usize,
+    pub superseded: usize,
+    pub decayed: usize,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ShouldExtractMemoriesView {
     pub should_extract: bool,
 }
@@ -161,6 +244,18 @@ impl From<CandidateClaim> for CandidateClaimView {
     }
 }
 
+impl From<ContradictionRecord> for ContradictionView {
+    fn from(record: ContradictionRecord) -> Self {
+        Self {
+            contradiction_id: record.id,
+            claim_id: record.claim_id,
+            reason: record.reason,
+            new_claim_id: record.new_claim_id,
+            status: record.status.to_ascii_lowercase(),
+        }
+    }
+}
+
 pub struct AverTools {
     store: Store,
 }
@@ -191,11 +286,76 @@ impl AverTools {
         Ok(self.store.get_claim(id)?.into())
     }
 
-    pub fn recall(&self, params: RecallParams) -> anyhow::Result<Vec<ClaimView>> {
+    pub fn recall(&self, params: RecallParams) -> anyhow::Result<RecallView> {
         let top_k = params.top_k.unwrap_or(5).clamp(1, 100);
         let mut claims = self.store.recall_text(&params.query)?;
         claims.truncate(top_k);
-        Ok(claims.into_iter().map(ClaimView::from).collect())
+        let _alpha = params
+            .alpha
+            .unwrap_or_else(|| aver_core::retrieval::HybridWeights::for_query(&params.query).alpha);
+        let _hops = params.hops.unwrap_or(2).clamp(1, 8);
+        Ok(RecallView {
+            triples: claims.into_iter().map(ClaimView::from).collect(),
+            chunks: Vec::new(),
+            subgraph: GraphView {
+                nodes: Vec::new(),
+                edges: Vec::new(),
+            },
+            confidence_floor: 0.0,
+        })
+    }
+
+    pub fn expand(&self, params: ExpandParams) -> anyhow::Result<GraphView> {
+        let predicate_refs = params
+            .predicates
+            .as_ref()
+            .map(|items| items.iter().map(String::as_str).collect::<Vec<_>>());
+        let graph = self.store.expand(
+            &params.entity,
+            params.hops.unwrap_or(2).clamp(1, 8),
+            predicate_refs.as_deref(),
+        )?;
+        Ok(GraphView {
+            nodes: graph.nodes,
+            edges: graph.edges.into_iter().map(ClaimView::from).collect(),
+        })
+    }
+
+    pub fn add_triple(&self, params: AddTripleParams) -> anyhow::Result<AddTripleView> {
+        let _confidence = params.confidence.unwrap_or(0.95).clamp(0.0, 1.0);
+        let id = self.store.add_claim(
+            &params.subject,
+            &params.predicate,
+            &params.object,
+            &params.source,
+        )?;
+        Ok(AddTripleView {
+            triple_id: id,
+            status: "appended".to_string(),
+        })
+    }
+
+    pub fn contradict(&self, params: ContradictParams) -> anyhow::Result<ContradictionView> {
+        let new_claim = params.new_claim.as_ref().map(|claim| NewClaim {
+            subject: claim.subject.as_str(),
+            predicate: claim.predicate.as_str(),
+            object: claim.object.as_str(),
+            source: claim.source.as_str(),
+        });
+        Ok(self
+            .store
+            .contradict(params.triple_id, &params.reason, new_claim)?
+            .into())
+    }
+
+    pub fn consolidate(&self, _params: ConsolidateParams) -> anyhow::Result<ConsolidateView> {
+        let decayed = self.store.decay_contradicted_confidence()?;
+        let superseded = self.store.consolidate()?;
+        Ok(ConsolidateView {
+            merged: 0,
+            superseded,
+            decayed,
+        })
     }
 
     pub fn record_event(&self, params: RecordEventParams) -> anyhow::Result<EventView> {

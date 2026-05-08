@@ -13,6 +13,19 @@ fn default_hybrid_weights_use_hardcoded_v0_2_alpha() {
 }
 
 #[test]
+fn adaptive_hybrid_weights_classifies_structural_and_semantic_queries() {
+    assert_eq!(
+        HybridWeights::for_query("what depends on PaymentGateway").alpha,
+        0.35
+    );
+    assert_eq!(
+        HybridWeights::for_query("summarize everything about OAuth migration").alpha,
+        0.75
+    );
+    assert_eq!(HybridWeights::for_query("Stripe status").alpha, 0.65);
+}
+
+#[test]
 fn hybrid_weights_blend_vector_and_graph_scores() {
     let weights = HybridWeights { alpha: 0.65 };
 

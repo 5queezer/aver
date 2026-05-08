@@ -10,7 +10,8 @@ use rmcp::{
 use serde::Deserialize;
 
 use crate::tools::{
-    AverTools, ListCandidateClaimsParams, PromoteCandidateClaimParams, ProposeCandidateClaimParams,
+    AddTripleParams, AverTools, ConsolidateParams, ContradictParams, ExpandParams,
+    ListCandidateClaimsParams, PromoteCandidateClaimParams, ProposeCandidateClaimParams,
     RecallParams as CoreRecallParams, RecordEventParams, RejectCandidateClaimParams,
     RememberClaimParams as CoreRememberClaimParams, ShouldExtractMemoriesParams,
 };
@@ -31,6 +32,10 @@ pub struct RememberClaimParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RecallParams {
     pub query: String,
+    #[serde(default)]
+    pub alpha: Option<f64>,
+    #[serde(default)]
+    pub hops: Option<usize>,
     #[serde(default = "default_top_k")]
     pub top_k: usize,
 }
@@ -89,6 +94,82 @@ impl AverMcpService {
                 None,
             )),
         }
+    }
+
+    #[tool(description = "Append a structured memory triple per ADR-0008.")]
+    async fn add_triple(
+        &self,
+        Parameters(params): Parameters<AddTripleParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .add_triple(params);
+        json_tool_result(result, "add_triple")
+    }
+
+    #[tool(description = "Expand a known entity into its local claim-graph neighborhood.")]
+    async fn expand(
+        &self,
+        Parameters(params): Parameters<ExpandParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .expand(params);
+        json_tool_result(result, "expand")
+    }
+
+    #[tool(description = "Record an explicit contradiction for an existing claim.")]
+    async fn contradict(
+        &self,
+        Parameters(params): Parameters<ContradictParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .contradict(params);
+        json_tool_result(result, "contradict")
+    }
+
+    #[tool(description = "Run Aver's on-demand consolidation pass.")]
+    async fn consolidate(
+        &self,
+        Parameters(params): Parameters<ConsolidateParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .consolidate(params);
+        json_tool_result(result, "consolidate")
     }
 
     #[tool(description = "Record an append-only episodic event for later memory extraction.")]
@@ -224,6 +305,8 @@ impl AverMcpService {
             })?
             .recall(CoreRecallParams {
                 query: params.query,
+                alpha: params.alpha,
+                hops: params.hops,
                 top_k: Some(params.top_k),
             });
         match result {
@@ -267,7 +350,7 @@ impl ServerHandler for AverMcpService {
                     .with_icons(vec![Icon::new(icon_url).with_mime_type("image/svg+xml")]),
             )
             .with_instructions(
-                "Available tools: remember_claim, recall, record_event, should_extract_memories, propose_candidate_claim, list_candidate_claims, promote_candidate_claim, reject_candidate_claim.".to_string(),
+                "Available tools: recall, expand, add_triple, contradict, consolidate, remember_claim, record_event, should_extract_memories, propose_candidate_claim, list_candidate_claims, promote_candidate_claim, reject_candidate_claim.".to_string(),
             )
     }
 }

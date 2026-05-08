@@ -24,9 +24,12 @@ The goal is a trustworthy substrate for coding agents that can:
 - **Structured claims** — memories are stored as `(subject, predicate, object)` claims with source references, confidence, status, and agent provenance.
 - **Privacy gate** — token/path/entropy checks run before writes; rejected content is not persisted.
 - **Keyword, vector, and hybrid recall primitives** — text recall is available through the CLI; vector chunks and hybrid ranking are implemented in the core crate.
+- **Adaptive HybridRAG weights** — structural graph questions lean toward graph context; broad summary questions lean toward vectors.
+- **Graph expansion and communities** — local claim neighborhoods and deterministic connected-component communities are available in core.
+- **Contradiction records and confidence decay** — contradictions are explicit audit records; consolidation can decay contradicted active claims.
 - **Deterministic code extraction** — `aver-extractor` uses Tree-sitter Rust to extract functions, imports, calls, structs, enums, traits, impl methods, tests, and code facts.
 - **Candidate claim workflow** — episodic events can produce staged claims that are promoted or rejected explicitly.
-- **MCP/OAuth server** — `aver-server` exposes memory tools over Streamable HTTP MCP behind a local OAuth-style token flow.
+- **MCP/OAuth server** — `aver-server` exposes memory tools over Streamable HTTP MCP behind a local OAuth-style token flow, including the ADR-0008 five-tool surface.
 - **Evaluation harnesses** — fixture evaluation plus a BEAM100K runner using local Ollama for embeddings, answer generation, and judging.
 
 ## Quick Start
@@ -87,9 +90,18 @@ The design maps to the ADRs:
 - **Semantic graph** — durable claims/triples in SQLite.
 - **Vector store** — `vector_chunks` with JSON-serialized embeddings today; sqlite-vss-backed nearest-neighbor indexing is planned.
 - **Extraction** — Rust Tree-sitter extractor turns source code into structured facts.
-- **Consolidation** — basic duplicate/conflict handling supersedes older claims.
+- **Graph tools** — recall, expand, add-triple, contradict, and consolidate map the ADR-0008 surface onto the local claim store.
+- **Consolidation** — duplicate/conflict handling supersedes older claims, and explicit contradictions can decay confidence.
 
 For a deeper implementation walkthrough, see [`doc/how-it-works.md`](doc/how-it-works.md). For design rationale, see the ADRs in [`doc/adr/`](doc/adr/).
+
+## Design References
+
+Aver's implementation is intentionally conservative and source-grounded:
+
+- *The Memory Layer* frames durable memory as append-only triples consolidated from episodic fragments into a persistent graph, with HybridRAG combining vector search and graph traversal [ch.147–148].
+- Karta demonstrates the value of active memory operations such as multi-hop traversal, contradiction detection, consolidation, confidence, and temporal awareness; Aver keeps those ideas behind explicit, auditable claim tools instead of opaque note mutation.
+- MuninnDB shows practical retrieval controls such as mode/weight selection, entity graph traversal, relationship types, confidence-preserving entity state, and use-strength/decay; Aver adopts the local-first graph and adaptive retrieval pieces that fit its SQLite/Rust ADRs.
 
 ## CLI Usage
 
@@ -135,10 +147,17 @@ Useful endpoints:
 - `GET /api/health` with `Authorization: Bearer <token>`
 - `/mcp` with `Authorization: Bearer <token>`
 
-MCP tools currently include:
+MCP tools currently include the ADR-0008 stable memory surface:
+
+- `recall`
+- `expand`
+- `add_triple`
+- `contradict`
+- `consolidate`
+
+Operational triggered-memory tools are also exposed:
 
 - `remember_claim`
-- `recall`
 - `record_event`
 - `should_extract_memories`
 - `propose_candidate_claim`
@@ -226,23 +245,21 @@ Implemented today:
 - claim CRUD and keyword recall,
 - vector chunk storage and embedding abstractions,
 - Ollama embedding client and deterministic mock embedding client,
-- cosine similarity and hybrid vector/text recall primitives,
+- cosine similarity, adaptive HybridRAG weights, and hybrid vector/text recall primitives,
+- graph expansion/traversal over active claim triples,
+- explicit contradiction records and confidence decay for contradicted active claims,
 - basic consolidation for duplicate/conflicting claims,
 - CLI `status`, `remember`, and `recall`,
 - Tree-sitter Rust extraction,
 - structured prose fact parsing,
-- MCP/OAuth server with staged candidate-claim workflow,
+- MCP/OAuth server with ADR-0008 recall/expand/add-triple/contradict/consolidate tools and staged candidate-claim workflow,
 - fixture and BEAM100K evaluation runners.
 
 Partial or planned:
 
-- complete five-tool agent API surface from ADR-0008,
-- graph expansion/traversal API,
-- sqlite-vss-backed nearest-neighbor index,
-- adaptive HybridRAG alpha/query classification,
-- full contradiction records and confidence decay,
-- shared graph mode and community detection,
-- broader production packaging and release automation.
+- sqlite-vss-backed nearest-neighbor virtual table integration beyond the current SQLite metadata plus JSON embedding storage,
+- production shared-graph backend adapter beyond the current local connected-component community detection,
+- broader production packaging, signed releases, and release automation beyond the current installer/`just dist` workflow.
 
 ## Documentation
 
