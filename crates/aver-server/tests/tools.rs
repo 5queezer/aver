@@ -288,3 +288,38 @@ fn recall_tool_rejects_zero_top_k() {
 
     assert!(err.to_string().contains("top_k"));
 }
+
+#[test]
+fn recall_tool_returns_graph_context_for_entity_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    tools
+        .add_triple(AddTripleParams {
+            subject: "PaymentGateway".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "StripeSDK".to_string(),
+            confidence: None,
+            source: "test".to_string(),
+        })
+        .unwrap();
+
+    let recalled = tools
+        .recall(RecallParams {
+            query: "PaymentGateway".to_string(),
+            alpha: None,
+            hops: Some(1),
+            top_k: Some(5),
+        })
+        .unwrap();
+
+    assert!(
+        recalled
+            .subgraph
+            .nodes
+            .contains(&"PaymentGateway".to_string())
+    );
+    assert!(recalled.subgraph.nodes.contains(&"StripeSDK".to_string()));
+    assert_eq!(recalled.subgraph.edges.len(), 1);
+    assert_eq!(recalled.subgraph.edges[0].predicate, "depends_on");
+}

@@ -297,13 +297,14 @@ impl AverTools {
         } else {
             aver_core::retrieval::HybridWeights::for_query(&params.query).alpha
         };
-        let _hops = validate_hops(params.hops.unwrap_or(2))?;
+        let hops = validate_hops(params.hops.unwrap_or(2))?;
+        let subgraph = self.store.expand(&params.query, hops, None)?;
         Ok(RecallView {
             triples: claims.into_iter().map(ClaimView::from).collect(),
             chunks: Vec::new(),
             subgraph: GraphView {
-                nodes: Vec::new(),
-                edges: Vec::new(),
+                nodes: subgraph.nodes,
+                edges: subgraph.edges.into_iter().map(ClaimView::from).collect(),
             },
             confidence_floor: 0.0,
         })
