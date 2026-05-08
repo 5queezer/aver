@@ -354,3 +354,11 @@ fn privacy_filter_path_rejects_age_identity_dir() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_gnupg_private_keys_dir() {
+    assert_eq!(
+        privacy_filter_path(".gnupg/private-keys-v1.d/keygrip").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}

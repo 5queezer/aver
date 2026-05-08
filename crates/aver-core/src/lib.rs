@@ -226,6 +226,8 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
         || path.starts_with("~/.secrets.d/")
         || path.starts_with(".age/")
         || path.contains("/.age/")
+        || path.starts_with(".gnupg/")
+        || path.contains("/.gnupg/")
         || path.ends_with(".kdbx")
         || path.ends_with(".kdb")
     {
