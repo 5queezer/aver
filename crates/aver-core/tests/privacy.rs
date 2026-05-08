@@ -176,3 +176,11 @@ fn privacy_filter_path_rejects_relative_aws_credentials_file() {
         PrivacyRejection::AwsCredentialsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_relative_config_dir() {
+    assert_eq!(
+        privacy_filter_path(".config/aver/secrets.toml").unwrap_err(),
+        PrivacyRejection::ConfigPath
+    );
+}
