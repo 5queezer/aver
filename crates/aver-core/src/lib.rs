@@ -967,7 +967,12 @@ impl Store {
                     })
                 },
             )
-            .map_err(Error::from)
+            .map_err(|err| match err {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    Error::MissingCandidate { candidate_id: id }
+                }
+                other => Error::Sqlite(other),
+            })
     }
 
     /// Retrieve a claim by id.

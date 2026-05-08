@@ -397,3 +397,15 @@ fn get_event_requires_existing_event() {
 
     assert!(err.to_string().contains("event"));
 }
+
+#[test]
+fn get_candidate_claim_requires_existing_candidate() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .get_candidate_claim(42)
+        .expect_err("fetching a missing candidate should return a domain error");
+
+    assert!(err.to_string().contains("candidate"));
+}
