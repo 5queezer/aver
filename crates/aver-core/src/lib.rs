@@ -245,6 +245,7 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
         || path.ends_with(".key")
         || path.ends_with(".p12")
         || path.ends_with(".pfx")
+        || path.ends_with(".ppk")
         || path.ends_with(".jks")
         || path.ends_with(".keystore")
     {

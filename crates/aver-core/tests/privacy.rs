@@ -326,3 +326,11 @@ fn privacy_filter_rejects_ssh2_private_key_header() {
         PrivacyRejection::PrivateKey
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_putty_key_file() {
+    assert_eq!(
+        privacy_filter_path("keys/deploy.ppk").unwrap_err(),
+        PrivacyRejection::KeyPath
+    );
+}
