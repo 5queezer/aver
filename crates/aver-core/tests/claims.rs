@@ -819,3 +819,15 @@ fn list_contradictions_requires_existing_claim() {
 
     assert!(err.to_string().contains("claim"));
 }
+
+#[test]
+fn expand_rejects_empty_entity() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .expand(" ", 1, None)
+        .expect_err("blank graph expansion entities should be rejected");
+
+    assert!(err.to_string().contains("entity"));
+}

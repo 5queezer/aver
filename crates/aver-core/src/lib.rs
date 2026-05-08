@@ -1265,7 +1265,10 @@ impl Store {
         hops: usize,
         predicates: Option<&[&str]>,
     ) -> Result<GraphExpansion, Error> {
-        if entity.trim().is_empty() || hops == 0 {
+        if entity.trim().is_empty() {
+            return Err(Error::InvalidGraphEntity);
+        }
+        if hops == 0 {
             return Ok(GraphExpansion {
                 nodes: Vec::new(),
                 edges: Vec::new(),
@@ -1903,6 +1906,8 @@ pub enum Error {
     InvalidEventField { field: &'static str },
     #[error("invalid recall query: must not be empty")]
     InvalidRecallQuery,
+    #[error("invalid graph entity: must not be empty")]
+    InvalidGraphEntity,
     #[error("invalid event threshold: must be greater than zero")]
     InvalidEventThreshold,
     #[error("invalid rejection reason: must not be empty")]
