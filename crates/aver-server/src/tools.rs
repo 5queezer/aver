@@ -271,6 +271,9 @@ impl AverTools {
         if params.subject.trim().is_empty() {
             anyhow::bail!("invalid subject: must not be empty");
         }
+        if params.predicate.trim().is_empty() {
+            anyhow::bail!("invalid predicate: must not be empty");
+        }
         let source = params.source.as_deref().unwrap_or("mcp");
         let agent_id = params.agent_id.as_deref().unwrap_or("mcp");
         let agent_kind = params

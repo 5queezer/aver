@@ -564,3 +564,22 @@ fn remember_claim_rejects_empty_subject() {
 
     assert!(err.to_string().contains("subject"));
 }
+
+#[test]
+fn remember_claim_rejects_empty_predicate() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .remember_claim(RememberClaimParams {
+            subject: "PaymentGateway".to_string(),
+            predicate: " ".to_string(),
+            object: "StripeSDK".to_string(),
+            source: None,
+            agent_id: None,
+            agent_kind: None,
+        })
+        .expect_err("empty predicates should be rejected");
+
+    assert!(err.to_string().contains("predicate"));
+}
