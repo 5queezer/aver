@@ -1003,6 +1003,7 @@ impl Store {
         embedding_model: &str,
     ) -> Result<i64, Error> {
         validate_vector_chunk_text(text)?;
+        validate_embedding_model(embedding_model)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         self.conn.execute(
             "INSERT INTO vector_chunks (claim_id, text, embedding_model, created_at)
@@ -1700,6 +1701,14 @@ fn validate_vector_chunk_text(value: &str) -> Result<(), Error> {
     }
 }
 
+fn validate_embedding_model(value: &str) -> Result<(), Error> {
+    if value.trim().is_empty() {
+        Err(Error::InvalidEmbeddingModel)
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_claim_field(field: &'static str, value: &str) -> Result<(), Error> {
     if value.trim().is_empty() {
         Err(Error::InvalidClaimField { field })
@@ -1796,6 +1805,8 @@ pub enum Error {
     InvalidAgentId { value: String },
     #[error("invalid vector chunk text: must not be empty")]
     InvalidVectorChunkText,
+    #[error("invalid embedding model: must not be empty")]
+    InvalidEmbeddingModel,
     #[error("invalid claim {field}: must not be empty")]
     InvalidClaimField { field: &'static str },
     #[error("invalid event {field}: must not be empty")]
