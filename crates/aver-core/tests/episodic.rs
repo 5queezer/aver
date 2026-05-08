@@ -361,3 +361,15 @@ fn list_events_for_session_rejects_empty_session_id() {
 
     assert!(err.to_string().contains("session_id"));
 }
+
+#[test]
+fn should_extract_memories_rejects_empty_session_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .should_extract_memories(" ", 1)
+        .expect_err("blank extraction session ids should be rejected");
+
+    assert!(err.to_string().contains("session_id"));
+}

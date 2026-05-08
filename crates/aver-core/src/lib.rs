@@ -750,6 +750,7 @@ impl Store {
         session_id: &str,
         event_threshold: usize,
     ) -> Result<bool, Error> {
+        validate_event_field("session_id", session_id)?;
         if event_threshold == 0 {
             return Err(Error::InvalidEventThreshold);
         }
