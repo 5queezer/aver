@@ -240,3 +240,18 @@ fn record_event_rejects_empty_session_id_before_log_write() {
         "invalid events must not reach the event log"
     );
 }
+
+#[test]
+fn propose_candidate_claim_rejects_empty_subject() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event_id = store
+        .record_event("s1", "message", "remember something", "test")
+        .unwrap();
+
+    let err = store
+        .propose_candidate_claim(event_id, " ", "depends_on", "StripeSDK")
+        .expect_err("blank candidate subjects should be rejected");
+
+    assert!(err.to_string().contains("subject"));
+}

@@ -781,6 +781,9 @@ impl Store {
         if !self.event_exists(event_id)? {
             return Err(Error::MissingEventProvenance { event_id });
         }
+        validate_claim_field("subject", subject)?;
+        validate_claim_field("predicate", predicate)?;
+        validate_claim_field("object", object)?;
         privacy_filter(&format!("{subject} {predicate} {object}"))?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         self.conn.execute(
