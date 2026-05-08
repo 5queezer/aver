@@ -474,3 +474,11 @@ fn privacy_filter_path_rejects_vault_token_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_pulumi_credentials() {
+    assert_eq!(
+        privacy_filter_path(".pulumi/credentials.json").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
