@@ -49,6 +49,16 @@ pub struct Store {
     event_log_path: PathBuf,
 }
 
+struct ClaimWrite<'a> {
+    agent_id: &'a str,
+    agent_kind: AgentKind,
+    subject: &'a str,
+    predicate: &'a str,
+    object: &'a str,
+    source: &'a str,
+    confidence: f64,
+}
+
 /// A claim row as exposed to consumers (ADR-0003).
 #[derive(Debug, Clone)]
 pub struct Claim {
@@ -483,14 +493,26 @@ impl Store {
         object: &str,
         source: &str,
     ) -> Result<i64, Error> {
-        self.add_claim_from_agent(
-            "local",
-            AgentKind::Human,
+        self.add_claim_with_confidence(subject, predicate, object, source, 0.95)
+    }
+
+    pub fn add_claim_with_confidence(
+        &self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        source: &str,
+        confidence: f64,
+    ) -> Result<i64, Error> {
+        self.insert_claim(ClaimWrite {
+            agent_id: "local",
+            agent_kind: AgentKind::Human,
             subject,
             predicate,
             object,
             source,
-        )
+            confidence,
+        })
     }
 
     pub fn add_claim_from_agent(
@@ -502,10 +524,32 @@ impl Store {
         object: &str,
         source: &str,
     ) -> Result<i64, Error> {
-        validate_agent_id(agent_id)?;
+        self.insert_claim(ClaimWrite {
+            agent_id,
+            agent_kind,
+            subject,
+            predicate,
+            object,
+            source,
+            confidence: 0.95,
+        })
+    }
+
+    fn insert_claim(&self, write: ClaimWrite<'_>) -> Result<i64, Error> {
+        if !(0.0..=1.0).contains(&write.confidence) {
+            return Err(Error::InvalidConfidence {
+                value: write.confidence,
+            });
+        }
+        validate_agent_id(write.agent_id)?;
         privacy_filter(&format!(
-            "{agent_id} {} {subject} {predicate} {object} {source}",
-            agent_kind.as_str()
+            "{} {} {} {} {} {}",
+            write.agent_id,
+            write.agent_kind.as_str(),
+            write.subject,
+            write.predicate,
+            write.object,
+            write.source
         ))?;
 
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
@@ -523,31 +567,33 @@ impl Store {
             kind: "add_claim",
             ts: now,
             claim_id,
-            subject,
-            predicate,
-            object,
-            source,
-            agent_id,
-            agent_kind: agent_kind.as_str(),
+            subject: write.subject,
+            predicate: write.predicate,
+            object: write.object,
+            source: write.source,
+            agent_id: write.agent_id,
+            agent_kind: write.agent_kind.as_str(),
+            confidence: write.confidence,
         };
         append_jsonl(&self.log_path, &entry)?;
-        append_jsonl(&self.agent_log_path(agent_id), &entry)?;
+        append_jsonl(&self.agent_log_path(write.agent_id), &entry)?;
 
-        let source_refs = serde_json::to_string(&[source])?;
+        let source_refs = serde_json::to_string(&[write.source])?;
         self.conn.execute(
             "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
                                  status, source_refs, agent_id, agent_kind, write_ts,
                                  created_at, last_seen_at)
-             VALUES (?1, ?2, ?3, ?4, 'USER_ASSERTED', 0.95, 'ACTIVE', ?5,
-                     ?6, ?7, ?8, ?8, ?8)",
+             VALUES (?1, ?2, ?3, ?4, 'USER_ASSERTED', ?5, 'ACTIVE', ?6,
+                     ?7, ?8, ?9, ?9, ?9)",
             params![
                 claim_id,
-                subject,
-                predicate,
-                object,
+                write.subject,
+                write.predicate,
+                write.object,
+                write.confidence,
                 source_refs,
-                agent_id,
-                agent_kind.as_str(),
+                write.agent_id,
+                write.agent_kind.as_str(),
                 now
             ],
         )?;
@@ -775,6 +821,7 @@ impl Store {
             source: &source,
             agent_id: &event.agent_id,
             agent_kind: event.agent_kind.as_str(),
+            confidence: candidate.confidence,
         };
         append_jsonl(&self.log_path, &entry)?;
         append_jsonl(&self.agent_log_path(&event.agent_id), &entry)?;
@@ -1683,6 +1730,7 @@ struct LogEntry<'a> {
     source: &'a str,
     agent_id: &'a str,
     agent_kind: &'a str,
+    confidence: f64,
 }
 
 fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
@@ -1713,6 +1761,8 @@ pub enum Error {
     EnumParse { kind: &'static str, value: String },
     #[error("invalid agent_id for partitioned log path: {value:?}")]
     InvalidAgentId { value: String },
+    #[error("invalid confidence value: {value}")]
+    InvalidConfidence { value: f64 },
     #[error("candidate claim must cite an existing event: {event_id}")]
     MissingEventProvenance { event_id: i64 },
 }

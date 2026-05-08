@@ -331,11 +331,12 @@ impl AverTools {
         {
             anyhow::bail!("invalid confidence: must be between 0 and 1");
         }
-        let id = self.store.add_claim(
+        let id = self.store.add_claim_with_confidence(
             &params.subject,
             &params.predicate,
             &params.object,
             &params.source,
+            params.confidence.unwrap_or(0.95),
         )?;
         Ok(AddTripleView {
             triple_id: id,

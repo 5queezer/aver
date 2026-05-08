@@ -206,3 +206,35 @@ fn add_triple_rejects_confidence_outside_unit_interval() {
 
     assert!(err.to_string().contains("confidence"));
 }
+
+#[test]
+fn add_triple_persists_valid_confidence_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let written = tools
+        .add_triple(AddTripleParams {
+            subject: "PaymentGateway".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "StripeSDK".to_string(),
+            confidence: Some(0.4),
+            source: "agent-test".to_string(),
+        })
+        .unwrap();
+
+    let recalled = tools
+        .recall(RecallParams {
+            query: "PaymentGateway".to_string(),
+            alpha: None,
+            hops: None,
+            top_k: Some(5),
+        })
+        .unwrap();
+
+    let claim = recalled
+        .triples
+        .iter()
+        .find(|claim| claim.id == written.triple_id)
+        .expect("written claim should be recalled");
+    assert_eq!(claim.confidence, 0.4);
+}
