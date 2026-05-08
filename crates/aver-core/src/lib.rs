@@ -1162,6 +1162,7 @@ impl Store {
         query_embedding: &[f32],
         top_k: usize,
     ) -> Result<Vec<VectorChunk>, Error> {
+        validate_top_k(top_k)?;
         validate_embedding_vector(query_embedding)?;
         let mut stmt = self.conn.prepare(
             "SELECT id, claim_id, text, embedding_model, embedding_json
@@ -1792,6 +1793,14 @@ fn validate_embedding_vector(value: &[f32]) -> Result<(), Error> {
     }
 }
 
+fn validate_top_k(top_k: usize) -> Result<(), Error> {
+    if top_k == 0 {
+        Err(Error::InvalidTopK)
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_claim_field(field: &'static str, value: &str) -> Result<(), Error> {
     if value.trim().is_empty() {
         Err(Error::InvalidClaimField { field })
@@ -1931,6 +1940,8 @@ pub enum Error {
     InvalidEventField { field: &'static str },
     #[error("invalid recall query: must not be empty")]
     InvalidRecallQuery,
+    #[error("invalid top_k: must be greater than zero")]
+    InvalidTopK,
     #[error("invalid graph entity: must not be empty")]
     InvalidGraphEntity,
     #[error("invalid graph hops: must be greater than zero")]

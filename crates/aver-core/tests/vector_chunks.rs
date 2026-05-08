@@ -473,3 +473,15 @@ fn get_vector_chunk_requires_existing_chunk() {
 
     assert!(err.to_string().contains("vector chunk"));
 }
+
+#[test]
+fn rank_vector_chunks_by_embedding_rejects_zero_top_k() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .rank_vector_chunks_by_embedding(&[0.1, 0.2], 0)
+        .expect_err("direct vector ranking should reject zero top_k");
+
+    assert!(err.to_string().contains("top_k"));
+}
