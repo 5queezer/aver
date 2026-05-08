@@ -594,3 +594,11 @@ fn privacy_filter_path_rejects_maven_settings_file() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_gradle_properties_file() {
+    assert_eq!(
+        privacy_filter_path(".gradle/gradle.properties").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}

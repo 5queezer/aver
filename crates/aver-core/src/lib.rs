@@ -238,6 +238,8 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
         || path.ends_with("/.nuget/NuGet/NuGet.Config")
         || path == ".m2/settings.xml"
         || path.ends_with("/.m2/settings.xml")
+        || path == ".gradle/gradle.properties"
+        || path.ends_with("/.gradle/gradle.properties")
         || path == ".vault-token"
         || path.ends_with("/.vault-token")
         || path == ".sentryclirc"
