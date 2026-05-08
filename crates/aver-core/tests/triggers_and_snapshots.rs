@@ -99,6 +99,10 @@ fn graph_drift_snapshot_includes_privacy_rejection_counts() {
         store.propose_candidate_claim(event_id, "Aver", "mentions", token),
         Err(Error::Privacy(PrivacyRejection::OpenAiKey))
     ));
+    assert!(matches!(
+        store.privacy_filter_path_recording(".secrets.d/token"),
+        Err(Error::Privacy(PrivacyRejection::SecretsPath))
+    ));
 
     let snapshot = store
         .graph_drift_snapshot(ConsolidationReport {
@@ -115,6 +119,10 @@ fn graph_drift_snapshot_includes_privacy_rejection_counts() {
     assert_eq!(
         snapshot.privacy_rejection_counts.get("regex:openai"),
         Some(&3)
+    );
+    assert_eq!(
+        snapshot.privacy_rejection_counts.get("path:secrets-dir"),
+        Some(&1)
     );
     assert_eq!(snapshot.consolidation_merged, 1);
 }

@@ -1222,6 +1222,14 @@ impl Store {
         Ok(())
     }
 
+    pub fn privacy_filter_path_recording(&self, path: impl AsRef<Path>) -> Result<(), Error> {
+        if let Err(rejection) = privacy_filter_path(path) {
+            self.record_privacy_rejection(rejection)?;
+            return Err(Error::Privacy(rejection));
+        }
+        Ok(())
+    }
+
     pub fn privacy_rejection_count(&self, rejection: PrivacyRejection) -> Result<i64, Error> {
         Ok(self
             .conn

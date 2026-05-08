@@ -142,6 +142,7 @@ Default configuration:
 | `AVER_MEMORY_DIR` | `.aver` | Memory store directory. |
 | `AVER_AUTH_DB_PATH` | `aver-auth.db` | SQLite auth database path. |
 | `AVER_CORS_ORIGINS` | *(allow any origin)* | Optional comma-separated allowed origins for protected MCP CORS responses. |
+| `AVER_LOCAL_AUTHORIZATION_TOKEN` | *(unset)* | Local approval token required by `/oauth/authorize`; requests must include `approval_token=<token>`. When unset, authorization-code minting returns `401` so public registration cannot self-authorize memory access. |
 
 Useful endpoints:
 
@@ -152,7 +153,7 @@ Useful endpoints:
 - `GET /api/health` with `Authorization: Bearer <token>`
 - `/mcp` with `Authorization: Bearer <token>`
 
-`/oauth/token` returns both `access_token` and `refresh_token`. Refresh grants issue a new access token while preserving the existing refresh token. Provider-backed login remains a boundary: external identity providers should only create local authorization codes after provider validation; they must not receive direct access to Aver's memory store or bypass the validated MCP/core write paths.
+`/oauth/authorize` is intentionally not self-service: after dynamic client registration, a local approval/provider boundary must supply `approval_token` matching `AVER_LOCAL_AUTHORIZATION_TOKEN` before Aver mints an authorization code. `/oauth/token` returns both `access_token` and `refresh_token`. Refresh grants issue a new access token while preserving the existing refresh token. Provider-backed login remains a boundary: external identity providers should only create local authorization codes after provider validation; they must not receive direct access to Aver's memory store or bypass the validated MCP/core write paths.
 
 MCP tools currently include the ADR-0008 stable memory surface:
 
@@ -214,7 +215,7 @@ The BEAM runner expects Ollama to provide both the embedding model and generatio
 
 ## Prose/document plugin boundary
 
-ADR-0013 permits non-Rust prose/document extraction plugins only behind stdin/stdout JSON-RPC. `aver-extractor::JsonRpcPluginRunner` sends one JSON-RPC request to a child process, parses the response, validates extracted fact fields, and returns facts to Rust callers. Plugins are extraction-only: they do not write memory directly, share filesystem state, or bypass core privacy/log-first validation.
+ADR-0013 permits non-Rust prose/document extraction plugins only behind stdin/stdout JSON-RPC. `aver-extractor::JsonRpcPluginRunner` sends one JSON-RPC request to a configured child process, parses the response, validates extracted fact fields, and returns facts to Rust callers. Plugins are extraction-only: they do not write memory directly and cannot bypass core privacy/log-first validation. The current runner is a process boundary, not an OS sandbox; production deployments should run plugins from an allowlisted command with external filesystem/environment sandboxing when untrusted plugins are enabled.
 
 ## Project Structure
 
