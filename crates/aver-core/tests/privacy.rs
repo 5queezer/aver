@@ -626,3 +626,11 @@ fn privacy_filter_path_rejects_aws_sso_cache_file() {
         PrivacyRejection::AwsCredentialsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_azure_msal_cache_file() {
+    assert_eq!(
+        privacy_filter_path(".azure/msal_token_cache.json").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
