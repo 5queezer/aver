@@ -271,3 +271,20 @@ fn recall_tool_rejects_zero_hops() {
 
     assert!(err.to_string().contains("hops"));
 }
+
+#[test]
+fn recall_tool_rejects_zero_top_k() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .recall(RecallParams {
+            query: "PaymentGateway".to_string(),
+            alpha: None,
+            hops: None,
+            top_k: Some(0),
+        })
+        .expect_err("zero top_k should be rejected");
+
+    assert!(err.to_string().contains("top_k"));
+}

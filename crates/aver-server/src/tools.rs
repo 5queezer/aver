@@ -287,7 +287,7 @@ impl AverTools {
     }
 
     pub fn recall(&self, params: RecallParams) -> anyhow::Result<RecallView> {
-        let top_k = params.top_k.unwrap_or(5).clamp(1, 100);
+        let top_k = validate_top_k(params.top_k.unwrap_or(5))?;
         let mut claims = self.store.recall_text(&params.query)?;
         claims.truncate(top_k);
         let _alpha = if let Some(alpha) = params.alpha {
@@ -443,5 +443,13 @@ fn validate_hops(hops: usize) -> anyhow::Result<usize> {
         Ok(hops)
     } else {
         anyhow::bail!("invalid hops: must be between 1 and 8")
+    }
+}
+
+fn validate_top_k(top_k: usize) -> anyhow::Result<usize> {
+    if (1..=100).contains(&top_k) {
+        Ok(top_k)
+    } else {
+        anyhow::bail!("invalid top_k: must be between 1 and 100")
     }
 }
