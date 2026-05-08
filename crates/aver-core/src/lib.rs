@@ -733,6 +733,7 @@ impl Store {
     }
 
     pub fn list_events_for_session(&self, session_id: &str) -> Result<Vec<EpisodicEvent>, Error> {
+        validate_event_field("session_id", session_id)?;
         let mut stmt = self
             .conn
             .prepare("SELECT id FROM episodic_events WHERE session_id = ?1 ORDER BY id")?;

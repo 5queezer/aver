@@ -349,3 +349,15 @@ fn list_candidate_claims_rejects_unknown_status_filter() {
 
     assert!(err.to_string().contains("candidate status"));
 }
+
+#[test]
+fn list_events_for_session_rejects_empty_session_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .list_events_for_session(" ")
+        .expect_err("blank session filters should be rejected");
+
+    assert!(err.to_string().contains("session_id"));
+}
