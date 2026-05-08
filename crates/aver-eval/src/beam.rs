@@ -114,6 +114,8 @@ fn existing_dataset(path: PathBuf) -> Result<PathBuf> {
 pub fn answer_prompt(question: &str, _reference_answer: &str, contexts: &[String]) -> String {
     format!(
         "You answer a BEAM memory benchmark question using only the retrieved memory context.\n\
+Answer the question directly and concisely. Do not respond with generic meta-commentary about the task or context.\n\
+If retrieved memories conflict, explicitly say there is contradictory information and ask which statement is correct.\n\
 If the context is insufficient, say you do not know.\n\n\
 QUESTION:\n{question}\n\n\
 RETRIEVED MEMORY CONTEXT:\n{}\n\n\

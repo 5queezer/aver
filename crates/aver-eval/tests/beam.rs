@@ -51,6 +51,15 @@ fn beam_redacts_secret_like_tokens_before_ingestion() {
 }
 
 #[test]
+fn beam_answer_prompt_instructs_direct_grounded_answers() {
+    let prompt = aver_eval::beam::answer_prompt("When is launch?", "April 1", &[]);
+
+    assert!(prompt.contains("Answer the question directly"));
+    assert!(prompt.contains("Do not respond with generic meta-commentary"));
+    assert!(prompt.contains("If retrieved memories conflict"));
+}
+
+#[test]
 fn beam_answer_prompt_contains_question_and_context_without_reference_answer_leakage() {
     let prompt = aver_eval::beam::answer_prompt(
         "What language?",
