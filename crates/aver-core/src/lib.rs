@@ -238,6 +238,8 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
         || path.ends_with("/.cargo/credentials.toml")
         || path == ".docker/config.json"
         || path.ends_with("/.docker/config.json")
+        || path == ".kube/config"
+        || path.ends_with("/.kube/config")
         || path.ends_with(".kdbx")
         || path.ends_with(".kdb")
     {

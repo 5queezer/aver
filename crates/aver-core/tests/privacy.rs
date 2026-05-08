@@ -402,3 +402,11 @@ fn privacy_filter_path_rejects_docker_config_credentials() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_kube_config_credentials() {
+    assert_eq!(
+        privacy_filter_path(".kube/config").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
