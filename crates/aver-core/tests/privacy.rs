@@ -334,3 +334,15 @@ fn privacy_filter_path_rejects_putty_key_file() {
         PrivacyRejection::KeyPath
     );
 }
+
+#[test]
+fn privacy_filter_rejects_age_secret_key() {
+    let content = synthetic_token(&[
+        "AGE-SECRET-KEY-",
+        "1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ",
+    ]);
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}
