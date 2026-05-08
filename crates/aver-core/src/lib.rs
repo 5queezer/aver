@@ -1025,6 +1025,7 @@ impl Store {
     ) -> Result<i64, Error> {
         validate_vector_chunk_text(text)?;
         validate_embedding_model(embedding_model)?;
+        validate_embedding_vector(embedding)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let embedding_json = serde_json::to_string(embedding)?;
         self.conn.execute(
@@ -1711,6 +1712,14 @@ fn validate_embedding_model(value: &str) -> Result<(), Error> {
     }
 }
 
+fn validate_embedding_vector(value: &[f32]) -> Result<(), Error> {
+    if value.is_empty() {
+        Err(Error::InvalidEmbeddingVector)
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_claim_field(field: &'static str, value: &str) -> Result<(), Error> {
     if value.trim().is_empty() {
         Err(Error::InvalidClaimField { field })
@@ -1809,6 +1818,8 @@ pub enum Error {
     InvalidVectorChunkText,
     #[error("invalid embedding model: must not be empty")]
     InvalidEmbeddingModel,
+    #[error("invalid embedding vector: must not be empty")]
+    InvalidEmbeddingVector,
     #[error("invalid claim {field}: must not be empty")]
     InvalidClaimField { field: &'static str },
     #[error("invalid event {field}: must not be empty")]

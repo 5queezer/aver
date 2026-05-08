@@ -351,3 +351,23 @@ fn add_vector_chunk_with_embedding_rejects_empty_text() {
 
     assert!(err.to_string().contains("vector chunk text"));
 }
+
+#[test]
+fn add_vector_chunk_with_embedding_rejects_empty_embedding() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim("PaymentGateway", "depends_on", "StripeSDK", "test")
+        .unwrap();
+
+    let err = store
+        .add_vector_chunk_with_embedding(
+            claim_id,
+            "PaymentGateway depends_on StripeSDK",
+            "nomic-embed-text",
+            &[],
+        )
+        .expect_err("empty embeddings should be rejected");
+
+    assert!(err.to_string().contains("embedding"));
+}
