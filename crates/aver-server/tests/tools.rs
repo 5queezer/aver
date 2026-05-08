@@ -527,3 +527,21 @@ fn add_triple_rejects_empty_predicate() {
 
     assert!(err.to_string().contains("predicate"));
 }
+
+#[test]
+fn add_triple_rejects_empty_object() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .add_triple(AddTripleParams {
+            subject: "PaymentGateway".to_string(),
+            predicate: "depends_on".to_string(),
+            object: " ".to_string(),
+            confidence: None,
+            source: "test".to_string(),
+        })
+        .expect_err("empty objects should be rejected");
+
+    assert!(err.to_string().contains("object"));
+}

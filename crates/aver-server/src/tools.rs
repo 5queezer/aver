@@ -343,6 +343,9 @@ impl AverTools {
         if params.predicate.trim().is_empty() {
             anyhow::bail!("invalid predicate: must not be empty");
         }
+        if params.object.trim().is_empty() {
+            anyhow::bail!("invalid object: must not be empty");
+        }
         if let Some(confidence) = params.confidence
             && !(0.0..=1.0).contains(&confidence)
         {
