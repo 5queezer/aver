@@ -192,3 +192,11 @@ fn privacy_filter_path_rejects_relative_secrets_dir() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_envrc_file() {
+    assert_eq!(
+        privacy_filter_path(".envrc").unwrap_err(),
+        PrivacyRejection::EnvPath
+    );
+}

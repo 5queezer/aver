@@ -227,7 +227,7 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
     {
         return Err(PrivacyRejection::SecretsPath);
     }
-    if path == ".env" || path.starts_with(".env.") || path.contains("/.env") {
+    if path == ".env" || path == ".envrc" || path.starts_with(".env.") || path.contains("/.env") {
         return Err(PrivacyRejection::EnvPath);
     }
     if path.starts_with(".ssh/") || path.contains("/.ssh/") {
