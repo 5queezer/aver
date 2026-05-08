@@ -564,3 +564,9 @@ fn privacy_filter_rejects_tailscale_auth_key() {
     let token = synthetic_token(&["ts", "key-auth-", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
     assert!(privacy_filter(&format!("TAILSCALE_AUTHKEY={token}")).is_err());
 }
+
+#[test]
+fn privacy_filter_rejects_tailscale_api_key() {
+    let token = synthetic_token(&["ts", "key-api-", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+    assert!(privacy_filter(&format!("TAILSCALE_API_KEY={token}")).is_err());
+}
