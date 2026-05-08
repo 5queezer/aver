@@ -2,6 +2,7 @@
 name = "aver-eval"
 version = "0.1.0"
 edition = "2021"
+default-run = "aver-eval"
 
 [dependencies]
 aver-core = { path = "../aver-core" }
@@ -9,5 +10,11 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 tempfile = { workspace = true }
+ureq = { workspace = true }
+clap = { workspace = true }
+
+[[bin]]
+name = "aver-beam100k"
+path = "src/bin/aver-beam100k.rs"
 
 [dev-dependencies]

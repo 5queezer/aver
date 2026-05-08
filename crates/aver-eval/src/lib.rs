@@ -1,5 +1,7 @@
 //! Deterministic, offline MemoryAgentBench runner for the Aver memory core.
 
+pub mod beam;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
