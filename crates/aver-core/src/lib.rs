@@ -683,23 +683,29 @@ impl Store {
             String,
             String,
             i64,
-        ) = self.conn.query_row(
-            "SELECT id, session_id, kind, payload, source, agent_id, agent_kind, ts
+        ) = self
+            .conn
+            .query_row(
+                "SELECT id, session_id, kind, payload, source, agent_id, agent_kind, ts
                FROM episodic_events WHERE id = ?1",
-            [id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                ))
-            },
-        )?;
+                [id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
+                },
+            )
+            .map_err(|err| match err {
+                rusqlite::Error::QueryReturnedNoRows => Error::MissingEvent { event_id: id },
+                other => Error::Sqlite(other),
+            })?;
 
         Ok(EpisodicEvent {
             id,
@@ -1960,6 +1966,8 @@ pub enum Error {
     InvalidConfidence { value: f64 },
     #[error("candidate claim must cite an existing event: {event_id}")]
     MissingEventProvenance { event_id: i64 },
+    #[error("missing event: event {event_id} does not exist")]
+    MissingEvent { event_id: i64 },
     #[error("missing candidate claim: candidate {candidate_id} does not exist")]
     MissingCandidate { candidate_id: i64 },
     #[error("invalid candidate claim status for candidate {candidate_id}: {status}")]

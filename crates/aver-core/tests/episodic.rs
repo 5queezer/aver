@@ -385,3 +385,15 @@ fn list_candidate_claims_rejects_empty_session_filter() {
 
     assert!(err.to_string().contains("session_id"));
 }
+
+#[test]
+fn get_event_requires_existing_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .get_event(42)
+        .expect_err("fetching a missing event should return a domain error");
+
+    assert!(err.to_string().contains("event"));
+}
