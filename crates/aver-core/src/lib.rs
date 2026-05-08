@@ -1002,6 +1002,7 @@ impl Store {
         text: &str,
         embedding_model: &str,
     ) -> Result<i64, Error> {
+        validate_vector_chunk_text(text)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         self.conn.execute(
             "INSERT INTO vector_chunks (claim_id, text, embedding_model, created_at)
@@ -1691,6 +1692,14 @@ fn recall_token_score(query_tokens: &[String], claim: &Claim) -> usize {
         .sum()
 }
 
+fn validate_vector_chunk_text(value: &str) -> Result<(), Error> {
+    if value.trim().is_empty() {
+        Err(Error::InvalidVectorChunkText)
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_claim_field(field: &'static str, value: &str) -> Result<(), Error> {
     if value.trim().is_empty() {
         Err(Error::InvalidClaimField { field })
@@ -1785,6 +1794,8 @@ pub enum Error {
     EnumParse { kind: &'static str, value: String },
     #[error("invalid agent_id for partitioned log path: {value:?}")]
     InvalidAgentId { value: String },
+    #[error("invalid vector chunk text: must not be empty")]
+    InvalidVectorChunkText,
     #[error("invalid claim {field}: must not be empty")]
     InvalidClaimField { field: &'static str },
     #[error("invalid event {field}: must not be empty")]

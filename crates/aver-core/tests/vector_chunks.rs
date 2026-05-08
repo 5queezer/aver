@@ -306,3 +306,18 @@ fn recall_vector_chunks_top_k_zero_does_not_embed_query() {
 
     assert!(chunks.is_empty());
 }
+
+#[test]
+fn add_vector_chunk_rejects_empty_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim("PaymentGateway", "depends_on", "StripeSDK", "test")
+        .unwrap();
+
+    let err = store
+        .add_vector_chunk(claim_id, " ", "nomic-embed-text")
+        .expect_err("blank vector chunk text should be rejected");
+
+    assert!(err.to_string().contains("vector chunk text"));
+}
