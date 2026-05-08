@@ -297,7 +297,7 @@ impl AverTools {
         } else {
             aver_core::retrieval::HybridWeights::for_query(&params.query).alpha
         };
-        let _hops = params.hops.unwrap_or(2).clamp(1, 8);
+        let _hops = validate_hops(params.hops.unwrap_or(2))?;
         Ok(RecallView {
             triples: claims.into_iter().map(ClaimView::from).collect(),
             chunks: Vec::new(),

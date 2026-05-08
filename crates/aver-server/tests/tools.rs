@@ -254,3 +254,20 @@ fn expand_tool_rejects_zero_hops() {
 
     assert!(err.to_string().contains("hops"));
 }
+
+#[test]
+fn recall_tool_rejects_zero_hops() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .recall(RecallParams {
+            query: "PaymentGateway".to_string(),
+            alpha: None,
+            hops: Some(0),
+            top_k: Some(5),
+        })
+        .expect_err("zero hops should be rejected");
+
+    assert!(err.to_string().contains("hops"));
+}
