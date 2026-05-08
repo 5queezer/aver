@@ -532,3 +532,9 @@ fn privacy_filter_rejects_gitlab_pat() {
     let token = synthetic_token(&["gl", "pat-", "aaaaaaaaaaaaaaaaaaaa"]);
     assert!(privacy_filter(&format!("GITLAB_TOKEN={token}")).is_err());
 }
+
+#[test]
+fn privacy_filter_rejects_huggingface_token() {
+    let token = synthetic_token(&["hf", "_", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+    assert!(privacy_filter(&format!("HF_TOKEN={token}")).is_err());
+}
