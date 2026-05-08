@@ -35,7 +35,8 @@ if [ "$TEST_EXIT" -eq 0 ] && [ "$RED" -eq 0 ]; then
     eval/fixtures/multi_digit_version_identifier.json \
     eval/fixtures/v_prefixed_version_query.json \
     eval/fixtures/irregular_plural_morphology.json \
-    eval/fixtures/people_plural_morphology.json 2>&1)
+    eval/fixtures/people_plural_morphology.json \
+    eval/fixtures/beam_knowledge_update.json 2>&1)
   BENCH_EXIT=$?
 fi
 

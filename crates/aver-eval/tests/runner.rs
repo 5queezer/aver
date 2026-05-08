@@ -117,6 +117,21 @@ fn aggregate_metrics_weights_means_by_query_count() {
 }
 
 #[test]
+fn beam_style_knowledge_update_fixture_scores_perfectly() {
+    let fixture = aver_eval::load_fixture(include_str!(
+        "../../../eval/fixtures/beam_knowledge_update.json"
+    ))
+    .unwrap();
+
+    let metrics = aver_eval::run_fixture(&fixture).unwrap();
+
+    assert_eq!(metrics.fixture_name, "beam_knowledge_update");
+    assert_eq!(metrics.mean_recall_at_k, 1.0);
+    assert_eq!(metrics.mean_precision_at_k, 1.0);
+    assert_eq!(metrics.unsupported_claim_rate, 0.0);
+}
+
+#[test]
 fn aggregate_metrics_weights_unsupported_rate_by_retrieved_claims() {
     let aggregate = aver_eval::aggregate_metrics(vec![
         aver_eval::BenchMetrics {

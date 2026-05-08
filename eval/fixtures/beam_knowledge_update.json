@@ -1,0 +1,16 @@
+{
+  "name": "beam_knowledge_update",
+  "version": 1,
+  "description": "BEAM-style current/latest queries should retrieve updated facts instead of stale historical values",
+  "claims": [
+    {"subject": "forecast", "predicate": "initial_accuracy", "object": "78"},
+    {"subject": "forecast", "predicate": "current_accuracy", "object": "92"},
+    {"subject": "sneaker_collection", "predicate": "previous_size", "object": "12"},
+    {"subject": "sneaker_collection", "predicate": "current_size", "object": "18"},
+    {"subject": "personal_statement", "predicate": "draft_count", "object": "5"}
+  ],
+  "queries": [
+    {"query": "current forecast accuracy", "relevant_indices": [1], "top_k": 1},
+    {"query": "current sneaker collection size", "relevant_indices": [3], "top_k": 1}
+  ]
+}
