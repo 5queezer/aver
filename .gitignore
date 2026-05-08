@@ -1,4 +1,5 @@
 /target
 .aver/
+.worktrees/
 **/*.rs.bk
 Cargo.lock.bak
