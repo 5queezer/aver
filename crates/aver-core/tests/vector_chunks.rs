@@ -391,3 +391,16 @@ fn add_vector_chunk_with_embedding_rejects_non_finite_embedding_values() {
 
     assert!(err.to_string().contains("embedding vector"));
 }
+
+#[test]
+fn recall_vector_chunks_rejects_empty_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let client = MockEmbeddingClient::new(vec![0.1, 0.2]);
+
+    let err = store
+        .recall_vector_chunks(" ", &client, 1)
+        .expect_err("blank vector recall queries should be rejected");
+
+    assert!(err.to_string().contains("query"));
+}

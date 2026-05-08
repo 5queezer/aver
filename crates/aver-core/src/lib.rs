@@ -1185,6 +1185,7 @@ impl Store {
         if top_k == 0 {
             return Ok(Vec::new());
         }
+        validate_recall_query(query)?;
 
         let query_embedding = client.embed(query)?;
         self.rank_vector_chunks_by_embedding(&query_embedding, top_k)
@@ -1749,6 +1750,14 @@ fn validate_embedding_vector(value: &[f32]) -> Result<(), Error> {
 fn validate_claim_field(field: &'static str, value: &str) -> Result<(), Error> {
     if value.trim().is_empty() {
         Err(Error::InvalidClaimField { field })
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_recall_query(value: &str) -> Result<(), Error> {
+    if query_tokens_for_recall(value).is_empty() {
+        Err(Error::InvalidRecallQuery)
     } else {
         Ok(())
     }
