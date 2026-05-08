@@ -410,3 +410,11 @@ fn privacy_filter_path_rejects_kube_config_credentials() {
         PrivacyRejection::SecretsPath
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_azure_access_tokens() {
+    assert_eq!(
+        privacy_filter_path(".azure/accessTokens.json").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
