@@ -224,6 +224,8 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
     if path.starts_with(".secrets.d/")
         || path.contains("/.secrets.d/")
         || path.starts_with("~/.secrets.d/")
+        || path.starts_with(".age/")
+        || path.contains("/.age/")
         || path.ends_with(".kdbx")
         || path.ends_with(".kdb")
     {

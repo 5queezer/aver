@@ -346,3 +346,11 @@ fn privacy_filter_rejects_age_secret_key() {
         PrivacyRejection::PrivateKey
     );
 }
+
+#[test]
+fn privacy_filter_path_rejects_age_identity_dir() {
+    assert_eq!(
+        privacy_filter_path(".age/keys.txt").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
