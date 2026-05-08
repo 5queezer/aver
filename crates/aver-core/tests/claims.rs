@@ -780,3 +780,15 @@ fn add_claim_rejects_empty_subject_before_log_write() {
         "invalid claims must not reach the audit log"
     );
 }
+
+#[test]
+fn recall_text_rejects_empty_queries() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .recall_text(" ")
+        .expect_err("blank recall queries should be rejected");
+
+    assert!(err.to_string().contains("query"));
+}

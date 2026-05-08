@@ -1507,7 +1507,7 @@ impl Store {
     pub fn recall_text(&self, query: &str) -> Result<Vec<Claim>, Error> {
         let query_tokens = query_tokens_for_recall(query);
         if query_tokens.is_empty() {
-            return Ok(Vec::new());
+            return Err(Error::InvalidRecallQuery);
         }
 
         let mut stmt = self.conn.prepare(
@@ -1858,6 +1858,8 @@ pub enum Error {
     InvalidClaimField { field: &'static str },
     #[error("invalid event {field}: must not be empty")]
     InvalidEventField { field: &'static str },
+    #[error("invalid recall query: must not be empty")]
+    InvalidRecallQuery,
     #[error("invalid event threshold: must be greater than zero")]
     InvalidEventThreshold,
     #[error("invalid rejection reason: must not be empty")]
