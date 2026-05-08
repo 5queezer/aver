@@ -545,3 +545,22 @@ fn add_triple_rejects_empty_object() {
 
     assert!(err.to_string().contains("object"));
 }
+
+#[test]
+fn remember_claim_rejects_empty_subject() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .remember_claim(RememberClaimParams {
+            subject: " ".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "StripeSDK".to_string(),
+            source: None,
+            agent_id: None,
+            agent_kind: None,
+        })
+        .expect_err("empty subjects should be rejected");
+
+    assert!(err.to_string().contains("subject"));
+}
