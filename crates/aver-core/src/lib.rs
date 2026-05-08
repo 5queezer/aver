@@ -257,6 +257,7 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
     if content.contains("BEGIN PRIVATE KEY")
         || content.contains("BEGIN OPENSSH PRIVATE KEY")
         || content.contains("BEGIN ENCRYPTED PRIVATE KEY")
+        || content.contains("BEGIN PGP PRIVATE KEY BLOCK")
         || content.contains("BEGIN RSA PRIVATE KEY")
         || content.contains("BEGIN EC PRIVATE KEY")
         || content.contains("BEGIN DSA PRIVATE KEY")

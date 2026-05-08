@@ -250,3 +250,13 @@ fn privacy_filter_rejects_encrypted_private_key_header() {
         PrivacyRejection::PrivateKey
     );
 }
+
+#[test]
+fn privacy_filter_rejects_pgp_private_key_block_header() {
+    let content = synthetic_token(&["-----BEGIN ", "PGP PRIVATE KEY BLOCK-----"]);
+
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}
