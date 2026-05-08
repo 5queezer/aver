@@ -1152,6 +1152,9 @@ impl Store {
             self.record_privacy_rejection(rejection)?;
             return Err(Error::Privacy(rejection));
         }
+        for possible_path in [write.subject, write.object, write.source] {
+            self.privacy_filter_path_recording(possible_path)?;
+        }
 
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
@@ -1278,6 +1281,7 @@ impl Store {
             "{agent_id} {} {session_id} {kind} {payload} {source}",
             agent_kind.as_str()
         ))?;
+        self.privacy_filter_path_recording(source)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let event_id: i64 = self.conn.query_row(
             "SELECT COALESCE(MAX(id), 0) + 1 FROM episodic_events",
@@ -1406,6 +1410,7 @@ impl Store {
             return Err(Error::MissingEventProvenance { event_id: 0 });
         }
         self.privacy_filter_recording(&format!("{session_id} {content} {derivation}"))?;
+        self.privacy_filter_path_recording(derivation)?;
 
         let mut events = Vec::new();
         for event_id in source_event_ids {
@@ -1755,6 +1760,9 @@ impl Store {
         validate_claim_field("predicate", predicate)?;
         validate_claim_field("object", object)?;
         self.privacy_filter_recording(&format!("{subject} {predicate} {object}"))?;
+        for possible_path in [subject, object] {
+            self.privacy_filter_path_recording(possible_path)?;
+        }
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         self.conn.execute(
             "INSERT INTO candidate_claims (event_id, subject, predicate, object, created_at)

@@ -86,6 +86,10 @@ fn graph_drift_snapshot_includes_privacy_rejection_counts() {
         Err(Error::Privacy(PrivacyRejection::OpenAiKey))
     ));
     assert!(matches!(
+        store.add_claim("Aver", "source", "ssh key", ".ssh/id_rsa"),
+        Err(Error::Privacy(PrivacyRejection::SshPath))
+    ));
+    assert!(matches!(
         store.record_observation(
             "s1",
             &format!("observer saw OPENAI_API_KEY={token}"),
@@ -124,5 +128,6 @@ fn graph_drift_snapshot_includes_privacy_rejection_counts() {
         snapshot.privacy_rejection_counts.get("path:secrets-dir"),
         Some(&1)
     );
+    assert_eq!(snapshot.privacy_rejection_counts.get("path:ssh"), Some(&1));
     assert_eq!(snapshot.consolidation_merged, 1);
 }
