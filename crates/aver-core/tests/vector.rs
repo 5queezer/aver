@@ -148,3 +148,33 @@ fn embedding_client_trait_allows_offline_vector_tests() {
 
     assert_eq!(client.embed("no network").unwrap(), vec![0.3, 0.4]);
 }
+
+#[test]
+fn vector_claim_recall_skips_superseded_claims() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = aver_core::Store::open(dir.path()).unwrap();
+    let stale = store
+        .add_claim("StripeSDK", "status", "deprecated", "session-1")
+        .unwrap();
+    let current = store
+        .add_claim("StripeSDK", "status", "current", "session-2")
+        .unwrap();
+    store
+        .add_vector_chunk_with_embedding(stale, "StripeSDK status deprecated", "mock", &[1.0, 0.0])
+        .unwrap();
+    store
+        .add_vector_chunk_with_embedding(current, "StripeSDK status current", "mock", &[0.9, 0.1])
+        .unwrap();
+    store.consolidate().unwrap();
+
+    let recalled = store
+        .recall_vector_claims(
+            "StripeSDK status",
+            &MockEmbeddingClient::new(vec![1.0, 0.0]),
+            2,
+        )
+        .unwrap();
+
+    assert_eq!(recalled.len(), 1);
+    assert_eq!(recalled[0].id, current);
+}

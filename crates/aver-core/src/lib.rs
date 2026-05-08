@@ -1121,7 +1121,11 @@ impl Store {
         let mut claims = Vec::new();
         for chunk in chunks {
             if seen.insert(chunk.claim_id) {
-                claims.push(self.get_claim(chunk.claim_id)?);
+                let claim = self.get_claim(chunk.claim_id)?;
+                if claim.status != ClaimStatus::Active {
+                    continue;
+                }
+                claims.push(claim);
                 if claims.len() == top_k {
                     break;
                 }
