@@ -608,6 +608,15 @@ pub fn extract_csharp_records(source: &str) -> Result<Vec<String>, Error> {
     collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["record_declaration"])
 }
 
+pub fn extract_csharp_namespaces(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_c_sharp::language())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["namespace_declaration"],
+    )
+}
+
 pub fn extract_csharp_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
     let mut facts = definition_facts(path, "Function", extract_csharp_functions(source)?);
     facts.extend(definition_facts(
@@ -639,6 +648,11 @@ pub fn extract_csharp_facts(path: &str, source: &str) -> Result<Vec<ExtractedFac
         path,
         "Record",
         extract_csharp_records(source)?,
+    ));
+    facts.extend(definition_facts(
+        path,
+        "Namespace",
+        extract_csharp_namespaces(source)?,
     ));
     Ok(facts)
 }

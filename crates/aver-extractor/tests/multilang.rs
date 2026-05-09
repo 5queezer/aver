@@ -3,20 +3,21 @@ use aver_extractor::{
     extract_c_type_aliases, extract_cpp_classes, extract_cpp_enums, extract_cpp_facts,
     extract_cpp_functions, extract_cpp_namespaces, extract_cpp_structs, extract_cpp_type_aliases,
     extract_csharp_classes, extract_csharp_delegates, extract_csharp_enums, extract_csharp_facts,
-    extract_csharp_functions, extract_csharp_interfaces, extract_csharp_records,
-    extract_csharp_structs, extract_facts_for_path, extract_go_facts, extract_go_functions,
-    extract_go_interfaces, extract_go_structs, extract_java_annotations, extract_java_classes,
-    extract_java_enums, extract_java_facts, extract_java_functions, extract_java_interfaces,
-    extract_java_records, extract_javascript_classes, extract_javascript_facts,
-    extract_javascript_functions, extract_kotlin_classes, extract_kotlin_enums,
-    extract_kotlin_facts, extract_kotlin_functions, extract_kotlin_interfaces, extract_php_classes,
-    extract_php_enums, extract_php_facts, extract_php_functions, extract_php_interfaces,
-    extract_php_traits, extract_python_classes, extract_python_facts, extract_python_functions,
-    extract_ruby_classes, extract_ruby_facts, extract_ruby_functions, extract_ruby_modules,
-    extract_swift_actors, extract_swift_classes, extract_swift_enums, extract_swift_facts,
-    extract_swift_functions, extract_swift_protocols, extract_swift_structs,
-    extract_typescript_classes, extract_typescript_enums, extract_typescript_facts,
-    extract_typescript_functions, extract_typescript_interfaces, extract_typescript_type_aliases,
+    extract_csharp_functions, extract_csharp_interfaces, extract_csharp_namespaces,
+    extract_csharp_records, extract_csharp_structs, extract_facts_for_path, extract_go_facts,
+    extract_go_functions, extract_go_interfaces, extract_go_structs, extract_java_annotations,
+    extract_java_classes, extract_java_enums, extract_java_facts, extract_java_functions,
+    extract_java_interfaces, extract_java_records, extract_javascript_classes,
+    extract_javascript_facts, extract_javascript_functions, extract_kotlin_classes,
+    extract_kotlin_enums, extract_kotlin_facts, extract_kotlin_functions,
+    extract_kotlin_interfaces, extract_php_classes, extract_php_enums, extract_php_facts,
+    extract_php_functions, extract_php_interfaces, extract_php_traits, extract_python_classes,
+    extract_python_facts, extract_python_functions, extract_ruby_classes, extract_ruby_facts,
+    extract_ruby_functions, extract_ruby_modules, extract_swift_actors, extract_swift_classes,
+    extract_swift_enums, extract_swift_facts, extract_swift_functions, extract_swift_protocols,
+    extract_swift_structs, extract_typescript_classes, extract_typescript_enums,
+    extract_typescript_facts, extract_typescript_functions, extract_typescript_interfaces,
+    extract_typescript_type_aliases,
 };
 
 #[test]
@@ -326,6 +327,25 @@ fn extract_common_language_basic_symbols_emit_definition_facts() {
                 subject: "Store.swift".to_string(),
                 predicate: "defines".to_string(),
                 object: "Class:Store".to_string(),
+            })
+    );
+}
+
+#[test]
+fn extract_csharp_namespaces_emit_definition_facts() {
+    let source = "namespace Memory.Core { class Store {} }";
+
+    assert_eq!(
+        extract_csharp_namespaces(source).unwrap(),
+        vec!["Memory.Core".to_string()]
+    );
+    assert!(
+        extract_csharp_facts("Memory.cs", source)
+            .unwrap()
+            .contains(&ExtractedFact {
+                subject: "Memory.cs".to_string(),
+                predicate: "defines".to_string(),
+                object: "Namespace:Memory.Core".to_string(),
             })
     );
 }
