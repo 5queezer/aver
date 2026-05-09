@@ -343,6 +343,17 @@ fn extract_common_language_basic_symbols_emit_definition_facts() {
 }
 
 #[test]
+fn extract_java_facts_emit_class_extends_triple() {
+    let facts = extract_java_facts("Store.java", "class Store extends BaseStore {}").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:BaseStore".to_string(),
+    }));
+}
+
+#[test]
 fn extract_java_packages_emit_definition_facts() {
     let source = "package memory.core; public class Store {}";
 

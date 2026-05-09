@@ -472,6 +472,14 @@ pub fn extract_java_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
         "Package",
         extract_java_packages(source)?,
     ));
+    facts.extend(extract_java_extends_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_java_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let tree = parse_with_language(source, tree_sitter_java::language())?;
+    let mut facts = Vec::new();
+    collect_java_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -1300,6 +1308,31 @@ fn collect_type_definition_aliases(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_type_definition_aliases(child, source, aliases)?;
+    }
+    Ok(())
+}
+
+fn collect_java_extends_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "class_declaration"
+        && let Some(class_name) = node.child_by_field_name("name")
+        && let Some(superclass) = node.child_by_field_name("superclass")
+        && let Some(base_name) = first_named_descendant_of_kind(superclass, "type_identifier")
+            .or_else(|| first_named_descendant_of_kind(superclass, "identifier"))
+    {
+        facts.push(ExtractedFact {
+            subject: format!("Class:{}", class_name.utf8_text(source)?),
+            predicate: "extends".to_string(),
+            object: format!("Class:{}", base_name.utf8_text(source)?),
+        });
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_java_extends_facts(child, source, facts)?;
     }
     Ok(())
 }
