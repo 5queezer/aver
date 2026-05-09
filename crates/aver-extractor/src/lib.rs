@@ -2669,6 +2669,17 @@ fn expand_rust_use_declaration(declaration: &str) -> Vec<String> {
         declaration = without_use;
     }
 
+    if let Some(inner) = declaration
+        .strip_prefix('{')
+        .and_then(|d| d.strip_suffix('}'))
+    {
+        let mut expanded = Vec::new();
+        for item in split_top_level_commas(inner) {
+            expanded.extend(expand_rust_use_declaration(item.trim()));
+        }
+        return expanded;
+    }
+
     if let Some((prefix, rest)) = declaration.split_once("::{")
         && let Some(suffix_end) = rest.rfind('}')
     {

@@ -77,6 +77,22 @@ fn extract_rust_imports_normalizes_pub_visibility_forms() {
 }
 
 #[test]
+fn extract_rust_imports_expands_root_grouped_imports() {
+    let imports =
+        extract_rust_imports("use {std::{fs, path::Path}, crate::memory::{self as memory}};")
+            .unwrap();
+
+    assert_eq!(
+        imports,
+        vec![
+            "std::fs".to_string(),
+            "std::path::Path".to_string(),
+            "crate::memory".to_string()
+        ]
+    );
+}
+
+#[test]
 fn extract_rust_calls_finds_called_function_name() {
     let calls = extract_rust_calls("fn main() { remember(); }").unwrap();
 
