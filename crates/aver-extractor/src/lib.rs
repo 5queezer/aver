@@ -1769,7 +1769,11 @@ fn collect_kotlin_delegation_type_names(
     names: &mut Vec<String>,
 ) -> Result<(), Error> {
     if node.kind() == "delegation_specifier" {
-        collect_descendant_texts(node, source, &["type_identifier"], names)?;
+        if let Some(user_type) = first_named_descendant_of_kind(node, "user_type")
+            && let Some(name) = first_named_descendant_of_kind(user_type, "type_identifier")
+        {
+            names.push(name.utf8_text(source)?.to_string());
+        }
         return Ok(());
     }
 

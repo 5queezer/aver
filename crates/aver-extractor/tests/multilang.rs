@@ -1359,6 +1359,26 @@ fn extract_kotlin_facts_emit_class_implements_interface_triple() {
 }
 
 #[test]
+fn extract_kotlin_facts_do_not_treat_generic_type_arguments_as_implemented_interfaces() {
+    let facts = extract_kotlin_facts(
+        "Store.kt",
+        "interface Recallable<T>\ninterface Memory\nclass Store : Recallable<Memory>",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Recallable".to_string(),
+    }));
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Memory".to_string(),
+    }));
+}
+
+#[test]
 fn extract_kotlin_facts_emit_multiple_interface_implements_triples() {
     let facts = extract_kotlin_facts(
         "Store.kt",
