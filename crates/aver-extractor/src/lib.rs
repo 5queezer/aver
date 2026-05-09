@@ -1736,7 +1736,12 @@ fn collect_ruby_include_names(
     source: &[u8],
     names: &mut Vec<String>,
 ) -> Result<(), Error> {
-    if node.kind() == "call" && node.utf8_text(source)?.trim_start().starts_with("include ") {
+    if node.kind() == "call"
+        && matches!(
+            node.utf8_text(source)?.split_whitespace().next(),
+            Some("include" | "prepend")
+        )
+    {
         collect_descendant_texts(node, source, &["constant"], names)?;
         return Ok(());
     }
