@@ -690,6 +690,14 @@ pub fn extract_csharp_facts(path: &str, source: &str) -> Result<Vec<ExtractedFac
         "Namespace",
         extract_csharp_namespaces(source)?,
     ));
+    facts.extend(extract_csharp_extends_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_csharp_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let tree = parse_with_language(source, tree_sitter_c_sharp::language())?;
+    let mut facts = Vec::new();
+    collect_csharp_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -1316,6 +1324,30 @@ fn collect_type_definition_aliases(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_type_definition_aliases(child, source, aliases)?;
+    }
+    Ok(())
+}
+
+fn collect_csharp_extends_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "class_declaration"
+        && let Some(class_name) = node.child_by_field_name("name")
+        && let Some(base_list) = first_named_descendant_of_kind(node, "base_list")
+        && let Some(base_name) = first_named_descendant_of_kind(base_list, "identifier")
+    {
+        facts.push(ExtractedFact {
+            subject: format!("Class:{}", class_name.utf8_text(source)?),
+            predicate: "extends".to_string(),
+            object: format!("Class:{}", base_name.utf8_text(source)?),
+        });
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_csharp_extends_facts(child, source, facts)?;
     }
     Ok(())
 }
