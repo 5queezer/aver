@@ -1326,6 +1326,21 @@ fn extract_ruby_facts_do_not_split_scoped_superclass_references_into_top_level_c
 }
 
 #[test]
+fn extract_php_facts_do_not_split_qualified_superclass_references_into_top_level_classes() {
+    let facts = extract_php_facts(
+        "Store.php",
+        "<?php class Memory {} class Store extends Memory\\BaseStore {}",
+    )
+    .unwrap();
+
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:Memory".to_string(),
+    }));
+}
+
+#[test]
 fn extract_php_facts_emit_class_uses_trait_triple() {
     let facts = extract_php_facts(
         "Store.php",

@@ -2013,8 +2013,8 @@ fn collect_php_extends_facts(
     if node.kind() == "class_declaration"
         && let Some(class_name) = node.child_by_field_name("name")
         && let Some(base_clause) = first_named_descendant_of_kind(node, "base_clause")
-        && let Some(base_name) = first_named_descendant_of_kind(base_clause, "name")
-            .or_else(|| first_named_descendant_of_kind(base_clause, "qualified_name"))
+        && let Some(base_name) = first_named_descendant_of_kind(base_clause, "qualified_name")
+            .or_else(|| first_named_descendant_of_kind(base_clause, "name"))
     {
         facts.push(ExtractedFact {
             subject: format!("Class:{}", class_name.utf8_text(source)?),
