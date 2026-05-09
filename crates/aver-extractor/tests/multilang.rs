@@ -457,6 +457,26 @@ fn extract_cpp_facts_emit_class_extends_triple() {
 }
 
 #[test]
+fn extract_cpp_facts_emit_multiple_class_extends_triples() {
+    let facts = extract_cpp_facts(
+        "store.hpp",
+        "class Store : public BaseStore, public Auditable {};",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:BaseStore".to_string(),
+    }));
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:Auditable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_java_facts_emit_interface_extends_triple() {
     let facts = extract_java_facts(
         "Recallable.java",
@@ -567,6 +587,21 @@ fn extract_php_namespaces_emit_definition_facts() {
                 object: "Namespace:Memory\\Core".to_string(),
             })
     );
+}
+
+#[test]
+fn extract_swift_facts_emit_class_implements_protocol_triple() {
+    let facts = extract_swift_facts(
+        "Store.swift",
+        "protocol Recallable {}\nclass Store: Recallable {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Protocol:Recallable".to_string(),
+    }));
 }
 
 #[test]
