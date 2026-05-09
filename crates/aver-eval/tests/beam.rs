@@ -140,6 +140,25 @@ fn beam_context_ordering_uses_recent_first_for_current_questions() {
 }
 
 #[test]
+fn beam_context_ordering_treats_now_as_current_question() {
+    let contexts = aver_eval::beam::order_contexts_for_question(
+        "Where does Alice live now?",
+        vec![
+            (
+                "conversation:1:message:1".to_string(),
+                "old city".to_string(),
+            ),
+            (
+                "conversation:1:message:9".to_string(),
+                "new city".to_string(),
+            ),
+        ],
+    );
+
+    assert_eq!(contexts, vec!["new city", "old city"]);
+}
+
+#[test]
 fn beam_answer_prompt_contains_question_and_context_without_reference_answer_leakage() {
     let prompt = aver_eval::beam::answer_prompt(
         "What language?",

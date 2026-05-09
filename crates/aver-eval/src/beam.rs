@@ -661,9 +661,19 @@ fn order_contexts(mut contexts: Vec<(String, String)>, recent_first: bool) -> Ve
 
 fn asks_for_current_value(question: &str) -> bool {
     let normalized = question.to_ascii_lowercase();
-    ["current", "currently", "latest", "updated", "recent"]
-        .iter()
-        .any(|needle| normalized.contains(needle))
+    [
+        "current",
+        "currently",
+        "latest",
+        "updated",
+        "recent",
+        " now",
+        "as of",
+        "today",
+        "present",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
 }
 
 fn beam_message_index(subject: &str) -> Option<usize> {
