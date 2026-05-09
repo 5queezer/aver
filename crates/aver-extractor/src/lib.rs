@@ -2816,7 +2816,7 @@ fn collect_enums(node: Node<'_>, source: &[u8], enums: &mut Vec<String>) -> Resu
     if node.kind() == "enum_item"
         && let Some(name) = node.child_by_field_name("name")
     {
-        enums.push(name.utf8_text(source)?.to_string());
+        enums.push(normalize_rust_identifier(name.utf8_text(source)?));
     }
 
     let mut cursor = node.walk();

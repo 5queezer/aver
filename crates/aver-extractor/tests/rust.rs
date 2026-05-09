@@ -183,6 +183,13 @@ fn extract_rust_structs_finds_struct_name() {
 }
 
 #[test]
+fn extract_rust_enums_normalizes_raw_identifier_names() {
+    let enums = extract_rust_enums("enum r#type { Memory }").unwrap();
+
+    assert_eq!(enums, vec!["type".to_string()]);
+}
+
+#[test]
 fn extract_rust_enums_finds_enum_name() {
     let enums = extract_rust_enums("enum MemoryError { ParseFailed }").unwrap();
 
