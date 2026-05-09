@@ -237,6 +237,14 @@ pub fn extract_python_facts(path: &str, source: &str) -> Result<Vec<ExtractedFac
         "Class",
         extract_python_classes(source)?,
     ));
+    facts.extend(extract_python_extends_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_python_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let tree = parse_with_language(source, tree_sitter_python::language())?;
+    let mut facts = Vec::new();
+    collect_python_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -1292,6 +1300,30 @@ fn collect_type_definition_aliases(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_type_definition_aliases(child, source, aliases)?;
+    }
+    Ok(())
+}
+
+fn collect_python_extends_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "class_definition"
+        && let Some(class_name) = node.child_by_field_name("name")
+        && let Some(superclasses) = node.child_by_field_name("superclasses")
+        && let Some(base_name) = first_named_descendant_of_kind(superclasses, "identifier")
+    {
+        facts.push(ExtractedFact {
+            subject: format!("Class:{}", class_name.utf8_text(source)?),
+            predicate: "extends".to_string(),
+            object: format!("Class:{}", base_name.utf8_text(source)?),
+        });
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_python_extends_facts(child, source, facts)?;
     }
     Ok(())
 }

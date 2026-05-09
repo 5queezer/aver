@@ -42,6 +42,17 @@ fn extract_python_facts_emits_file_defines_function_triple() {
 }
 
 #[test]
+fn extract_python_facts_emit_class_extends_triple() {
+    let facts = extract_python_facts("store.py", "class Store(BaseStore):\n    pass\n").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:BaseStore".to_string(),
+    }));
+}
+
+#[test]
 fn extract_python_classes_and_go_type_symbols_emit_definition_facts() {
     let python = "class Store:\n    pass\n";
     assert_eq!(
