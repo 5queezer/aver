@@ -147,6 +147,17 @@ fn extract_typescript_type_symbols_emit_definition_facts() {
 }
 
 #[test]
+fn extract_javascript_facts_emit_class_extends_triple() {
+    let facts = extract_javascript_facts("store.js", "class Store extends BaseStore {}").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:BaseStore".to_string(),
+    }));
+}
+
+#[test]
 fn extract_typescript_facts_emits_class_extends_triple() {
     let facts = extract_typescript_facts("store.ts", "class Store extends BaseStore {}").unwrap();
 
