@@ -1680,22 +1680,42 @@ fn collect_kotlin_implements_facts(
     };
     if let Some(type_kind) = type_kind
         && let Some(type_name) = first_named_descendant_of_kind(node, "type_identifier")
-        && let Some(delegation) = first_named_descendant_of_kind(node, "delegation_specifier")
-        && let Some(interface_name) = first_named_descendant_of_kind(delegation, "type_identifier")
     {
-        let interface_name = interface_name.utf8_text(source)?;
-        if interfaces.contains(interface_name) {
-            facts.push(ExtractedFact {
-                subject: format!("{}:{}", type_kind, type_name.utf8_text(source)?),
-                predicate: "implements".to_string(),
-                object: format!("Interface:{interface_name}"),
-            });
-        }
+        let mut interface_names = Vec::new();
+        collect_kotlin_delegation_type_names(node, source, &mut interface_names)?;
+        let subject = format!("{}:{}", type_kind, type_name.utf8_text(source)?);
+        facts.extend(
+            interface_names
+                .into_iter()
+                .filter(|interface_name| interfaces.contains(interface_name))
+                .map(|interface_name| ExtractedFact {
+                    subject: subject.clone(),
+                    predicate: "implements".to_string(),
+                    object: format!("Interface:{interface_name}"),
+                }),
+        );
     }
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_kotlin_implements_facts(child, source, interfaces, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_kotlin_delegation_type_names(
+    node: Node<'_>,
+    source: &[u8],
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    if node.kind() == "delegation_specifier" {
+        collect_descendant_texts(node, source, &["type_identifier"], names)?;
+        return Ok(());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_kotlin_delegation_type_names(child, source, names)?;
     }
     Ok(())
 }
