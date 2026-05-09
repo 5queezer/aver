@@ -1510,18 +1510,24 @@ fn collect_csharp_implements_facts(
     interfaces: &HashSet<String>,
     facts: &mut Vec<ExtractedFact>,
 ) -> Result<(), Error> {
-    if node.kind() == "class_declaration"
-        && let Some(class_name) = node.child_by_field_name("name")
+    let type_kind = match node.kind() {
+        "class_declaration" => Some("Class"),
+        "record_declaration" => Some("Record"),
+        _ => None,
+    };
+    if let Some(type_kind) = type_kind
+        && let Some(type_name) = node.child_by_field_name("name")
         && let Some(base_list) = first_named_descendant_of_kind(node, "base_list")
     {
         let mut base_names = Vec::new();
         collect_descendant_texts(base_list, source, &["identifier"], &mut base_names)?;
+        let subject = format!("{}:{}", type_kind, type_name.utf8_text(source)?);
         facts.extend(
             base_names
                 .into_iter()
                 .filter(|base| interfaces.contains(base))
                 .map(|interface_name| ExtractedFact {
-                    subject: format!("Class:{}", class_name.utf8_text(source).unwrap_or_default()),
+                    subject: subject.clone(),
                     predicate: "implements".to_string(),
                     object: format!("Interface:{interface_name}"),
                 }),

@@ -643,6 +643,21 @@ fn extract_csharp_facts_emit_record_extends_triple() {
 }
 
 #[test]
+fn extract_csharp_facts_emit_record_implements_interface_triple() {
+    let facts = extract_csharp_facts(
+        "User.cs",
+        "interface IRecallable {} record User : IRecallable {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Record:User".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:IRecallable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_csharp_facts_emit_interface_extends_triple() {
     let facts =
         extract_csharp_facts("Memory.cs", "interface Recallable : BaseRecallable {}").unwrap();
