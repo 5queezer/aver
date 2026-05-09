@@ -540,6 +540,23 @@ fn extract_cpp_facts_emit_class_extends_triple() {
 }
 
 #[test]
+fn extract_cpp_facts_do_not_treat_template_arguments_as_base_classes() {
+    let facts =
+        extract_cpp_facts("store.hpp", "class Store : public BaseStore<Memory> {};").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:BaseStore".to_string(),
+    }));
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:Memory".to_string(),
+    }));
+}
+
+#[test]
 fn extract_cpp_facts_emit_multiple_class_extends_triples() {
     let facts = extract_cpp_facts(
         "store.hpp",

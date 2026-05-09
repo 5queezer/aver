@@ -1675,12 +1675,7 @@ fn collect_cpp_extends_facts(
         && let Some(base_clause) = first_named_descendant_of_kind(node, "base_class_clause")
     {
         let mut base_names = Vec::new();
-        collect_descendant_texts(
-            base_clause,
-            source,
-            &["type_identifier", "qualified_identifier"],
-            &mut base_names,
-        )?;
+        collect_cpp_base_type_names(base_clause, source, &mut base_names)?;
         let subject = format!("{}:{}", type_kind, type_name.utf8_text(source)?);
         facts.extend(base_names.into_iter().map(|base_name| ExtractedFact {
             subject: subject.clone(),
@@ -1692,6 +1687,28 @@ fn collect_cpp_extends_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_cpp_extends_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_cpp_base_type_names(
+    node: Node<'_>,
+    source: &[u8],
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor).filter(|child| child.is_named()) {
+        match child.kind() {
+            "type_identifier" | "qualified_identifier" => {
+                names.push(child.utf8_text(source)?.to_string());
+            }
+            "template_type" => {
+                if let Some(name) = child.child_by_field_name("name") {
+                    names.push(name.utf8_text(source)?.to_string());
+                }
+            }
+            _ => collect_cpp_base_type_names(child, source, names)?,
+        }
     }
     Ok(())
 }
