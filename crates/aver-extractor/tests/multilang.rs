@@ -1,12 +1,13 @@
 use aver_extractor::{
-    ExtractedFact, extract_c_facts, extract_c_functions, extract_cpp_classes, extract_cpp_enums,
-    extract_cpp_facts, extract_cpp_functions, extract_cpp_structs, extract_csharp_classes,
-    extract_csharp_enums, extract_csharp_facts, extract_csharp_functions,
-    extract_csharp_interfaces, extract_csharp_structs, extract_facts_for_path, extract_go_facts,
-    extract_go_functions, extract_go_interfaces, extract_go_structs, extract_java_classes,
-    extract_java_enums, extract_java_facts, extract_java_functions, extract_java_interfaces,
-    extract_javascript_classes, extract_javascript_facts, extract_javascript_functions,
-    extract_kotlin_classes, extract_kotlin_enums, extract_kotlin_facts, extract_kotlin_functions,
+    ExtractedFact, extract_c_enums, extract_c_facts, extract_c_functions, extract_c_structs,
+    extract_cpp_classes, extract_cpp_enums, extract_cpp_facts, extract_cpp_functions,
+    extract_cpp_structs, extract_csharp_classes, extract_csharp_enums, extract_csharp_facts,
+    extract_csharp_functions, extract_csharp_interfaces, extract_csharp_structs,
+    extract_facts_for_path, extract_go_facts, extract_go_functions, extract_go_interfaces,
+    extract_go_structs, extract_java_classes, extract_java_enums, extract_java_facts,
+    extract_java_functions, extract_java_interfaces, extract_javascript_classes,
+    extract_javascript_facts, extract_javascript_functions, extract_kotlin_classes,
+    extract_kotlin_enums, extract_kotlin_facts, extract_kotlin_functions,
     extract_kotlin_interfaces, extract_php_classes, extract_php_enums, extract_php_facts,
     extract_php_functions, extract_php_interfaces, extract_php_traits, extract_python_classes,
     extract_python_facts, extract_python_functions, extract_ruby_classes, extract_ruby_facts,
@@ -325,6 +326,31 @@ fn extract_common_language_basic_symbols_emit_definition_facts() {
                 object: "Class:Store".to_string(),
             })
     );
+}
+
+#[test]
+fn extract_c_struct_and_enum_symbols_emit_definition_facts() {
+    let source = "struct Chunk {}; enum MemoryKind { EPISODIC };";
+
+    assert_eq!(
+        extract_c_structs(source).unwrap(),
+        vec!["Chunk".to_string()]
+    );
+    assert_eq!(
+        extract_c_enums(source).unwrap(),
+        vec!["MemoryKind".to_string()]
+    );
+    let facts = extract_c_facts("memory.c", source).unwrap();
+    assert!(facts.contains(&ExtractedFact {
+        subject: "memory.c".to_string(),
+        predicate: "defines".to_string(),
+        object: "Struct:Chunk".to_string(),
+    }));
+    assert!(facts.contains(&ExtractedFact {
+        subject: "memory.c".to_string(),
+        predicate: "defines".to_string(),
+        object: "Enum:MemoryKind".to_string(),
+    }));
 }
 
 #[test]

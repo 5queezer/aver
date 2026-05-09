@@ -438,12 +438,21 @@ pub fn extract_c_functions(source: &str) -> Result<Vec<String>, Error> {
     Ok(functions)
 }
 
+pub fn extract_c_structs(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_c::language())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["struct_specifier"])
+}
+
+pub fn extract_c_enums(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_c::language())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["enum_specifier"])
+}
+
 pub fn extract_c_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    Ok(definition_facts(
-        path,
-        "Function",
-        extract_c_functions(source)?,
-    ))
+    let mut facts = definition_facts(path, "Function", extract_c_functions(source)?);
+    facts.extend(definition_facts(path, "Struct", extract_c_structs(source)?));
+    facts.extend(definition_facts(path, "Enum", extract_c_enums(source)?));
+    Ok(facts)
 }
 
 pub fn extract_cpp_functions(source: &str) -> Result<Vec<String>, Error> {
