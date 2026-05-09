@@ -198,7 +198,7 @@ Run fixture evaluation:
 cargo run -p aver-eval -- <fixture.json> [fixture.json ...]
 ```
 
-The eval crate also exposes deterministic data structures for ADR-0012 query-suite regression threshold checks, hallucination-rate memory-on/off reports, and graph-stat drift snapshots with privacy-rejection counters. These are offline runner boundaries; live judge/provider integrations should feed recorded case results into these structures.
+The eval crate also exposes deterministic data structures for ADR-0012 query-suite regression threshold checks, hallucination-rate memory-on/off reports, graph-stat drift snapshots with privacy-rejection counters, and typed prompt contracts. Prompt contracts validate rendered prompt text before a model call using deterministic checks such as required text, forbidden text, required sections, unresolved-template detection, and character budgets. These checks validate prompt generation code; live judge/provider integrations and output-quality evals should remain separate and feed recorded case results into the eval structures.
 
 Run BEAM100K with local Ollama:
 

@@ -51,13 +51,15 @@ fn beam_redacts_secret_like_tokens_before_ingestion() {
 }
 
 #[test]
-fn beam_answer_prompt_instructs_direct_grounded_answers() {
+fn beam_answer_prompt_satisfies_v1_contract() {
     let prompt = aver_eval::beam::answer_prompt("When is launch?", "April 1", &[]);
+    let contract = aver_eval::prompt_assertions::contract_for(
+        aver_eval::prompt_assertions::PromptKind::BeamAnswer(
+            aver_eval::prompt_assertions::BeamPromptVersion::V1,
+        ),
+    );
 
-    assert!(prompt.contains("Answer the question directly"));
-    assert!(prompt.contains("Do not respond with generic meta-commentary"));
-    assert!(prompt.contains("If retrieved memories conflict"));
-    assert!(prompt.contains("For current, latest, updated, or currently questions"));
+    aver_eval::prompt_assertions::assert_prompt_contract(&prompt, &contract).unwrap();
 }
 
 #[test]
