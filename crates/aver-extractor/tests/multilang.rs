@@ -316,6 +316,48 @@ fn extract_typescript_facts_do_not_split_scoped_interface_implements_reference_i
 }
 
 #[test]
+fn extract_typescript_facts_do_not_split_dotted_interface_implements_reference_into_top_level_interface()
+ {
+    let facts = extract_typescript_facts(
+        "store.ts",
+        "class Store implements Acme.Memory.Recallable {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Acme.Memory.Recallable".to_string(),
+    }));
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Acme".to_string(),
+    }));
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Acme.Memory".to_string(),
+    }));
+}
+
+#[test]
+fn extract_typescript_facts_do_not_split_dotted_scoped_interface_implements_reference_with_type_arguments()
+ {
+    let facts = extract_typescript_facts(
+        "store.ts",
+        "class Store implements Acme.Memory.Recallable<Context> {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Acme.Memory.Recallable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_typescript_facts_emits_class_extends_triple() {
     let facts = extract_typescript_facts("store.ts", "class Store extends BaseStore {}").unwrap();
 
