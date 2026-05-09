@@ -482,6 +482,14 @@ pub fn extract_java_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
     ));
     facts.extend(extract_java_extends_facts(source)?);
     facts.extend(extract_java_implements_facts(source)?);
+    facts.extend(extract_java_interface_extends_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_java_interface_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let tree = parse_with_language(source, tree_sitter_java::language())?;
+    let mut facts = Vec::new();
+    collect_java_interface_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -1381,21 +1389,28 @@ fn collect_swift_extends_facts(
     source: &[u8],
     facts: &mut Vec<ExtractedFact>,
 ) -> Result<(), Error> {
-    if node.kind() == "class_declaration"
+    let type_kind = if node.kind() == "class_declaration"
         && node
             .child_by_field_name("declaration_kind")
             .is_some_and(|kind| {
                 kind.utf8_text(source)
                     .is_ok_and(|text| matches!(text, "class" | "actor"))
-            })
-        && let Some(class_name) = node.child_by_field_name("name")
+            }) {
+        Some("Class")
+    } else if node.kind() == "protocol_declaration" {
+        Some("Protocol")
+    } else {
+        None
+    };
+    if let Some(type_kind) = type_kind
+        && let Some(type_name) = node.child_by_field_name("name")
         && let Some(inheritance) = first_named_descendant_of_kind(node, "inheritance_specifier")
         && let Some(base_name) = inheritance.child_by_field_name("inherits_from")
     {
         facts.push(ExtractedFact {
-            subject: format!("Class:{}", class_name.utf8_text(source)?),
+            subject: format!("{}:{}", type_kind, type_name.utf8_text(source)?),
             predicate: "extends".to_string(),
-            object: format!("Class:{}", base_name.utf8_text(source)?),
+            object: format!("{}:{}", type_kind, base_name.utf8_text(source)?),
         });
     }
 
@@ -1577,6 +1592,37 @@ fn collect_javascript_extends_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_javascript_extends_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_java_interface_extends_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "interface_declaration"
+        && let Some(interface_name) = node.child_by_field_name("name")
+        && let Some(extends_interfaces) = first_named_descendant_of_kind(node, "extends_interfaces")
+    {
+        let mut base_names = Vec::new();
+        collect_descendant_texts(
+            extends_interfaces,
+            source,
+            &["type_identifier", "identifier"],
+            &mut base_names,
+        )?;
+        let subject = format!("Interface:{}", interface_name.utf8_text(source)?);
+        facts.extend(base_names.into_iter().map(|base_name| ExtractedFact {
+            subject: subject.clone(),
+            predicate: "extends".to_string(),
+            object: format!("Interface:{base_name}"),
+        }));
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_java_interface_extends_facts(child, source, facts)?;
     }
     Ok(())
 }
