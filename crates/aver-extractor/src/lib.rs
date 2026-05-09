@@ -776,6 +776,17 @@ pub fn extract_ruby_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
         extract_ruby_modules(source)?,
     ));
     facts.extend(extract_ruby_extends_facts(source)?);
+    facts.extend(extract_ruby_implements_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_ruby_implements_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let modules = extract_ruby_modules(source)?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let tree = parse_with_language(source, tree_sitter_ruby::language())?;
+    let mut facts = Vec::new();
+    collect_ruby_implements_facts(tree.root_node(), source.as_bytes(), &modules, &mut facts)?;
     Ok(facts)
 }
 
@@ -1674,6 +1685,53 @@ fn collect_kotlin_extends_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_kotlin_extends_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_ruby_implements_facts(
+    node: Node<'_>,
+    source: &[u8],
+    modules: &HashSet<String>,
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "class"
+        && let Some(class_name) = node.child_by_field_name("name")
+    {
+        let mut included = Vec::new();
+        collect_ruby_include_names(node, source, &mut included)?;
+        facts.extend(
+            included
+                .into_iter()
+                .filter(|name| modules.contains(name))
+                .map(|module_name| ExtractedFact {
+                    subject: format!("Class:{}", class_name.utf8_text(source).unwrap_or_default()),
+                    predicate: "implements".to_string(),
+                    object: format!("Module:{module_name}"),
+                }),
+        );
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_ruby_implements_facts(child, source, modules, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_ruby_include_names(
+    node: Node<'_>,
+    source: &[u8],
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    if node.kind() == "call" && node.utf8_text(source)?.trim_start().starts_with("include ") {
+        collect_descendant_texts(node, source, &["constant"], names)?;
+        return Ok(());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_ruby_include_names(child, source, names)?;
     }
     Ok(())
 }

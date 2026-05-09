@@ -995,6 +995,21 @@ fn extract_php_facts_emit_class_uses_trait_triple() {
 }
 
 #[test]
+fn extract_ruby_facts_emit_class_includes_module_triple() {
+    let facts = extract_ruby_facts(
+        "store.rb",
+        "module Recallable\nend\nclass Store\n  include Recallable\nend",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Module:Recallable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_ruby_modules_and_php_traits_emit_definition_facts() {
     let ruby = "module Memory\nend";
     assert_eq!(
