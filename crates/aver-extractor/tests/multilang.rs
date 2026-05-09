@@ -777,6 +777,26 @@ fn extract_csharp_facts_emit_class_implements_interface_triple() {
 }
 
 #[test]
+fn extract_csharp_facts_do_not_treat_generic_type_arguments_as_implemented_interfaces() {
+    let facts = extract_csharp_facts(
+        "Store.cs",
+        "interface IRecallable<T> {} interface IMemory {} class Store : IRecallable<IMemory> {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:IRecallable".to_string(),
+    }));
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:IMemory".to_string(),
+    }));
+}
+
+#[test]
 fn extract_csharp_facts_emit_record_extends_triple() {
     let facts = extract_csharp_facts("User.cs", "record User : BaseUser {}").unwrap();
 

@@ -1573,7 +1573,7 @@ fn collect_csharp_implements_facts(
         && let Some(base_list) = first_named_descendant_of_kind(node, "base_list")
     {
         let mut base_names = Vec::new();
-        collect_descendant_texts(base_list, source, &["identifier"], &mut base_names)?;
+        collect_csharp_base_type_names(base_list, source, &mut base_names)?;
         let subject = format!("{}:{}", type_kind, type_name.utf8_text(source)?);
         facts.extend(
             base_names
@@ -1590,6 +1590,32 @@ fn collect_csharp_implements_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_csharp_implements_facts(child, source, interfaces, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_csharp_base_type_names(
+    node: Node<'_>,
+    source: &[u8],
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    if node.kind() == "generic_name" {
+        if let Some(name) = first_named_descendant_of_kind(node, "identifier") {
+            names.push(name.utf8_text(source)?.to_string());
+        }
+        return Ok(());
+    }
+    if node.kind() == "type_argument_list" {
+        return Ok(());
+    }
+    if node.kind() == "identifier" {
+        names.push(node.utf8_text(source)?.to_string());
+        return Ok(());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_csharp_base_type_names(child, source, names)?;
     }
     Ok(())
 }
