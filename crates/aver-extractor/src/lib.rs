@@ -370,6 +370,14 @@ pub fn extract_go_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, 
         "Interface",
         extract_go_interfaces(source)?,
     ));
+    facts.extend(extract_go_extends_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_go_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let tree = parse_with_language(source, tree_sitter_go::language())?;
+    let mut facts = Vec::new();
+    collect_go_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -1756,6 +1764,40 @@ fn collect_kotlin_prefixed_type_names(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_kotlin_prefixed_type_names(child, source, prefix, names)?;
+    }
+    Ok(())
+}
+
+fn collect_go_extends_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "type_spec"
+        && let Some(interface_node) = node.child_by_field_name("type")
+        && interface_node.kind() == "interface_type"
+        && let Some(interface_name) = node.child_by_field_name("name")
+    {
+        let mut embedded = Vec::new();
+        collect_descendant_texts(
+            interface_node,
+            source,
+            &["type_identifier", "qualified_type"],
+            &mut embedded,
+        )?;
+        facts.extend(embedded.into_iter().map(|base| ExtractedFact {
+            subject: format!(
+                "Interface:{}",
+                interface_name.utf8_text(source).unwrap_or_default()
+            ),
+            predicate: "extends".to_string(),
+            object: format!("Interface:{base}"),
+        }));
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_go_extends_facts(child, source, facts)?;
     }
     Ok(())
 }
