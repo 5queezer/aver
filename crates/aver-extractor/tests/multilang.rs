@@ -262,6 +262,23 @@ fn extract_typescript_facts_do_not_treat_generic_type_arguments_as_implemented_i
 }
 
 #[test]
+fn extract_typescript_facts_do_not_split_scoped_extends_reference_into_top_level_class() {
+    let facts =
+        extract_typescript_facts("store.ts", "class Store extends Memory.BaseStore {}").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:Memory.BaseStore".to_string(),
+    }));
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:Memory".to_string(),
+    }));
+}
+
+#[test]
 fn extract_typescript_facts_emits_class_extends_triple() {
     let facts = extract_typescript_facts("store.ts", "class Store extends BaseStore {}").unwrap();
 
