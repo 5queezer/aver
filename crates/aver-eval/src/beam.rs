@@ -232,7 +232,8 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
         {
             questions += 1;
             let claims = store.recall_hybrid_claims(&question.question, &embedder, config.top_k)?;
-            let contexts = order_contexts_by_beam_message_index(
+            let contexts = order_contexts_for_question(
+                &question.question,
                 claims
                     .iter()
                     .map(|claim| (claim.subject.clone(), claim.object.clone()))
@@ -636,13 +637,33 @@ fn push_sanitized_token(output: &mut String, token: &str) {
     }
 }
 
-pub fn order_contexts_by_beam_message_index(mut contexts: Vec<(String, String)>) -> Vec<String> {
+pub fn order_contexts_by_beam_message_index(contexts: Vec<(String, String)>) -> Vec<String> {
+    order_contexts(contexts, false)
+}
+
+pub fn order_contexts_for_question(question: &str, contexts: Vec<(String, String)>) -> Vec<String> {
+    order_contexts(contexts, asks_for_current_value(question))
+}
+
+fn order_contexts(mut contexts: Vec<(String, String)>, recent_first: bool) -> Vec<String> {
     contexts.sort_by(|(left_subject, _), (right_subject, _)| {
-        beam_message_index(left_subject)
+        let ordering = beam_message_index(left_subject)
             .cmp(&beam_message_index(right_subject))
-            .then_with(|| left_subject.cmp(right_subject))
+            .then_with(|| left_subject.cmp(right_subject));
+        if recent_first {
+            ordering.reverse()
+        } else {
+            ordering
+        }
     });
     contexts.into_iter().map(|(_, context)| context).collect()
+}
+
+fn asks_for_current_value(question: &str) -> bool {
+    let normalized = question.to_ascii_lowercase();
+    ["current", "currently", "latest", "updated", "recent"]
+        .iter()
+        .any(|needle| normalized.contains(needle))
 }
 
 fn beam_message_index(subject: &str) -> Option<usize> {

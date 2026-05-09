@@ -117,6 +117,29 @@ fn beam_context_ordering_sorts_message_subjects_chronologically() {
 }
 
 #[test]
+fn beam_context_ordering_uses_recent_first_for_current_questions() {
+    let contexts = aver_eval::beam::order_contexts_for_question(
+        "What is the current API quota?",
+        vec![
+            (
+                "conversation:1:message:12".to_string(),
+                "current quota".to_string(),
+            ),
+            (
+                "conversation:1:message:2".to_string(),
+                "old quota".to_string(),
+            ),
+            (
+                "conversation:1:message:7".to_string(),
+                "middle quota".to_string(),
+            ),
+        ],
+    );
+
+    assert_eq!(contexts, vec!["current quota", "middle quota", "old quota"]);
+}
+
+#[test]
 fn beam_answer_prompt_contains_question_and_context_without_reference_answer_leakage() {
     let prompt = aver_eval::beam::answer_prompt(
         "What language?",
