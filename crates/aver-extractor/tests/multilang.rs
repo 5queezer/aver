@@ -298,6 +298,24 @@ fn extract_typescript_facts_do_not_split_scoped_interface_extends_reference_into
 }
 
 #[test]
+fn extract_typescript_facts_do_not_split_scoped_interface_implements_reference_into_top_level_interface()
+ {
+    let facts = extract_typescript_facts("store.ts", "class Store implements Memory.Recallable {}")
+        .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Memory.Recallable".to_string(),
+    }));
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Memory".to_string(),
+    }));
+}
+
+#[test]
 fn extract_typescript_facts_emits_class_extends_triple() {
     let facts = extract_typescript_facts("store.ts", "class Store extends BaseStore {}").unwrap();
 
