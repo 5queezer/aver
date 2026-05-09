@@ -1878,13 +1878,34 @@ fn collect_ruby_include_names(
             Some("include" | "prepend" | "extend")
         )
     {
-        collect_descendant_texts(node, source, &["constant"], names)?;
+        collect_ruby_mixin_argument_names(node, source, names)?;
         return Ok(());
     }
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_ruby_include_names(child, source, names)?;
+    }
+    Ok(())
+}
+
+fn collect_ruby_mixin_argument_names(
+    node: Node<'_>,
+    source: &[u8],
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    if node.kind() == "scope_resolution" {
+        names.push(node.utf8_text(source)?.to_string());
+        return Ok(());
+    }
+    if node.kind() == "constant" {
+        names.push(node.utf8_text(source)?.to_string());
+        return Ok(());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_ruby_mixin_argument_names(child, source, names)?;
     }
     Ok(())
 }

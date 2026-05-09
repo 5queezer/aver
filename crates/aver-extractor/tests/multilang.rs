@@ -1356,6 +1356,26 @@ fn extract_ruby_facts_emit_class_prepends_module_triple() {
 }
 
 #[test]
+fn extract_ruby_facts_do_not_split_scoped_mixin_references_into_top_level_modules() {
+    let facts = extract_ruby_facts(
+        "store.rb",
+        "module Memory\nend\nmodule Recallable\nend\nclass Store\n  include Memory::Recallable\nend",
+    )
+    .unwrap();
+
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Module:Memory".to_string(),
+    }));
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Module:Recallable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_ruby_facts_emit_class_includes_module_triple() {
     let facts = extract_ruby_facts(
         "store.rb",
