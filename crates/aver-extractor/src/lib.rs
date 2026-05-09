@@ -1411,15 +1411,20 @@ fn collect_csharp_extends_facts(
     source: &[u8],
     facts: &mut Vec<ExtractedFact>,
 ) -> Result<(), Error> {
-    if node.kind() == "class_declaration"
-        && let Some(class_name) = node.child_by_field_name("name")
+    let type_kind = match node.kind() {
+        "class_declaration" => Some("Class"),
+        "interface_declaration" => Some("Interface"),
+        _ => None,
+    };
+    if let Some(type_kind) = type_kind
+        && let Some(type_name) = node.child_by_field_name("name")
         && let Some(base_list) = first_named_descendant_of_kind(node, "base_list")
         && let Some(base_name) = first_named_descendant_of_kind(base_list, "identifier")
     {
         facts.push(ExtractedFact {
-            subject: format!("Class:{}", class_name.utf8_text(source)?),
+            subject: format!("{}:{}", type_kind, type_name.utf8_text(source)?),
             predicate: "extends".to_string(),
-            object: format!("Class:{}", base_name.utf8_text(source)?),
+            object: format!("{}:{}", type_kind, base_name.utf8_text(source)?),
         });
     }
 

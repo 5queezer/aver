@@ -488,6 +488,18 @@ fn extract_php_namespaces_emit_definition_facts() {
 }
 
 #[test]
+fn extract_csharp_facts_emit_interface_extends_triple() {
+    let facts =
+        extract_csharp_facts("Memory.cs", "interface Recallable : BaseRecallable {}").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Interface:Recallable".to_string(),
+        predicate: "extends".to_string(),
+        object: "Interface:BaseRecallable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_csharp_namespaces_emit_definition_facts() {
     let source = "namespace Memory.Core { class Store {} }";
 
