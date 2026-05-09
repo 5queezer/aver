@@ -473,6 +473,14 @@ pub fn extract_java_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
         extract_java_packages(source)?,
     ));
     facts.extend(extract_java_extends_facts(source)?);
+    facts.extend(extract_java_implements_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_java_implements_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let tree = parse_with_language(source, tree_sitter_java::language())?;
+    let mut facts = Vec::new();
+    collect_java_implements_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -1415,6 +1423,41 @@ fn collect_cpp_extends_facts(
     Ok(())
 }
 
+fn collect_java_implements_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "class_declaration"
+        && let Some(class_name) = node.child_by_field_name("name")
+        && let Some(interfaces) = node.child_by_field_name("interfaces")
+    {
+        let mut interface_names = Vec::new();
+        collect_descendant_texts(
+            interfaces,
+            source,
+            &["type_identifier", "identifier"],
+            &mut interface_names,
+        )?;
+        let subject = format!("Class:{}", class_name.utf8_text(source)?);
+        facts.extend(
+            interface_names
+                .into_iter()
+                .map(|interface_name| ExtractedFact {
+                    subject: subject.clone(),
+                    predicate: "implements".to_string(),
+                    object: format!("Interface:{interface_name}"),
+                }),
+        );
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_java_implements_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
 fn collect_java_extends_facts(
     node: Node<'_>,
     source: &[u8],
@@ -1574,6 +1617,23 @@ fn collect_c_style_function_names(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_c_style_function_names(child, source, functions)?;
+    }
+    Ok(())
+}
+
+fn collect_descendant_texts(
+    node: Node<'_>,
+    source: &[u8],
+    kinds: &[&str],
+    texts: &mut Vec<String>,
+) -> Result<(), Error> {
+    if kinds.contains(&node.kind()) {
+        texts.push(node.utf8_text(source)?.to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_descendant_texts(child, source, kinds, texts)?;
     }
     Ok(())
 }

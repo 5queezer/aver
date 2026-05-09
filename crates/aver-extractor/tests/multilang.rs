@@ -376,6 +376,17 @@ fn extract_cpp_facts_emit_class_extends_triple() {
 }
 
 #[test]
+fn extract_java_facts_emit_class_implements_triple() {
+    let facts = extract_java_facts("Store.java", "class Store implements Recallable {}").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Recallable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_java_facts_emit_class_extends_triple() {
     let facts = extract_java_facts("Store.java", "class Store extends BaseStore {}").unwrap();
 
