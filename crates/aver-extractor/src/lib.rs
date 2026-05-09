@@ -1647,7 +1647,12 @@ fn collect_kotlin_implements_facts(
     facts: &mut Vec<ExtractedFact>,
 ) -> Result<(), Error> {
     let type_kind = match node.kind() {
-        "class_declaration" if node.utf8_text(source)?.trim_start().starts_with("class ") => {
+        "class_declaration"
+            if node
+                .utf8_text(source)?
+                .split_whitespace()
+                .any(|word| word == "class") =>
+        {
             Some("Class")
         }
         "object_declaration" => Some("Object"),
