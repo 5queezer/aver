@@ -2701,6 +2701,7 @@ fn expand_rust_use_declaration(declaration: &str) -> Vec<String> {
         .map_or(declaration, |(path, _)| path)
         .trim();
     let declaration = declaration.strip_suffix("::*").unwrap_or(declaration);
+    let declaration = declaration.strip_prefix("::").unwrap_or(declaration);
 
     vec![declaration.to_string()]
 }
@@ -2728,6 +2729,7 @@ fn expand_rust_use_items(prefix: &str, items: &str) -> Vec<String> {
             .map_or(item, |(item, _)| item)
             .trim();
         let item = item.strip_suffix("::*").unwrap_or(item);
+        let item = item.strip_prefix("::").unwrap_or(item);
 
         if item == "self" {
             expanded.push(prefix.to_string());
