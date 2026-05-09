@@ -720,6 +720,26 @@ fn extract_php_facts_emit_interface_extends_triple() {
 }
 
 #[test]
+fn extract_php_facts_emit_multiple_interface_extends_triples() {
+    let facts = extract_php_facts(
+        "memory.php",
+        "<?php interface Recallable extends BaseRecallable, Auditable {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Interface:Recallable".to_string(),
+        predicate: "extends".to_string(),
+        object: "Interface:BaseRecallable".to_string(),
+    }));
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Interface:Recallable".to_string(),
+        predicate: "extends".to_string(),
+        object: "Interface:Auditable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_php_namespaces_emit_definition_facts() {
     let source = "<?php namespace Memory\\Core; class Store {}";
 

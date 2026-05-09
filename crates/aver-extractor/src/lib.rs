@@ -1999,14 +1999,20 @@ fn collect_php_extends_facts(
     if node.kind() == "interface_declaration"
         && let Some(interface_name) = node.child_by_field_name("name")
         && let Some(base_clause) = first_named_descendant_of_kind(node, "base_clause")
-        && let Some(base_name) = first_named_descendant_of_kind(base_clause, "name")
-            .or_else(|| first_named_descendant_of_kind(base_clause, "qualified_name"))
     {
-        facts.push(ExtractedFact {
-            subject: format!("Interface:{}", interface_name.utf8_text(source)?),
+        let mut base_names = Vec::new();
+        collect_descendant_texts(
+            base_clause,
+            source,
+            &["name", "qualified_name"],
+            &mut base_names,
+        )?;
+        let subject = format!("Interface:{}", interface_name.utf8_text(source)?);
+        facts.extend(base_names.into_iter().map(|base_name| ExtractedFact {
+            subject: subject.clone(),
             predicate: "extends".to_string(),
-            object: format!("Interface:{}", base_name.utf8_text(source)?),
-        });
+            object: format!("Interface:{base_name}"),
+        }));
     }
 
     let mut cursor = node.walk();
