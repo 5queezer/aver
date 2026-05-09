@@ -443,6 +443,17 @@ fn extract_java_packages_emit_definition_facts() {
 }
 
 #[test]
+fn extract_php_facts_emit_class_extends_triple() {
+    let facts = extract_php_facts("Store.php", "<?php class Store extends BaseStore {}").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:BaseStore".to_string(),
+    }));
+}
+
+#[test]
 fn extract_php_namespaces_emit_definition_facts() {
     let source = "<?php namespace Memory\\Core; class Store {}";
 
