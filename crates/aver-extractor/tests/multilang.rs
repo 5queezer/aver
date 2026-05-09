@@ -1172,6 +1172,21 @@ fn extract_kotlin_facts_emit_class_implements_interface_triple() {
 }
 
 #[test]
+fn extract_kotlin_facts_emit_object_implements_interface_triple() {
+    let facts = extract_kotlin_facts(
+        "Store.kt",
+        "interface Recallable\nobject Store : Recallable",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Object:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Recallable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_kotlin_facts_emit_delegation_extends_triples() {
     let class_facts = extract_kotlin_facts("Store.kt", "class Store : BaseStore()").unwrap();
     assert!(class_facts.contains(&ExtractedFact {

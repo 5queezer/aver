@@ -1646,16 +1646,22 @@ fn collect_kotlin_implements_facts(
     interfaces: &HashSet<String>,
     facts: &mut Vec<ExtractedFact>,
 ) -> Result<(), Error> {
-    if node.kind() == "class_declaration"
-        && node.utf8_text(source)?.trim_start().starts_with("class ")
-        && let Some(class_name) = first_named_descendant_of_kind(node, "type_identifier")
+    let type_kind = match node.kind() {
+        "class_declaration" if node.utf8_text(source)?.trim_start().starts_with("class ") => {
+            Some("Class")
+        }
+        "object_declaration" => Some("Object"),
+        _ => None,
+    };
+    if let Some(type_kind) = type_kind
+        && let Some(type_name) = first_named_descendant_of_kind(node, "type_identifier")
         && let Some(delegation) = first_named_descendant_of_kind(node, "delegation_specifier")
         && let Some(interface_name) = first_named_descendant_of_kind(delegation, "type_identifier")
     {
         let interface_name = interface_name.utf8_text(source)?;
         if interfaces.contains(interface_name) {
             facts.push(ExtractedFact {
-                subject: format!("Class:{}", class_name.utf8_text(source)?),
+                subject: format!("{}:{}", type_kind, type_name.utf8_text(source)?),
                 predicate: "implements".to_string(),
                 object: format!("Interface:{interface_name}"),
             });
