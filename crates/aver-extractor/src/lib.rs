@@ -2830,7 +2830,7 @@ fn collect_traits(node: Node<'_>, source: &[u8], traits: &mut Vec<String>) -> Re
     if node.kind() == "trait_item"
         && let Some(name) = node.child_by_field_name("name")
     {
-        traits.push(name.utf8_text(source)?.to_string());
+        traits.push(normalize_rust_identifier(name.utf8_text(source)?));
     }
 
     let mut cursor = node.walk();

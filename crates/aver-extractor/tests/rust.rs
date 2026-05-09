@@ -197,6 +197,13 @@ fn extract_rust_enums_finds_enum_name() {
 }
 
 #[test]
+fn extract_rust_traits_normalizes_raw_identifier_names() {
+    let traits = extract_rust_traits("trait r#type {}").unwrap();
+
+    assert_eq!(traits, vec!["type".to_string()]);
+}
+
+#[test]
 fn extract_rust_traits_finds_trait_name() {
     let traits = extract_rust_traits("trait EmbeddingClient { fn embed(&self); }").unwrap();
 
