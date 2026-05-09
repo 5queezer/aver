@@ -18,7 +18,7 @@ if [ "${AVER_AUTORESEARCH_TARGET:-}" = "beam" ]; then
     --provider "${BEAM_PROVIDER:-openai}"
     --embedding-model "${BEAM_EMBEDDING_MODEL:-text-embedding-3-small}"
     --generation-model "${BEAM_GENERATION_MODEL:-gpt-4o-mini}"
-    --top-k "${BEAM_TOP_K:-12}"
+    --top-k "${BEAM_TOP_K:-16}"
   )
   if [ -n "${BEAM_LIMIT_CONVERSATIONS:-}" ]; then
     BEAM_ARGS+=(--limit-conversations "$BEAM_LIMIT_CONVERSATIONS")
