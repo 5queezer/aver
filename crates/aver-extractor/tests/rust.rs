@@ -48,6 +48,19 @@ fn extract_rust_imports_expands_nested_brace_grouped_imports() {
 }
 
 #[test]
+fn extract_rust_imports_normalizes_aliasing_and_visibility_prefix() {
+    let imports = extract_rust_imports(
+        "pub use std::fs::path as fs_path;\nuse std::collections as collections;",
+    )
+    .unwrap();
+
+    assert_eq!(
+        imports,
+        vec!["std::fs::path".to_string(), "std::collections".to_string()]
+    );
+}
+
+#[test]
 fn extract_rust_calls_finds_called_function_name() {
     let calls = extract_rust_calls("fn main() { remember(); }").unwrap();
 

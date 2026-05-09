@@ -2652,12 +2652,24 @@ fn collect_imports(node: Node<'_>, source: &[u8], imports: &mut Vec<String>) -> 
 }
 
 fn expand_rust_use_declaration(declaration: &str) -> Vec<String> {
+    let mut declaration = declaration;
+    if let Some(without_pub) = declaration.strip_prefix("pub use ") {
+        declaration = without_pub;
+    }
+    if let Some(without_use) = declaration.strip_prefix("use ") {
+        declaration = without_use;
+    }
     if let Some((prefix, rest)) = declaration.split_once("::{")
         && let Some(suffix_end) = rest.rfind('}')
     {
         let suffix = &rest[..suffix_end];
         return expand_rust_use_items(prefix, suffix);
     }
+
+    let declaration = declaration
+        .split_once(" as ")
+        .map_or(declaration, |(path, _)| path)
+        .trim();
 
     vec![declaration.to_string()]
 }
