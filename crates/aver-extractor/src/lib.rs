@@ -1543,15 +1543,21 @@ fn collect_swift_extends_facts(
     };
     if let Some(type_kind) = type_kind
         && let Some(type_name) = node.child_by_field_name("name")
-        && let Some(inheritance) = first_named_descendant_of_kind(node, "inheritance_specifier")
     {
         let mut base_names = Vec::new();
-        collect_swift_inheritance_type_names(inheritance, source, &mut base_names)?;
-        if let Some(base_name) = base_names.into_iter().next() {
-            facts.push(ExtractedFact {
-                subject: format!("{}:{}", type_kind, type_name.utf8_text(source)?),
+        collect_swift_inheritance_type_names(node, source, &mut base_names)?;
+        let subject = format!("{}:{}", type_kind, type_name.utf8_text(source)?);
+        if type_kind == "Protocol" {
+            facts.extend(base_names.into_iter().map(|base_name| ExtractedFact {
+                subject: subject.clone(),
                 predicate: "extends".to_string(),
-                object: format!("{}:{base_name}", type_kind),
+                object: format!("Protocol:{base_name}"),
+            }));
+        } else if let Some(base_name) = base_names.into_iter().next() {
+            facts.push(ExtractedFact {
+                subject,
+                predicate: "extends".to_string(),
+                object: format!("Class:{base_name}"),
             });
         }
     }
