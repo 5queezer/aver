@@ -38,6 +38,13 @@ fn extract_rust_imports_deduplicates_duplicates() {
 }
 
 #[test]
+fn extract_rust_imports_normalizes_raw_identifier_segments() {
+    let imports = extract_rust_imports("use crate::r#type::Store;\nfn main() {}").unwrap();
+
+    assert_eq!(imports, vec!["crate::type::Store".to_string()]);
+}
+
+#[test]
 fn extract_rust_imports_normalizes_leading_absolute_path_colons() {
     let imports = extract_rust_imports("use ::std::fs;\nfn main() {}").unwrap();
 
