@@ -2378,12 +2378,7 @@ fn collect_typescript_extends_facts(
         && let Some(extends_clause) = first_named_descendant_of_kind(node, "extends_type_clause")
     {
         let mut base_names = Vec::new();
-        collect_descendant_texts(
-            extends_clause,
-            source,
-            &["type_identifier", "nested_type_identifier"],
-            &mut base_names,
-        )?;
+        collect_typescript_implements_names(extends_clause, source, &mut base_names)?;
         let subject = format!("Interface:{}", interface_name.utf8_text(source)?);
         facts.extend(base_names.into_iter().map(|base_name| ExtractedFact {
             subject: subject.clone(),

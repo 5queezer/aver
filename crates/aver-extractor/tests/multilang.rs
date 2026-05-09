@@ -145,6 +145,26 @@ fn extract_typescript_facts_emit_interface_extends_triple() {
 }
 
 #[test]
+fn extract_typescript_facts_do_not_treat_generic_type_arguments_as_interface_extends() {
+    let facts = extract_typescript_facts(
+        "memory.ts",
+        "interface Recallable extends BaseRecallable<Memory> {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Interface:Recallable".to_string(),
+        predicate: "extends".to_string(),
+        object: "Interface:BaseRecallable".to_string(),
+    }));
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Interface:Recallable".to_string(),
+        predicate: "extends".to_string(),
+        object: "Interface:Memory".to_string(),
+    }));
+}
+
+#[test]
 fn extract_typescript_type_symbols_emit_definition_facts() {
     let source = "interface Recallable {} type MemoryId = string; enum MemoryKind { Episodic }";
 
