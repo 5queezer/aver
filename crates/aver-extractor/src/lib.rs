@@ -1479,22 +1479,42 @@ fn collect_swift_implements_facts(
                 _ => None,
             })
         && let Some(type_name) = node.child_by_field_name("name")
-        && let Some(inheritance) = first_named_descendant_of_kind(node, "inheritance_specifier")
-        && let Some(protocol_name) = inheritance.child_by_field_name("inherits_from")
     {
-        let protocol_name = protocol_name.utf8_text(source)?;
-        if protocols.contains(protocol_name) {
-            facts.push(ExtractedFact {
-                subject: format!("{}:{}", type_kind, type_name.utf8_text(source)?),
-                predicate: "implements".to_string(),
-                object: format!("Protocol:{protocol_name}"),
-            });
-        }
+        let mut protocol_names = Vec::new();
+        collect_swift_inheritance_type_names(node, source, &mut protocol_names)?;
+        let subject = format!("{}:{}", type_kind, type_name.utf8_text(source)?);
+        facts.extend(
+            protocol_names
+                .into_iter()
+                .filter(|protocol_name| protocols.contains(protocol_name))
+                .map(|protocol_name| ExtractedFact {
+                    subject: subject.clone(),
+                    predicate: "implements".to_string(),
+                    object: format!("Protocol:{protocol_name}"),
+                }),
+        );
     }
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_swift_implements_facts(child, source, protocols, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_swift_inheritance_type_names(
+    node: Node<'_>,
+    source: &[u8],
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    if node.kind() == "inheritance_specifier" {
+        collect_descendant_texts(node, source, &["user_type"], names)?;
+        return Ok(());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_swift_inheritance_type_names(child, source, names)?;
     }
     Ok(())
 }
