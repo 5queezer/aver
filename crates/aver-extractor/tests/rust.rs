@@ -21,6 +21,23 @@ fn extract_rust_imports_finds_use_path() {
 }
 
 #[test]
+fn extract_rust_imports_deduplicates_duplicates() {
+    let imports = extract_rust_imports(
+        "use std::fs;\nuse std::fs;\nuse crate::store::{self as store, Store};\nuse crate::store::{Store};\nfn main() {}",
+    )
+    .unwrap();
+
+    assert_eq!(
+        imports,
+        vec![
+            "std::fs".to_string(),
+            "crate::store".to_string(),
+            "crate::store::Store".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn extract_rust_imports_expands_brace_grouped_imports() {
     let imports = extract_rust_imports("use std::{fs, path};\nfn main() {}").unwrap();
 

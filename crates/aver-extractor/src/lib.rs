@@ -112,7 +112,16 @@ pub fn extract_rust_imports(source: &str) -> Result<Vec<String>, Error> {
 
     let mut imports = Vec::new();
     collect_imports(tree.root_node(), source.as_bytes(), &mut imports)?;
-    Ok(imports)
+
+    let mut deduped = Vec::new();
+    let mut seen = HashSet::new();
+    for import in imports {
+        if seen.insert(import.clone()) {
+            deduped.push(import);
+        }
+    }
+
+    Ok(deduped)
 }
 
 pub fn extract_rust_calls(source: &str) -> Result<Vec<String>, Error> {
