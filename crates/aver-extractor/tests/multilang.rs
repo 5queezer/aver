@@ -113,6 +113,21 @@ fn extract_javascript_and_typescript_arrow_function_variables() {
 }
 
 #[test]
+fn extract_typescript_facts_emit_interface_extends_triple() {
+    let facts = extract_typescript_facts(
+        "memory.ts",
+        "interface Recallable extends BaseRecallable {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Interface:Recallable".to_string(),
+        predicate: "extends".to_string(),
+        object: "Interface:BaseRecallable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_typescript_type_symbols_emit_definition_facts() {
     let source = "interface Recallable {} type MemoryId = string; enum MemoryKind { Episodic }";
 

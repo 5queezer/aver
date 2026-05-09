@@ -318,7 +318,7 @@ pub fn extract_typescript_facts(path: &str, source: &str) -> Result<Vec<Extracte
         "Enum",
         extract_typescript_enums(source)?,
     ));
-    facts.extend(extract_typescript_extends_facts(source));
+    facts.extend(extract_typescript_extends_facts(source)?);
     Ok(facts)
 }
 
@@ -1684,29 +1684,55 @@ fn first_named_descendant_of_kind<'tree>(node: Node<'tree>, kind: &str) -> Optio
     None
 }
 
-fn extract_typescript_extends_facts(source: &str) -> Vec<ExtractedFact> {
-    source
-        .lines()
-        .filter_map(|line| {
-            let mut tokens = line
-                .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'))
-                .filter(|token| !token.is_empty());
-            while let Some(token) = tokens.next() {
-                if token == "class" {
-                    let class_name = tokens.next()?;
-                    if tokens.next()? == "extends" {
-                        let base = tokens.next()?;
-                        return Some(ExtractedFact {
-                            subject: format!("Class:{class_name}"),
-                            predicate: "extends".to_string(),
-                            object: format!("Class:{base}"),
-                        });
-                    }
-                }
-            }
-            None
-        })
-        .collect()
+fn extract_typescript_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let tree = parse_with_language(source, tree_sitter_typescript::language_typescript())?;
+    let mut facts = Vec::new();
+    collect_typescript_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
+    Ok(facts)
+}
+
+fn collect_typescript_extends_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "class_declaration"
+        && let Some(class_name) = node.child_by_field_name("name")
+        && let Some(heritage) = first_named_descendant_of_kind(node, "class_heritage")
+        && let Some(base_name) = first_named_descendant_of_kind(heritage, "identifier")
+            .or_else(|| first_named_descendant_of_kind(heritage, "type_identifier"))
+    {
+        facts.push(ExtractedFact {
+            subject: format!("Class:{}", class_name.utf8_text(source)?),
+            predicate: "extends".to_string(),
+            object: format!("Class:{}", base_name.utf8_text(source)?),
+        });
+    }
+
+    if node.kind() == "interface_declaration"
+        && let Some(interface_name) = node.child_by_field_name("name")
+        && let Some(extends_clause) = first_named_descendant_of_kind(node, "extends_type_clause")
+    {
+        let mut base_names = Vec::new();
+        collect_descendant_texts(
+            extends_clause,
+            source,
+            &["type_identifier", "nested_type_identifier"],
+            &mut base_names,
+        )?;
+        let subject = format!("Interface:{}", interface_name.utf8_text(source)?);
+        facts.extend(base_names.into_iter().map(|base_name| ExtractedFact {
+            subject: subject.clone(),
+            predicate: "extends".to_string(),
+            object: format!("Interface:{base_name}"),
+        }));
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_typescript_extends_facts(child, source, facts)?;
+    }
+    Ok(())
 }
 
 fn collect_function_names(
