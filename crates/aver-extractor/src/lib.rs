@@ -2700,6 +2700,7 @@ fn expand_rust_use_declaration(declaration: &str) -> Vec<String> {
         .split_once(" as ")
         .map_or(declaration, |(path, _)| path)
         .trim();
+    let declaration = declaration.strip_suffix("::*").unwrap_or(declaration);
 
     vec![declaration.to_string()]
 }

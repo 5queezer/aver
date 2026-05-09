@@ -38,6 +38,13 @@ fn extract_rust_imports_deduplicates_duplicates() {
 }
 
 #[test]
+fn extract_rust_imports_normalizes_glob_import() {
+    let imports = extract_rust_imports("use std::collections::*;\nfn main() {}").unwrap();
+
+    assert_eq!(imports, vec!["std::collections".to_string()]);
+}
+
+#[test]
 fn extract_rust_imports_expands_brace_grouped_imports() {
     let imports = extract_rust_imports("use std::{fs, path};\nfn main() {}").unwrap();
 
