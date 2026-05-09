@@ -6,12 +6,13 @@ use aver_extractor::{
     extract_go_functions, extract_go_interfaces, extract_go_structs, extract_java_classes,
     extract_java_enums, extract_java_facts, extract_java_functions, extract_java_interfaces,
     extract_javascript_classes, extract_javascript_facts, extract_javascript_functions,
-    extract_kotlin_classes, extract_kotlin_facts, extract_kotlin_functions, extract_php_classes,
-    extract_php_enums, extract_php_facts, extract_php_functions, extract_php_interfaces,
-    extract_python_classes, extract_python_facts, extract_python_functions, extract_ruby_classes,
-    extract_ruby_facts, extract_ruby_functions, extract_swift_classes, extract_swift_enums,
-    extract_swift_facts, extract_swift_functions, extract_swift_protocols, extract_swift_structs,
-    extract_typescript_classes, extract_typescript_facts, extract_typescript_functions,
+    extract_kotlin_classes, extract_kotlin_enums, extract_kotlin_facts, extract_kotlin_functions,
+    extract_kotlin_interfaces, extract_php_classes, extract_php_enums, extract_php_facts,
+    extract_php_functions, extract_php_interfaces, extract_python_classes, extract_python_facts,
+    extract_python_functions, extract_ruby_classes, extract_ruby_facts, extract_ruby_functions,
+    extract_swift_classes, extract_swift_enums, extract_swift_facts, extract_swift_functions,
+    extract_swift_protocols, extract_swift_structs, extract_typescript_classes,
+    extract_typescript_facts, extract_typescript_functions,
 };
 
 #[test]
@@ -386,6 +387,29 @@ fn extract_common_language_type_symbols_emit_definition_facts() {
                 subject: "Memory.swift".to_string(),
                 predicate: "defines".to_string(),
                 object: "Protocol:Recallable".to_string(),
+            })
+    );
+}
+
+#[test]
+fn extract_kotlin_interface_and_enum_symbols_emit_definition_facts() {
+    let source = "interface Recallable\nenum class MemoryKind { EPISODIC }";
+
+    assert_eq!(
+        extract_kotlin_interfaces(source).unwrap(),
+        vec!["Recallable".to_string()]
+    );
+    assert_eq!(
+        extract_kotlin_enums(source).unwrap(),
+        vec!["MemoryKind".to_string()]
+    );
+    assert!(
+        extract_kotlin_facts("Memory.kt", source)
+            .unwrap()
+            .contains(&ExtractedFact {
+                subject: "Memory.kt".to_string(),
+                predicate: "defines".to_string(),
+                object: "Enum:MemoryKind".to_string(),
             })
     );
 }
