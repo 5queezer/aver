@@ -2148,7 +2148,7 @@ fn collect_python_extends_facts(
         && let Some(superclasses) = node.child_by_field_name("superclasses")
     {
         let mut base_names = Vec::new();
-        collect_descendant_texts(superclasses, source, &["identifier"], &mut base_names)?;
+        collect_python_superclass_names(superclasses, source, &mut base_names)?;
         let subject = format!("Class:{}", class_name.utf8_text(source)?);
         facts.extend(base_names.into_iter().map(|base_name| ExtractedFact {
             subject: subject.clone(),
@@ -2160,6 +2160,26 @@ fn collect_python_extends_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_python_extends_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_python_superclass_names(
+    node: Node<'_>,
+    source: &[u8],
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor).filter(|child| child.is_named()) {
+        match child.kind() {
+            "identifier" | "attribute" => names.push(child.utf8_text(source)?.to_string()),
+            "subscript" => {
+                if let Some(value) = child.child_by_field_name("value") {
+                    names.push(value.utf8_text(source)?.to_string());
+                }
+            }
+            _ => collect_python_superclass_names(child, source, names)?,
+        }
     }
     Ok(())
 }
