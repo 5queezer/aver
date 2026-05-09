@@ -184,6 +184,18 @@ fn extract_typescript_facts_emits_class_extends_triple() {
 }
 
 #[test]
+fn extract_typescript_facts_emit_class_implements_triple() {
+    let facts =
+        extract_typescript_facts("store.ts", "class Store implements Recallable {}").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Recallable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_go_facts_emit_interface_extends_triple() {
     let facts = extract_go_facts(
         "memory.go",

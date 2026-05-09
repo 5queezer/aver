@@ -1919,14 +1919,39 @@ fn collect_typescript_extends_facts(
     if node.kind() == "class_declaration"
         && let Some(class_name) = node.child_by_field_name("name")
         && let Some(heritage) = first_named_descendant_of_kind(node, "class_heritage")
-        && let Some(base_name) = first_named_descendant_of_kind(heritage, "identifier")
-            .or_else(|| first_named_descendant_of_kind(heritage, "type_identifier"))
     {
-        facts.push(ExtractedFact {
-            subject: format!("Class:{}", class_name.utf8_text(source)?),
-            predicate: "extends".to_string(),
-            object: format!("Class:{}", base_name.utf8_text(source)?),
-        });
+        if let Some(extends_clause) = first_named_descendant_of_kind(heritage, "extends_clause")
+            && let Some(base_name) = first_named_descendant_of_kind(extends_clause, "identifier")
+                .or_else(|| first_named_descendant_of_kind(extends_clause, "type_identifier"))
+        {
+            facts.push(ExtractedFact {
+                subject: format!("Class:{}", class_name.utf8_text(source)?),
+                predicate: "extends".to_string(),
+                object: format!("Class:{}", base_name.utf8_text(source)?),
+            });
+        }
+
+        if let Some(implements_clause) =
+            first_named_descendant_of_kind(heritage, "implements_clause")
+        {
+            let mut interface_names = Vec::new();
+            collect_descendant_texts(
+                implements_clause,
+                source,
+                &["type_identifier", "nested_type_identifier", "identifier"],
+                &mut interface_names,
+            )?;
+            let subject = format!("Class:{}", class_name.utf8_text(source)?);
+            facts.extend(
+                interface_names
+                    .into_iter()
+                    .map(|interface_name| ExtractedFact {
+                        subject: subject.clone(),
+                        predicate: "implements".to_string(),
+                        object: format!("Interface:{interface_name}"),
+                    }),
+            );
+        }
     }
 
     if node.kind() == "interface_declaration"
