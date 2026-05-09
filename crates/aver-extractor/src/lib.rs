@@ -898,6 +898,17 @@ pub fn extract_kotlin_facts(path: &str, source: &str) -> Result<Vec<ExtractedFac
         extract_kotlin_enums(source)?,
     ));
     facts.extend(extract_kotlin_extends_facts(source)?);
+    facts.extend(extract_kotlin_implements_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_kotlin_implements_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let interfaces = extract_kotlin_interfaces(source)?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let tree = parse_with_language(source, tree_sitter_kotlin::language())?;
+    let mut facts = Vec::new();
+    collect_kotlin_implements_facts(tree.root_node(), source.as_bytes(), &interfaces, &mut facts)?;
     Ok(facts)
 }
 
@@ -1493,6 +1504,35 @@ fn collect_cpp_extends_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_cpp_extends_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_kotlin_implements_facts(
+    node: Node<'_>,
+    source: &[u8],
+    interfaces: &HashSet<String>,
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "class_declaration"
+        && node.utf8_text(source)?.trim_start().starts_with("class ")
+        && let Some(class_name) = first_named_descendant_of_kind(node, "type_identifier")
+        && let Some(delegation) = first_named_descendant_of_kind(node, "delegation_specifier")
+        && let Some(interface_name) = first_named_descendant_of_kind(delegation, "type_identifier")
+    {
+        let interface_name = interface_name.utf8_text(source)?;
+        if interfaces.contains(interface_name) {
+            facts.push(ExtractedFact {
+                subject: format!("Class:{}", class_name.utf8_text(source)?),
+                predicate: "implements".to_string(),
+                object: format!("Interface:{interface_name}"),
+            });
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_kotlin_implements_facts(child, source, interfaces, facts)?;
     }
     Ok(())
 }
