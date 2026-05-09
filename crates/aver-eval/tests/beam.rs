@@ -57,6 +57,7 @@ fn beam_answer_prompt_instructs_direct_grounded_answers() {
     assert!(prompt.contains("Answer the question directly"));
     assert!(prompt.contains("Do not respond with generic meta-commentary"));
     assert!(prompt.contains("If retrieved memories conflict"));
+    assert!(prompt.contains("For current, latest, updated, or currently questions"));
 }
 
 #[test]

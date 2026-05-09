@@ -141,6 +141,7 @@ pub fn answer_prompt(question: &str, _reference_answer: &str, contexts: &[String
         "You answer a BEAM memory benchmark question using only the retrieved memory context.\n\
 Answer the question directly and concisely. Do not respond with generic meta-commentary about the task or context.\n\
 If retrieved memories conflict, explicitly say there is contradictory information and ask which statement is correct.\n\
+For current, latest, updated, or currently questions, prefer the most recent updated value supported by context instead of treating stale values as contradictions.\n\
 If the context is insufficient, say you do not know.\n\n\
 QUESTION:\n{question}\n\n\
 RETRIEVED MEMORY CONTEXT:\n{}\n\n\
