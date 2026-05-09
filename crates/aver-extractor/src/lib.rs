@@ -873,6 +873,14 @@ pub fn extract_kotlin_facts(path: &str, source: &str) -> Result<Vec<ExtractedFac
         "Enum",
         extract_kotlin_enums(source)?,
     ));
+    facts.extend(extract_kotlin_extends_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_kotlin_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let tree = parse_with_language(source, tree_sitter_kotlin::language())?;
+    let mut facts = Vec::new();
+    collect_kotlin_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -1447,6 +1455,40 @@ fn collect_cpp_extends_facts(
     Ok(())
 }
 
+fn collect_kotlin_extends_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "class_declaration" {
+        let text = node.utf8_text(source)?.trim_start();
+        let kind = if text.starts_with("class ") {
+            Some("Class")
+        } else if text.starts_with("interface ") {
+            Some("Interface")
+        } else {
+            None
+        };
+        if let Some(kind) = kind
+            && let Some(name) = first_named_descendant_of_kind(node, "type_identifier")
+            && let Some(delegation) = first_named_descendant_of_kind(node, "delegation_specifier")
+            && let Some(base_name) = first_named_descendant_of_kind(delegation, "type_identifier")
+        {
+            facts.push(ExtractedFact {
+                subject: format!("{kind}:{}", name.utf8_text(source)?),
+                predicate: "extends".to_string(),
+                object: format!("{kind}:{}", base_name.utf8_text(source)?),
+            });
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_kotlin_extends_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
 fn collect_ruby_extends_facts(
     node: Node<'_>,
     source: &[u8],
@@ -1487,6 +1529,19 @@ fn collect_php_extends_facts(
             subject: format!("Class:{}", class_name.utf8_text(source)?),
             predicate: "extends".to_string(),
             object: format!("Class:{}", base_name.utf8_text(source)?),
+        });
+    }
+
+    if node.kind() == "interface_declaration"
+        && let Some(interface_name) = node.child_by_field_name("name")
+        && let Some(base_clause) = first_named_descendant_of_kind(node, "base_clause")
+        && let Some(base_name) = first_named_descendant_of_kind(base_clause, "name")
+            .or_else(|| first_named_descendant_of_kind(base_clause, "qualified_name"))
+    {
+        facts.push(ExtractedFact {
+            subject: format!("Interface:{}", interface_name.utf8_text(source)?),
+            predicate: "extends".to_string(),
+            object: format!("Interface:{}", base_name.utf8_text(source)?),
         });
     }
 

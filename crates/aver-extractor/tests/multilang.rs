@@ -831,6 +831,24 @@ fn extract_ruby_modules_and_php_traits_emit_definition_facts() {
 }
 
 #[test]
+fn extract_kotlin_facts_emit_delegation_extends_triples() {
+    let class_facts = extract_kotlin_facts("Store.kt", "class Store : BaseStore()").unwrap();
+    assert!(class_facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:BaseStore".to_string(),
+    }));
+
+    let interface_facts =
+        extract_kotlin_facts("Recallable.kt", "interface Recallable : BaseRecallable").unwrap();
+    assert!(interface_facts.contains(&ExtractedFact {
+        subject: "Interface:Recallable".to_string(),
+        predicate: "extends".to_string(),
+        object: "Interface:BaseRecallable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_kotlin_interface_and_enum_symbols_emit_definition_facts() {
     let source = "interface Recallable\nenum class MemoryKind { EPISODIC }";
 
