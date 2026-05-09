@@ -2359,12 +2359,7 @@ fn collect_typescript_extends_facts(
             first_named_descendant_of_kind(heritage, "implements_clause")
         {
             let mut interface_names = Vec::new();
-            collect_descendant_texts(
-                implements_clause,
-                source,
-                &["type_identifier", "nested_type_identifier", "identifier"],
-                &mut interface_names,
-            )?;
+            collect_typescript_implements_names(implements_clause, source, &mut interface_names)?;
             let subject = format!("Class:{}", class_name.utf8_text(source)?);
             facts.extend(
                 interface_names
@@ -2400,6 +2395,28 @@ fn collect_typescript_extends_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_typescript_extends_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_typescript_implements_names(
+    node: Node<'_>,
+    source: &[u8],
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor).filter(|child| child.is_named()) {
+        match child.kind() {
+            "type_identifier" | "nested_type_identifier" | "identifier" => {
+                names.push(child.utf8_text(source)?.to_string());
+            }
+            "generic_type" => {
+                if let Some(name) = child.child_by_field_name("name") {
+                    names.push(name.utf8_text(source)?.to_string());
+                }
+            }
+            _ => collect_typescript_implements_names(child, source, names)?,
+        }
     }
     Ok(())
 }

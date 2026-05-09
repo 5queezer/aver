@@ -190,6 +190,24 @@ fn extract_javascript_facts_emit_class_extends_triple() {
 }
 
 #[test]
+fn extract_typescript_facts_do_not_treat_generic_type_arguments_as_implemented_interfaces() {
+    let facts =
+        extract_typescript_facts("store.ts", "class Store implements Recallable<Memory> {}")
+            .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Recallable".to_string(),
+    }));
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Memory".to_string(),
+    }));
+}
+
+#[test]
 fn extract_typescript_facts_emits_class_extends_triple() {
     let facts = extract_typescript_facts("store.ts", "class Store extends BaseStore {}").unwrap();
 
