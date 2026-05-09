@@ -2802,7 +2802,7 @@ fn collect_structs(node: Node<'_>, source: &[u8], structs: &mut Vec<String>) -> 
     if node.kind() == "struct_item"
         && let Some(name) = node.child_by_field_name("name")
     {
-        structs.push(name.utf8_text(source)?.to_string());
+        structs.push(normalize_rust_identifier(name.utf8_text(source)?));
     }
 
     let mut cursor = node.walk();

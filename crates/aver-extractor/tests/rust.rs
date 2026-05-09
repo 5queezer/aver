@@ -169,6 +169,13 @@ fn extract_rust_calls_finds_called_function_name() {
 }
 
 #[test]
+fn extract_rust_structs_normalizes_raw_identifier_names() {
+    let structs = extract_rust_structs("struct r#type { value: String }").unwrap();
+
+    assert_eq!(structs, vec!["type".to_string()]);
+}
+
+#[test]
 fn extract_rust_structs_finds_struct_name() {
     let structs = extract_rust_structs("struct Claim { text: String }").unwrap();
 
