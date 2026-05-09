@@ -1800,14 +1800,27 @@ fn collect_kotlin_extends_facts(
         };
         if let Some(kind) = kind
             && let Some(name) = first_named_descendant_of_kind(node, "type_identifier")
-            && let Some(delegation) = first_named_descendant_of_kind(node, "delegation_specifier")
-            && let Some(base_name) = first_named_descendant_of_kind(delegation, "type_identifier")
         {
-            facts.push(ExtractedFact {
-                subject: format!("{kind}:{}", name.utf8_text(source)?),
-                predicate: "extends".to_string(),
-                object: format!("{kind}:{}", base_name.utf8_text(source)?),
-            });
+            let subject = format!("{kind}:{}", name.utf8_text(source)?);
+            if kind == "Interface" {
+                let mut base_names = Vec::new();
+                collect_kotlin_delegation_type_names(node, source, &mut base_names)?;
+                facts.extend(base_names.into_iter().map(|base_name| ExtractedFact {
+                    subject: subject.clone(),
+                    predicate: "extends".to_string(),
+                    object: format!("Interface:{base_name}"),
+                }));
+            } else if let Some(delegation) =
+                first_named_descendant_of_kind(node, "delegation_specifier")
+                && let Some(base_name) =
+                    first_named_descendant_of_kind(delegation, "type_identifier")
+            {
+                facts.push(ExtractedFact {
+                    subject,
+                    predicate: "extends".to_string(),
+                    object: format!("Class:{}", base_name.utf8_text(source)?),
+                });
+            }
         }
     }
 

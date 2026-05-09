@@ -1359,6 +1359,26 @@ fn extract_kotlin_facts_emit_class_implements_interface_triple() {
 }
 
 #[test]
+fn extract_kotlin_facts_emit_multiple_interface_extends_triples() {
+    let facts = extract_kotlin_facts(
+        "Recallable.kt",
+        "interface Recallable : BaseRecallable, Auditable",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Interface:Recallable".to_string(),
+        predicate: "extends".to_string(),
+        object: "Interface:BaseRecallable".to_string(),
+    }));
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Interface:Recallable".to_string(),
+        predicate: "extends".to_string(),
+        object: "Interface:Auditable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_kotlin_facts_do_not_treat_generic_type_arguments_as_implemented_interfaces() {
     let facts = extract_kotlin_facts(
         "Store.kt",
