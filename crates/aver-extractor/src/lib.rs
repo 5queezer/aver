@@ -1437,6 +1437,7 @@ fn collect_csharp_extends_facts(
     let type_kind = match node.kind() {
         "class_declaration" => Some("Class"),
         "interface_declaration" => Some("Interface"),
+        "record_declaration" => Some("Record"),
         _ => None,
     };
     if let Some(type_kind) = type_kind

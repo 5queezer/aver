@@ -530,6 +530,17 @@ fn extract_swift_facts_emit_protocol_extends_triple() {
 }
 
 #[test]
+fn extract_csharp_facts_emit_record_extends_triple() {
+    let facts = extract_csharp_facts("User.cs", "record User : BaseUser {}").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Record:User".to_string(),
+        predicate: "extends".to_string(),
+        object: "Record:BaseUser".to_string(),
+    }));
+}
+
+#[test]
 fn extract_csharp_facts_emit_interface_extends_triple() {
     let facts =
         extract_csharp_facts("Memory.cs", "interface Recallable : BaseRecallable {}").unwrap();
