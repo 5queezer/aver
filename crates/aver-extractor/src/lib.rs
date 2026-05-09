@@ -1464,16 +1464,21 @@ fn collect_cpp_extends_facts(
     source: &[u8],
     facts: &mut Vec<ExtractedFact>,
 ) -> Result<(), Error> {
-    if matches!(node.kind(), "class_specifier" | "struct_specifier")
-        && let Some(class_name) = node.child_by_field_name("name")
+    let type_kind = match node.kind() {
+        "class_specifier" => Some("Class"),
+        "struct_specifier" => Some("Struct"),
+        _ => None,
+    };
+    if let Some(type_kind) = type_kind
+        && let Some(type_name) = node.child_by_field_name("name")
         && let Some(base_clause) = first_named_descendant_of_kind(node, "base_class_clause")
         && let Some(base_name) = first_named_descendant_of_kind(base_clause, "type_identifier")
             .or_else(|| first_named_descendant_of_kind(base_clause, "qualified_identifier"))
     {
         facts.push(ExtractedFact {
-            subject: format!("Class:{}", class_name.utf8_text(source)?),
+            subject: format!("{}:{}", type_kind, type_name.utf8_text(source)?),
             predicate: "extends".to_string(),
-            object: format!("Class:{}", base_name.utf8_text(source)?),
+            object: format!("{}:{}", type_kind, base_name.utf8_text(source)?),
         });
     }
 

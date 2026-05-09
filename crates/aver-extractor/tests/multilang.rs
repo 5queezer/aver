@@ -406,6 +406,17 @@ fn extract_csharp_facts_emit_class_extends_triple() {
 }
 
 #[test]
+fn extract_cpp_facts_emit_struct_extends_triple() {
+    let facts = extract_cpp_facts("store.hpp", "struct Store : BaseStore {};").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Struct:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Struct:BaseStore".to_string(),
+    }));
+}
+
+#[test]
 fn extract_cpp_facts_emit_class_extends_triple() {
     let facts = extract_cpp_facts("store.hpp", "class Store : public BaseStore {};").unwrap();
 
