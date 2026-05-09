@@ -218,15 +218,26 @@ pub fn extract_python_functions(source: &str) -> Result<Vec<String>, Error> {
     Ok(functions)
 }
 
+pub fn extract_python_classes(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_python::language())?;
+    let mut classes = Vec::new();
+    collect_named_nodes(
+        tree.root_node(),
+        source.as_bytes(),
+        &["class_definition"],
+        &mut classes,
+    )?;
+    Ok(classes)
+}
+
 pub fn extract_python_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    Ok(extract_python_functions(source)?
-        .into_iter()
-        .map(|function| ExtractedFact {
-            subject: path.to_string(),
-            predicate: "defines".to_string(),
-            object: format!("Function:{function}"),
-        })
-        .collect())
+    let mut facts = definition_facts(path, "Function", extract_python_functions(source)?);
+    facts.extend(definition_facts(
+        path,
+        "Class",
+        extract_python_classes(source)?,
+    ));
+    Ok(facts)
 }
 
 pub fn extract_typescript_functions(source: &str) -> Result<Vec<String>, Error> {
@@ -288,15 +299,43 @@ pub fn extract_go_functions(source: &str) -> Result<Vec<String>, Error> {
     Ok(functions)
 }
 
+pub fn extract_go_structs(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_go::language())?;
+    let mut structs = Vec::new();
+    collect_go_type_names(
+        tree.root_node(),
+        source.as_bytes(),
+        "struct_type",
+        &mut structs,
+    )?;
+    Ok(structs)
+}
+
+pub fn extract_go_interfaces(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_go::language())?;
+    let mut interfaces = Vec::new();
+    collect_go_type_names(
+        tree.root_node(),
+        source.as_bytes(),
+        "interface_type",
+        &mut interfaces,
+    )?;
+    Ok(interfaces)
+}
+
 pub fn extract_go_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    Ok(extract_go_functions(source)?
-        .into_iter()
-        .map(|function| ExtractedFact {
-            subject: path.to_string(),
-            predicate: "defines".to_string(),
-            object: format!("Function:{function}"),
-        })
-        .collect())
+    let mut facts = definition_facts(path, "Function", extract_go_functions(source)?);
+    facts.extend(definition_facts(
+        path,
+        "Struct",
+        extract_go_structs(source)?,
+    ));
+    facts.extend(definition_facts(
+        path,
+        "Interface",
+        extract_go_interfaces(source)?,
+    ));
+    Ok(facts)
 }
 
 pub fn extract_javascript_functions(source: &str) -> Result<Vec<String>, Error> {
@@ -1015,6 +1054,28 @@ fn collect_names_matching_field_text(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_names_matching_field_text(child, source, kinds, field_name, field_text, names)?;
+    }
+    Ok(())
+}
+
+fn collect_go_type_names(
+    node: Node<'_>,
+    source: &[u8],
+    type_kind: &str,
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    if node.kind() == "type_spec"
+        && node
+            .child_by_field_name("type")
+            .is_some_and(|type_node| type_node.kind() == type_kind)
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        names.push(name.utf8_text(source)?.to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_go_type_names(child, source, type_kind, names)?;
     }
     Ok(())
 }

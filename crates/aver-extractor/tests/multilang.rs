@@ -3,15 +3,15 @@ use aver_extractor::{
     extract_cpp_facts, extract_cpp_functions, extract_cpp_structs, extract_csharp_classes,
     extract_csharp_enums, extract_csharp_facts, extract_csharp_functions,
     extract_csharp_interfaces, extract_csharp_structs, extract_facts_for_path, extract_go_facts,
-    extract_go_functions, extract_java_classes, extract_java_enums, extract_java_facts,
-    extract_java_functions, extract_java_interfaces, extract_javascript_classes,
-    extract_javascript_facts, extract_javascript_functions, extract_kotlin_classes,
-    extract_kotlin_facts, extract_kotlin_functions, extract_php_classes, extract_php_enums,
-    extract_php_facts, extract_php_functions, extract_php_interfaces, extract_python_facts,
-    extract_python_functions, extract_ruby_classes, extract_ruby_facts, extract_ruby_functions,
-    extract_swift_classes, extract_swift_enums, extract_swift_facts, extract_swift_functions,
-    extract_swift_protocols, extract_swift_structs, extract_typescript_classes,
-    extract_typescript_facts, extract_typescript_functions,
+    extract_go_functions, extract_go_interfaces, extract_go_structs, extract_java_classes,
+    extract_java_enums, extract_java_facts, extract_java_functions, extract_java_interfaces,
+    extract_javascript_classes, extract_javascript_facts, extract_javascript_functions,
+    extract_kotlin_classes, extract_kotlin_facts, extract_kotlin_functions, extract_php_classes,
+    extract_php_enums, extract_php_facts, extract_php_functions, extract_php_interfaces,
+    extract_python_classes, extract_python_facts, extract_python_functions, extract_ruby_classes,
+    extract_ruby_facts, extract_ruby_functions, extract_swift_classes, extract_swift_enums,
+    extract_swift_facts, extract_swift_functions, extract_swift_protocols, extract_swift_structs,
+    extract_typescript_classes, extract_typescript_facts, extract_typescript_functions,
 };
 
 #[test]
@@ -32,6 +32,40 @@ fn extract_python_facts_emits_file_defines_function_triple() {
             predicate: "defines".to_string(),
             object: "Function:recall".to_string(),
         }]
+    );
+}
+
+#[test]
+fn extract_python_classes_and_go_type_symbols_emit_definition_facts() {
+    let python = "class Store:\n    pass\n";
+    assert_eq!(
+        extract_python_classes(python).unwrap(),
+        vec!["Store".to_string()]
+    );
+    assert!(
+        extract_python_facts("store.py", python)
+            .unwrap()
+            .contains(&ExtractedFact {
+                subject: "store.py".to_string(),
+                predicate: "defines".to_string(),
+                object: "Class:Store".to_string(),
+            })
+    );
+
+    let go = "package memory\ntype Chunk struct {}\ntype Recallable interface {}\n";
+    assert_eq!(extract_go_structs(go).unwrap(), vec!["Chunk".to_string()]);
+    assert_eq!(
+        extract_go_interfaces(go).unwrap(),
+        vec!["Recallable".to_string()]
+    );
+    assert!(
+        extract_go_facts("memory.go", go)
+            .unwrap()
+            .contains(&ExtractedFact {
+                subject: "memory.go".to_string(),
+                predicate: "defines".to_string(),
+                object: "Interface:Recallable".to_string(),
+            })
     );
 }
 
