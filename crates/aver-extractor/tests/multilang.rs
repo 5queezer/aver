@@ -1,13 +1,16 @@
 use aver_extractor::{
-    ExtractedFact, extract_c_facts, extract_c_functions, extract_cpp_classes, extract_cpp_facts,
-    extract_cpp_functions, extract_csharp_classes, extract_csharp_facts, extract_csharp_functions,
-    extract_go_facts, extract_go_functions, extract_java_classes, extract_java_facts,
-    extract_java_functions, extract_java_interfaces, extract_javascript_classes,
-    extract_javascript_facts, extract_javascript_functions, extract_kotlin_classes,
-    extract_kotlin_facts, extract_kotlin_functions, extract_php_classes, extract_php_facts,
-    extract_php_functions, extract_python_facts, extract_python_functions, extract_ruby_classes,
-    extract_ruby_facts, extract_ruby_functions, extract_swift_classes, extract_swift_facts,
-    extract_swift_functions, extract_typescript_classes, extract_typescript_facts,
+    ExtractedFact, extract_c_facts, extract_c_functions, extract_cpp_classes, extract_cpp_enums,
+    extract_cpp_facts, extract_cpp_functions, extract_cpp_structs, extract_csharp_classes,
+    extract_csharp_enums, extract_csharp_facts, extract_csharp_functions,
+    extract_csharp_interfaces, extract_csharp_structs, extract_go_facts, extract_go_functions,
+    extract_java_classes, extract_java_enums, extract_java_facts, extract_java_functions,
+    extract_java_interfaces, extract_javascript_classes, extract_javascript_facts,
+    extract_javascript_functions, extract_kotlin_classes, extract_kotlin_facts,
+    extract_kotlin_functions, extract_php_classes, extract_php_enums, extract_php_facts,
+    extract_php_functions, extract_php_interfaces, extract_python_facts, extract_python_functions,
+    extract_ruby_classes, extract_ruby_facts, extract_ruby_functions, extract_swift_classes,
+    extract_swift_enums, extract_swift_facts, extract_swift_functions, extract_swift_protocols,
+    extract_swift_structs, extract_typescript_classes, extract_typescript_facts,
     extract_typescript_functions,
 };
 
@@ -238,6 +241,105 @@ fn extract_common_language_basic_symbols_emit_definition_facts() {
                 subject: "Store.swift".to_string(),
                 predicate: "defines".to_string(),
                 object: "Class:Store".to_string(),
+            })
+    );
+}
+
+#[test]
+fn extract_common_language_type_symbols_emit_definition_facts() {
+    let java = "enum MemoryKind { EPISODIC }";
+    assert_eq!(
+        extract_java_enums(java).unwrap(),
+        vec!["MemoryKind".to_string()]
+    );
+    assert!(
+        extract_java_facts("MemoryKind.java", java)
+            .unwrap()
+            .contains(&ExtractedFact {
+                subject: "MemoryKind.java".to_string(),
+                predicate: "defines".to_string(),
+                object: "Enum:MemoryKind".to_string(),
+            })
+    );
+
+    let cpp = "struct Chunk {}; enum MemoryKind { Episodic };";
+    assert_eq!(extract_cpp_structs(cpp).unwrap(), vec!["Chunk".to_string()]);
+    assert_eq!(
+        extract_cpp_enums(cpp).unwrap(),
+        vec!["MemoryKind".to_string()]
+    );
+    assert!(
+        extract_cpp_facts("memory.cpp", cpp)
+            .unwrap()
+            .contains(&ExtractedFact {
+                subject: "memory.cpp".to_string(),
+                predicate: "defines".to_string(),
+                object: "Enum:MemoryKind".to_string(),
+            })
+    );
+
+    let csharp = "interface Recallable {} struct Chunk {} enum MemoryKind { Episodic }";
+    assert_eq!(
+        extract_csharp_interfaces(csharp).unwrap(),
+        vec!["Recallable".to_string()]
+    );
+    assert_eq!(
+        extract_csharp_structs(csharp).unwrap(),
+        vec!["Chunk".to_string()]
+    );
+    assert_eq!(
+        extract_csharp_enums(csharp).unwrap(),
+        vec!["MemoryKind".to_string()]
+    );
+    assert!(
+        extract_csharp_facts("Memory.cs", csharp)
+            .unwrap()
+            .contains(&ExtractedFact {
+                subject: "Memory.cs".to_string(),
+                predicate: "defines".to_string(),
+                object: "Interface:Recallable".to_string(),
+            })
+    );
+
+    let php = "<?php interface Recallable {} enum MemoryKind { case Episodic; }";
+    assert_eq!(
+        extract_php_interfaces(php).unwrap(),
+        vec!["Recallable".to_string()]
+    );
+    assert_eq!(
+        extract_php_enums(php).unwrap(),
+        vec!["MemoryKind".to_string()]
+    );
+    assert!(
+        extract_php_facts("memory.php", php)
+            .unwrap()
+            .contains(&ExtractedFact {
+                subject: "memory.php".to_string(),
+                predicate: "defines".to_string(),
+                object: "Enum:MemoryKind".to_string(),
+            })
+    );
+
+    let swift = "protocol Recallable {} struct Chunk {} enum MemoryKind { case episodic }";
+    assert_eq!(
+        extract_swift_protocols(swift).unwrap(),
+        vec!["Recallable".to_string()]
+    );
+    assert_eq!(
+        extract_swift_structs(swift).unwrap(),
+        vec!["Chunk".to_string()]
+    );
+    assert_eq!(
+        extract_swift_enums(swift).unwrap(),
+        vec!["MemoryKind".to_string()]
+    );
+    assert!(
+        extract_swift_facts("Memory.swift", swift)
+            .unwrap()
+            .contains(&ExtractedFact {
+                subject: "Memory.swift".to_string(),
+                predicate: "defines".to_string(),
+                object: "Protocol:Recallable".to_string(),
             })
     );
 }

@@ -340,6 +340,11 @@ pub fn extract_java_interfaces(source: &str) -> Result<Vec<String>, Error> {
     )
 }
 
+pub fn extract_java_enums(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_java::language())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["enum_declaration"])
+}
+
 pub fn extract_java_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
     let mut facts = definition_facts(path, "Function", extract_java_functions(source)?);
     facts.extend(definition_facts(
@@ -352,6 +357,7 @@ pub fn extract_java_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
         "Interface",
         extract_java_interfaces(source)?,
     ));
+    facts.extend(definition_facts(path, "Enum", extract_java_enums(source)?));
     Ok(facts)
 }
 
@@ -379,11 +385,17 @@ pub fn extract_cpp_functions(source: &str) -> Result<Vec<String>, Error> {
 
 pub fn extract_cpp_classes(source: &str) -> Result<Vec<String>, Error> {
     let tree = parse_with_language(source, tree_sitter_cpp::language())?;
-    collect_names_from_kinds(
-        tree.root_node(),
-        source.as_bytes(),
-        &["class_specifier", "struct_specifier"],
-    )
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["class_specifier"])
+}
+
+pub fn extract_cpp_structs(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_cpp::language())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["struct_specifier"])
+}
+
+pub fn extract_cpp_enums(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_cpp::language())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["enum_specifier"])
 }
 
 pub fn extract_cpp_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
@@ -393,6 +405,12 @@ pub fn extract_cpp_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>,
         "Class",
         extract_cpp_classes(source)?,
     ));
+    facts.extend(definition_facts(
+        path,
+        "Struct",
+        extract_cpp_structs(source)?,
+    ));
+    facts.extend(definition_facts(path, "Enum", extract_cpp_enums(source)?));
     Ok(facts)
 }
 
@@ -410,12 +428,46 @@ pub fn extract_csharp_classes(source: &str) -> Result<Vec<String>, Error> {
     collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["class_declaration"])
 }
 
+pub fn extract_csharp_interfaces(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_c_sharp::language())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["interface_declaration"],
+    )
+}
+
+pub fn extract_csharp_structs(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_c_sharp::language())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["struct_declaration"])
+}
+
+pub fn extract_csharp_enums(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_c_sharp::language())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["enum_declaration"])
+}
+
 pub fn extract_csharp_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
     let mut facts = definition_facts(path, "Function", extract_csharp_functions(source)?);
     facts.extend(definition_facts(
         path,
         "Class",
         extract_csharp_classes(source)?,
+    ));
+    facts.extend(definition_facts(
+        path,
+        "Interface",
+        extract_csharp_interfaces(source)?,
+    ));
+    facts.extend(definition_facts(
+        path,
+        "Struct",
+        extract_csharp_structs(source)?,
+    ));
+    facts.extend(definition_facts(
+        path,
+        "Enum",
+        extract_csharp_enums(source)?,
     ));
     Ok(facts)
 }
@@ -458,6 +510,20 @@ pub fn extract_php_classes(source: &str) -> Result<Vec<String>, Error> {
     collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["class_declaration"])
 }
 
+pub fn extract_php_interfaces(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_php::language_php())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["interface_declaration"],
+    )
+}
+
+pub fn extract_php_enums(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_php::language_php())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["enum_declaration"])
+}
+
 pub fn extract_php_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
     let mut facts = definition_facts(path, "Function", extract_php_functions(source)?);
     facts.extend(definition_facts(
@@ -465,6 +531,12 @@ pub fn extract_php_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>,
         "Class",
         extract_php_classes(source)?,
     ));
+    facts.extend(definition_facts(
+        path,
+        "Interface",
+        extract_php_interfaces(source)?,
+    ));
+    facts.extend(definition_facts(path, "Enum", extract_php_enums(source)?));
     Ok(facts)
 }
 
@@ -509,7 +581,44 @@ pub fn extract_swift_functions(source: &str) -> Result<Vec<String>, Error> {
 
 pub fn extract_swift_classes(source: &str) -> Result<Vec<String>, Error> {
     let tree = parse_with_language(source, tree_sitter_swift::language())?;
-    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["class_declaration"])
+    collect_names_from_kinds_with_field_text(
+        tree.root_node(),
+        source.as_bytes(),
+        &["class_declaration"],
+        "declaration_kind",
+        "class",
+    )
+}
+
+pub fn extract_swift_structs(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_swift::language())?;
+    collect_names_from_kinds_with_field_text(
+        tree.root_node(),
+        source.as_bytes(),
+        &["class_declaration"],
+        "declaration_kind",
+        "struct",
+    )
+}
+
+pub fn extract_swift_enums(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_swift::language())?;
+    collect_names_from_kinds_with_field_text(
+        tree.root_node(),
+        source.as_bytes(),
+        &["class_declaration"],
+        "declaration_kind",
+        "enum",
+    )
+}
+
+pub fn extract_swift_protocols(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_swift::language())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["protocol_declaration"],
+    )
 }
 
 pub fn extract_swift_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
@@ -518,6 +627,17 @@ pub fn extract_swift_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact
         path,
         "Class",
         extract_swift_classes(source)?,
+    ));
+    facts.extend(definition_facts(
+        path,
+        "Struct",
+        extract_swift_structs(source)?,
+    ));
+    facts.extend(definition_facts(path, "Enum", extract_swift_enums(source)?));
+    facts.extend(definition_facts(
+        path,
+        "Protocol",
+        extract_swift_protocols(source)?,
     ));
     Ok(facts)
 }
@@ -830,6 +950,42 @@ fn collect_first_descendant_names(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_first_descendant_names(child, source, kinds, descendant_kind, names)?;
+    }
+    Ok(())
+}
+
+fn collect_names_from_kinds_with_field_text(
+    node: Node<'_>,
+    source: &[u8],
+    kinds: &[&str],
+    field_name: &str,
+    field_text: &str,
+) -> Result<Vec<String>, Error> {
+    let mut names = Vec::new();
+    collect_names_matching_field_text(node, source, kinds, field_name, field_text, &mut names)?;
+    Ok(names)
+}
+
+fn collect_names_matching_field_text(
+    node: Node<'_>,
+    source: &[u8],
+    kinds: &[&str],
+    field_name: &str,
+    field_text: &str,
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    if kinds.contains(&node.kind())
+        && node
+            .child_by_field_name(field_name)
+            .is_some_and(|field| field.utf8_text(source).is_ok_and(|text| text == field_text))
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        names.push(name.utf8_text(source)?.to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_names_matching_field_text(child, source, kinds, field_name, field_text, names)?;
     }
     Ok(())
 }
