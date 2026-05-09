@@ -297,6 +297,231 @@ pub fn extract_go_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, 
         .collect())
 }
 
+pub fn extract_javascript_functions(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_javascript::language())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["function_declaration", "method_definition"],
+    )
+}
+
+pub fn extract_javascript_classes(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_javascript::language())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["class_declaration"])
+}
+
+pub fn extract_javascript_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut facts = definition_facts(path, "Function", extract_javascript_functions(source)?);
+    facts.extend(definition_facts(
+        path,
+        "Class",
+        extract_javascript_classes(source)?,
+    ));
+    Ok(facts)
+}
+
+pub fn extract_java_functions(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_java::language())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["method_declaration"])
+}
+
+pub fn extract_java_classes(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_java::language())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["class_declaration"])
+}
+
+pub fn extract_java_interfaces(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_java::language())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["interface_declaration"],
+    )
+}
+
+pub fn extract_java_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut facts = definition_facts(path, "Function", extract_java_functions(source)?);
+    facts.extend(definition_facts(
+        path,
+        "Class",
+        extract_java_classes(source)?,
+    ));
+    facts.extend(definition_facts(
+        path,
+        "Interface",
+        extract_java_interfaces(source)?,
+    ));
+    Ok(facts)
+}
+
+pub fn extract_c_functions(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_c::language())?;
+    let mut functions = Vec::new();
+    collect_c_style_function_names(tree.root_node(), source.as_bytes(), &mut functions)?;
+    Ok(functions)
+}
+
+pub fn extract_c_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    Ok(definition_facts(
+        path,
+        "Function",
+        extract_c_functions(source)?,
+    ))
+}
+
+pub fn extract_cpp_functions(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_cpp::language())?;
+    let mut functions = Vec::new();
+    collect_c_style_function_names(tree.root_node(), source.as_bytes(), &mut functions)?;
+    Ok(functions)
+}
+
+pub fn extract_cpp_classes(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_cpp::language())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["class_specifier", "struct_specifier"],
+    )
+}
+
+pub fn extract_cpp_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut facts = definition_facts(path, "Function", extract_cpp_functions(source)?);
+    facts.extend(definition_facts(
+        path,
+        "Class",
+        extract_cpp_classes(source)?,
+    ));
+    Ok(facts)
+}
+
+pub fn extract_csharp_functions(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_c_sharp::language())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["method_declaration", "local_function_statement"],
+    )
+}
+
+pub fn extract_csharp_classes(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_c_sharp::language())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["class_declaration"])
+}
+
+pub fn extract_csharp_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut facts = definition_facts(path, "Function", extract_csharp_functions(source)?);
+    facts.extend(definition_facts(
+        path,
+        "Class",
+        extract_csharp_classes(source)?,
+    ));
+    Ok(facts)
+}
+
+pub fn extract_ruby_functions(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_ruby::language())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["method", "singleton_method"],
+    )
+}
+
+pub fn extract_ruby_classes(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_ruby::language())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["class"])
+}
+
+pub fn extract_ruby_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut facts = definition_facts(path, "Function", extract_ruby_functions(source)?);
+    facts.extend(definition_facts(
+        path,
+        "Class",
+        extract_ruby_classes(source)?,
+    ));
+    Ok(facts)
+}
+
+pub fn extract_php_functions(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_php::language_php())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["function_definition", "method_declaration"],
+    )
+}
+
+pub fn extract_php_classes(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_php::language_php())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["class_declaration"])
+}
+
+pub fn extract_php_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut facts = definition_facts(path, "Function", extract_php_functions(source)?);
+    facts.extend(definition_facts(
+        path,
+        "Class",
+        extract_php_classes(source)?,
+    ));
+    Ok(facts)
+}
+
+pub fn extract_kotlin_functions(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_kotlin::language())?;
+    collect_descendant_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["function_declaration"],
+        "simple_identifier",
+    )
+}
+
+pub fn extract_kotlin_classes(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_kotlin::language())?;
+    collect_descendant_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["class_declaration"],
+        "type_identifier",
+    )
+}
+
+pub fn extract_kotlin_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut facts = definition_facts(path, "Function", extract_kotlin_functions(source)?);
+    facts.extend(definition_facts(
+        path,
+        "Class",
+        extract_kotlin_classes(source)?,
+    ));
+    Ok(facts)
+}
+
+pub fn extract_swift_functions(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_swift::language())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["function_declaration"],
+    )
+}
+
+pub fn extract_swift_classes(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_swift::language())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["class_declaration"])
+}
+
+pub fn extract_swift_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let mut facts = definition_facts(path, "Function", extract_swift_functions(source)?);
+    facts.extend(definition_facts(
+        path,
+        "Class",
+        extract_swift_classes(source)?,
+    ));
+    Ok(facts)
+}
+
 pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
     let mut facts = extract_rust_functions(source)?
         .into_iter()
@@ -555,6 +780,91 @@ fn collect_named_nodes(
         collect_named_nodes(child, source, kinds, names)?;
     }
     Ok(())
+}
+
+fn collect_names_from_kinds(
+    node: Node<'_>,
+    source: &[u8],
+    kinds: &[&str],
+) -> Result<Vec<String>, Error> {
+    let mut names = Vec::new();
+    collect_named_nodes(node, source, kinds, &mut names)?;
+    Ok(names)
+}
+
+fn definition_facts(path: &str, kind: &str, names: Vec<String>) -> Vec<ExtractedFact> {
+    names
+        .into_iter()
+        .map(|name| ExtractedFact {
+            subject: path.to_string(),
+            predicate: "defines".to_string(),
+            object: format!("{kind}:{name}"),
+        })
+        .collect()
+}
+
+fn collect_descendant_names_from_kinds(
+    node: Node<'_>,
+    source: &[u8],
+    kinds: &[&str],
+    descendant_kind: &str,
+) -> Result<Vec<String>, Error> {
+    let mut names = Vec::new();
+    collect_first_descendant_names(node, source, kinds, descendant_kind, &mut names)?;
+    Ok(names)
+}
+
+fn collect_first_descendant_names(
+    node: Node<'_>,
+    source: &[u8],
+    kinds: &[&str],
+    descendant_kind: &str,
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    if kinds.contains(&node.kind())
+        && let Some(name) = first_named_descendant_of_kind(node, descendant_kind)
+    {
+        names.push(name.utf8_text(source)?.to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_first_descendant_names(child, source, kinds, descendant_kind, names)?;
+    }
+    Ok(())
+}
+
+fn collect_c_style_function_names(
+    node: Node<'_>,
+    source: &[u8],
+    functions: &mut Vec<String>,
+) -> Result<(), Error> {
+    if node.kind() == "function_definition"
+        && let Some(declarator) = node.child_by_field_name("declarator")
+        && let Some(name) = first_named_descendant_of_kind(declarator, "identifier")
+    {
+        functions.push(name.utf8_text(source)?.to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_c_style_function_names(child, source, functions)?;
+    }
+    Ok(())
+}
+
+fn first_named_descendant_of_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
+    if node.kind() == kind {
+        return Some(node);
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(found) = first_named_descendant_of_kind(child, kind) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn extract_typescript_extends_facts(source: &str) -> Vec<ExtractedFact> {

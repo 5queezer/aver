@@ -159,6 +159,21 @@ fn beam_context_ordering_treats_now_as_current_question() {
 }
 
 #[test]
+fn beam_answer_prompt_explains_recent_first_order_for_current_questions() {
+    let prompt = aver_eval::beam::answer_prompt(
+        "What is the current API quota?",
+        "ground-truth-only-answer",
+        &[
+            "[2024-05-01] quota is 200".to_string(),
+            "[2024-01-01] quota is 100".to_string(),
+        ],
+    );
+
+    assert!(prompt.contains("newest to oldest"));
+    assert!(!prompt.contains("ground-truth-only-answer"));
+}
+
+#[test]
 fn beam_answer_prompt_contains_question_and_context_without_reference_answer_leakage() {
     let prompt = aver_eval::beam::answer_prompt(
         "What language?",
