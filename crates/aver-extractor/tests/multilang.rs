@@ -647,6 +647,21 @@ fn extract_swift_facts_emit_class_implements_protocol_triple() {
 }
 
 #[test]
+fn extract_swift_facts_emit_enum_implements_protocol_triple() {
+    let facts = extract_swift_facts(
+        "MemoryKind.swift",
+        "protocol Recallable {}\nenum MemoryKind: Recallable { case episodic }",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Enum:MemoryKind".to_string(),
+        predicate: "implements".to_string(),
+        object: "Protocol:Recallable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_swift_facts_emit_struct_implements_protocol_triple() {
     let facts = extract_swift_facts(
         "Store.swift",

@@ -1475,6 +1475,7 @@ fn collect_swift_implements_facts(
             .and_then(|kind| match kind.utf8_text(source).ok()? {
                 "class" | "actor" => Some("Class"),
                 "struct" => Some("Struct"),
+                "enum" => Some("Enum"),
                 _ => None,
             })
         && let Some(type_name) = node.child_by_field_name("name")
