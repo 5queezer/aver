@@ -45,6 +45,16 @@ fn extract_rust_imports_normalizes_leading_absolute_path_colons() {
 }
 
 #[test]
+fn extract_rust_imports_normalizes_grouped_absolute_path_prefixes() {
+    let imports = extract_rust_imports("use ::std::{fs, path};\nfn main() {}").unwrap();
+
+    assert_eq!(
+        imports,
+        vec!["std::fs".to_string(), "std::path".to_string()]
+    );
+}
+
+#[test]
 fn extract_rust_imports_normalizes_glob_import() {
     let imports = extract_rust_imports("use std::collections::*;\nfn main() {}").unwrap();
 

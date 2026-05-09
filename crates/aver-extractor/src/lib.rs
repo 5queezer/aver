@@ -2693,6 +2693,7 @@ fn expand_rust_use_declaration(declaration: &str) -> Vec<String> {
         && let Some(suffix_end) = rest.rfind('}')
     {
         let suffix = &rest[..suffix_end];
+        let prefix = prefix.strip_prefix("::").unwrap_or(prefix);
         return expand_rust_use_items(prefix, suffix);
     }
 
@@ -2719,6 +2720,7 @@ fn expand_rust_use_items(prefix: &str, items: &str) -> Vec<String> {
             && let Some(suffix_end) = rest.rfind('}')
         {
             let nested_items = &rest[..suffix_end];
+            let nested_prefix = nested_prefix.strip_prefix("::").unwrap_or(nested_prefix);
             let child_prefix = format!("{}::{}", prefix, nested_prefix);
             expanded.extend(expand_rust_use_items(&child_prefix, nested_items));
             continue;
