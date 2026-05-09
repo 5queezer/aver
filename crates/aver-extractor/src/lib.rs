@@ -238,6 +238,7 @@ pub fn extract_typescript_functions(source: &str) -> Result<Vec<String>, Error> 
         &["function_declaration", "method_definition"],
         &mut functions,
     )?;
+    collect_function_variable_names(tree.root_node(), source.as_bytes(), &mut functions)?;
     Ok(functions)
 }
 
@@ -300,11 +301,13 @@ pub fn extract_go_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, 
 
 pub fn extract_javascript_functions(source: &str) -> Result<Vec<String>, Error> {
     let tree = parse_with_language(source, tree_sitter_javascript::language())?;
-    collect_names_from_kinds(
+    let mut functions = collect_names_from_kinds(
         tree.root_node(),
         source.as_bytes(),
         &["function_declaration", "method_definition"],
-    )
+    )?;
+    collect_function_variable_names(tree.root_node(), source.as_bytes(), &mut functions)?;
+    Ok(functions)
 }
 
 pub fn extract_javascript_classes(source: &str) -> Result<Vec<String>, Error> {
@@ -1012,6 +1015,30 @@ fn collect_names_matching_field_text(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_names_matching_field_text(child, source, kinds, field_name, field_text, names)?;
+    }
+    Ok(())
+}
+
+fn collect_function_variable_names(
+    node: Node<'_>,
+    source: &[u8],
+    functions: &mut Vec<String>,
+) -> Result<(), Error> {
+    if node.kind() == "variable_declarator"
+        && let Some(value) = node.child_by_field_name("value")
+        && matches!(
+            value.kind(),
+            "arrow_function" | "function" | "function_expression"
+        )
+        && let Some(name) = node.child_by_field_name("name")
+        && name.kind() == "identifier"
+    {
+        functions.push(name.utf8_text(source)?.to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_function_variable_names(child, source, functions)?;
     }
     Ok(())
 }

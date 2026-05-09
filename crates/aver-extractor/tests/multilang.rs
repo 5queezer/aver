@@ -50,6 +50,18 @@ fn extract_typescript_functions_and_classes_find_symbol_names() {
 }
 
 #[test]
+fn extract_javascript_and_typescript_arrow_function_variables() {
+    assert_eq!(
+        extract_javascript_functions("const remember = () => true;").unwrap(),
+        vec!["remember".to_string()]
+    );
+    assert_eq!(
+        extract_typescript_functions("const recall = (): boolean => true;").unwrap(),
+        vec!["recall".to_string()]
+    );
+}
+
+#[test]
 fn extract_typescript_facts_emits_class_extends_triple() {
     let facts = extract_typescript_facts("store.ts", "class Store extends BaseStore {}").unwrap();
 
