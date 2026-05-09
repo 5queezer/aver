@@ -232,7 +232,12 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
         {
             questions += 1;
             let claims = store.recall_hybrid_claims(&question.question, &embedder, config.top_k)?;
-            let contexts: Vec<String> = claims.iter().map(|claim| claim.object.clone()).collect();
+            let contexts = order_contexts_by_beam_message_index(
+                claims
+                    .iter()
+                    .map(|claim| (claim.subject.clone(), claim.object.clone()))
+                    .collect(),
+            );
             let answer = judge.generate(
                 &answer_prompt(&question.question, &question.reference_answer, &contexts),
                 false,
@@ -629,6 +634,21 @@ fn push_sanitized_token(output: &mut String, token: &str) {
     } else {
         output.push_str(token);
     }
+}
+
+pub fn order_contexts_by_beam_message_index(mut contexts: Vec<(String, String)>) -> Vec<String> {
+    contexts.sort_by(|(left_subject, _), (right_subject, _)| {
+        beam_message_index(left_subject)
+            .cmp(&beam_message_index(right_subject))
+            .then_with(|| left_subject.cmp(right_subject))
+    });
+    contexts.into_iter().map(|(_, context)| context).collect()
+}
+
+fn beam_message_index(subject: &str) -> Option<usize> {
+    subject
+        .rsplit_once(":message:")
+        .and_then(|(_, index)| index.parse().ok())
 }
 
 fn rubric_items(value: &serde_json::Value) -> Vec<String> {

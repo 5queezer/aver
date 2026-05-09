@@ -94,6 +94,29 @@ fn beam_provider_parses_openai() {
 }
 
 #[test]
+fn beam_context_ordering_sorts_message_subjects_chronologically() {
+    let contexts = aver_eval::beam::order_contexts_by_beam_message_index(vec![
+        (
+            "conversation:1:message:12".to_string(),
+            "third memory".to_string(),
+        ),
+        (
+            "conversation:1:message:2".to_string(),
+            "first memory".to_string(),
+        ),
+        (
+            "conversation:1:message:7".to_string(),
+            "second memory".to_string(),
+        ),
+    ]);
+
+    assert_eq!(
+        contexts,
+        vec!["first memory", "second memory", "third memory"]
+    );
+}
+
+#[test]
 fn beam_answer_prompt_contains_question_and_context_without_reference_answer_leakage() {
     let prompt = aver_eval::beam::answer_prompt(
         "What language?",
