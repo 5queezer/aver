@@ -20,6 +20,8 @@ struct Args {
     #[arg(long, default_value_t = 12)]
     top_k: usize,
     #[arg(long)]
+    retrieval_alpha: Option<f64>,
+    #[arg(long)]
     limit_conversations: Option<usize>,
     #[arg(long)]
     limit_questions: Option<usize>,
@@ -39,6 +41,7 @@ fn main() -> anyhow::Result<()> {
         embedding_model: args.embedding_model,
         generation_model: args.generation_model,
         top_k: args.top_k,
+        retrieval_alpha: args.retrieval_alpha,
         limit_conversations: args.limit_conversations,
         limit_questions: args.limit_questions,
         data_dir: args.data_dir,

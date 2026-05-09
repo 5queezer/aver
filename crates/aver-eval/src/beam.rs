@@ -76,6 +76,7 @@ pub struct BeamRunConfig {
     pub embedding_model: String,
     pub generation_model: String,
     pub top_k: usize,
+    pub retrieval_alpha: Option<f64>,
     pub limit_conversations: Option<usize>,
     pub limit_questions: Option<usize>,
     pub data_dir: Option<PathBuf>,
@@ -196,6 +197,17 @@ pub fn parse_judge_score(response: &str) -> f64 {
     }
 }
 
+pub fn retrieval_weights_for_beam_query(
+    query: &str,
+    alpha: Option<f64>,
+) -> Result<aver_core::retrieval::HybridWeights> {
+    if let Some(alpha) = alpha {
+        aver_core::retrieval::HybridWeights::try_new(alpha).map_err(Into::into)
+    } else {
+        Ok(aver_core::retrieval::HybridWeights::for_query(query))
+    }
+}
+
 pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
     let dataset = load_dataset(&config.dataset_path)?;
     let root = config
@@ -237,7 +249,12 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
             .take(config.limit_questions.unwrap_or(usize::MAX))
         {
             questions += 1;
-            let claims = store.recall_hybrid_claims(&question.question, &embedder, config.top_k)?;
+            let claims = store.recall_hybrid_claims_with_alpha(
+                &question.question,
+                &embedder,
+                config.top_k,
+                retrieval_weights_for_beam_query(&question.question, config.retrieval_alpha)?,
+            )?;
             let contexts = order_contexts_for_question(
                 &question.question,
                 claims

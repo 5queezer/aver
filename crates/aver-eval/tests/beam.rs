@@ -86,6 +86,14 @@ fn openai_chat_request_uses_json_object_format_for_judge_mode() {
 }
 
 #[test]
+fn beam_retrieval_weights_accept_explicit_alpha_for_tuning() {
+    let weights =
+        aver_eval::beam::retrieval_weights_for_beam_query("summarize project", Some(0.25)).unwrap();
+
+    assert_eq!(weights.alpha, 0.25);
+}
+
+#[test]
 fn beam_provider_parses_openai() {
     assert_eq!(
         "openai".parse::<aver_eval::beam::BeamProvider>().unwrap(),

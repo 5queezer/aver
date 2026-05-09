@@ -2,6 +2,7 @@
 
 pub mod beam;
 pub mod prompt_assertions;
+pub mod tuning;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};

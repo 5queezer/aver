@@ -211,7 +211,23 @@ cargo run -p aver-eval --bin aver-beam100k -- \
   --top-k 12
 ```
 
-The BEAM runner expects Ollama to provide both the embedding model and generation/judge model.
+The BEAM runner expects Ollama to provide both the embedding model and generation/judge model. Retrieval tuning can override HybridRAG alpha in addition to `top_k`:
+
+```bash
+cargo run -p aver-eval --bin aver-beam100k -- \
+  --dataset path/to/beam-100k.json \
+  --top-k 16 \
+  --retrieval-alpha 0.65
+```
+
+For Bayesian-style retrieval search over prior live runs, write JSONL observations with `top_k`, `alpha`, and `metric`, then ask Aver for the next autoresearch configuration:
+
+```bash
+cargo run -p aver-eval --bin aver-tune-retrieval -- \
+  --observations retrieval-observations.jsonl
+```
+
+The tuner prints `BEAM_TOP_K`, `BEAM_RETRIEVAL_ALPHA`, and `AVER_AUTORESEARCH_TARGET=beam` values that can be used for the next autoresearch run. Keep a held-out validation split; do not tune directly against final benchmark labels.
 
 ## Prose/document plugin boundary
 

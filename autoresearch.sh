@@ -20,6 +20,9 @@ if [ "${AVER_AUTORESEARCH_TARGET:-}" = "beam" ]; then
     --generation-model "${BEAM_GENERATION_MODEL:-gpt-4o-mini}"
     --top-k "${BEAM_TOP_K:-16}"
   )
+  if [ -n "${BEAM_RETRIEVAL_ALPHA:-}" ]; then
+    BEAM_ARGS+=(--retrieval-alpha "$BEAM_RETRIEVAL_ALPHA")
+  fi
   if [ -n "${BEAM_LIMIT_CONVERSATIONS:-}" ]; then
     BEAM_ARGS+=(--limit-conversations "$BEAM_LIMIT_CONVERSATIONS")
   fi
