@@ -2727,8 +2727,14 @@ fn expand_rust_use_items(prefix: &str, items: &str) -> Vec<String> {
             .split_once(" as ")
             .map_or(item, |(item, _)| item)
             .trim();
+        let item = item.strip_suffix("::*").unwrap_or(item);
 
         if item == "self" {
+            expanded.push(prefix.to_string());
+            continue;
+        }
+
+        if item == "*" {
             expanded.push(prefix.to_string());
             continue;
         }

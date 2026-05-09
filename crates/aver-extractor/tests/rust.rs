@@ -72,6 +72,20 @@ fn extract_rust_imports_expands_nested_brace_grouped_imports() {
 }
 
 #[test]
+fn extract_rust_imports_normalizes_nested_glob_import() {
+    let imports =
+        extract_rust_imports("use crate::events::{Context, Sub::*};\nfn main() {}").unwrap();
+
+    assert_eq!(
+        imports,
+        vec![
+            "crate::events::Context".to_string(),
+            "crate::events::Sub".to_string()
+        ]
+    );
+}
+
+#[test]
 fn extract_rust_imports_normalizes_aliasing_and_visibility_prefix() {
     let imports = extract_rust_imports(
         "pub use std::fs::path as fs_path;\nuse std::collections as collections;",
