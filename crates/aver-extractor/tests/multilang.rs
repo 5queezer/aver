@@ -1356,6 +1356,21 @@ fn extract_php_facts_do_not_split_qualified_interface_references_into_top_level_
 }
 
 #[test]
+fn extract_php_facts_do_not_split_qualified_interface_extends_into_top_level_interfaces() {
+    let facts = extract_php_facts(
+        "Recallable.php",
+        "<?php interface Memory {} interface Recallable extends Memory\\BaseRecallable {}",
+    )
+    .unwrap();
+
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Interface:Recallable".to_string(),
+        predicate: "extends".to_string(),
+        object: "Interface:Memory".to_string(),
+    }));
+}
+
+#[test]
 fn extract_php_facts_do_not_split_qualified_trait_references_into_top_level_traits() {
     let facts = extract_php_facts(
         "Store.php",
