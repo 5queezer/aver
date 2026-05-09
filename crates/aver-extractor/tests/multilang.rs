@@ -673,6 +673,21 @@ fn extract_csharp_facts_emit_record_extends_triple() {
 }
 
 #[test]
+fn extract_csharp_facts_emit_struct_implements_interface_triple() {
+    let facts = extract_csharp_facts(
+        "Store.cs",
+        "interface IRecallable {} struct Store : IRecallable {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Struct:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:IRecallable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_csharp_facts_emit_record_implements_interface_triple() {
     let facts = extract_csharp_facts(
         "User.cs",

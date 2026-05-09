@@ -1543,6 +1543,7 @@ fn collect_csharp_implements_facts(
     let type_kind = match node.kind() {
         "class_declaration" => Some("Class"),
         "record_declaration" => Some("Record"),
+        "struct_declaration" => Some("Struct"),
         _ => None,
     };
     if let Some(type_kind) = type_kind
