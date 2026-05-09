@@ -1470,20 +1470,21 @@ fn collect_swift_implements_facts(
     facts: &mut Vec<ExtractedFact>,
 ) -> Result<(), Error> {
     if node.kind() == "class_declaration"
-        && node
+        && let Some(type_kind) = node
             .child_by_field_name("declaration_kind")
-            .is_some_and(|kind| {
-                kind.utf8_text(source)
-                    .is_ok_and(|text| matches!(text, "class" | "actor"))
+            .and_then(|kind| match kind.utf8_text(source).ok()? {
+                "class" | "actor" => Some("Class"),
+                "struct" => Some("Struct"),
+                _ => None,
             })
-        && let Some(class_name) = node.child_by_field_name("name")
+        && let Some(type_name) = node.child_by_field_name("name")
         && let Some(inheritance) = first_named_descendant_of_kind(node, "inheritance_specifier")
         && let Some(protocol_name) = inheritance.child_by_field_name("inherits_from")
     {
         let protocol_name = protocol_name.utf8_text(source)?;
         if protocols.contains(protocol_name) {
             facts.push(ExtractedFact {
-                subject: format!("Class:{}", class_name.utf8_text(source)?),
+                subject: format!("{}:{}", type_kind, type_name.utf8_text(source)?),
                 predicate: "implements".to_string(),
                 object: format!("Protocol:{protocol_name}"),
             });

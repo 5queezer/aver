@@ -647,6 +647,21 @@ fn extract_swift_facts_emit_class_implements_protocol_triple() {
 }
 
 #[test]
+fn extract_swift_facts_emit_struct_implements_protocol_triple() {
+    let facts = extract_swift_facts(
+        "Store.swift",
+        "protocol Recallable {}\nstruct Store: Recallable {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Struct:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Protocol:Recallable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_swift_facts_emit_protocol_extends_triple() {
     let facts =
         extract_swift_facts("Memory.swift", "protocol Recallable: BaseRecallable {}").unwrap();
