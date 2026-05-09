@@ -2,16 +2,16 @@ use aver_extractor::{
     ExtractedFact, extract_c_facts, extract_c_functions, extract_cpp_classes, extract_cpp_enums,
     extract_cpp_facts, extract_cpp_functions, extract_cpp_structs, extract_csharp_classes,
     extract_csharp_enums, extract_csharp_facts, extract_csharp_functions,
-    extract_csharp_interfaces, extract_csharp_structs, extract_go_facts, extract_go_functions,
-    extract_java_classes, extract_java_enums, extract_java_facts, extract_java_functions,
-    extract_java_interfaces, extract_javascript_classes, extract_javascript_facts,
-    extract_javascript_functions, extract_kotlin_classes, extract_kotlin_facts,
-    extract_kotlin_functions, extract_php_classes, extract_php_enums, extract_php_facts,
-    extract_php_functions, extract_php_interfaces, extract_python_facts, extract_python_functions,
-    extract_ruby_classes, extract_ruby_facts, extract_ruby_functions, extract_swift_classes,
-    extract_swift_enums, extract_swift_facts, extract_swift_functions, extract_swift_protocols,
-    extract_swift_structs, extract_typescript_classes, extract_typescript_facts,
-    extract_typescript_functions,
+    extract_csharp_interfaces, extract_csharp_structs, extract_facts_for_path, extract_go_facts,
+    extract_go_functions, extract_java_classes, extract_java_enums, extract_java_facts,
+    extract_java_functions, extract_java_interfaces, extract_javascript_classes,
+    extract_javascript_facts, extract_javascript_functions, extract_kotlin_classes,
+    extract_kotlin_facts, extract_kotlin_functions, extract_php_classes, extract_php_enums,
+    extract_php_facts, extract_php_functions, extract_php_interfaces, extract_python_facts,
+    extract_python_functions, extract_ruby_classes, extract_ruby_facts, extract_ruby_functions,
+    extract_swift_classes, extract_swift_enums, extract_swift_facts, extract_swift_functions,
+    extract_swift_protocols, extract_swift_structs, extract_typescript_classes,
+    extract_typescript_facts, extract_typescript_functions,
 };
 
 #[test]
@@ -341,5 +341,67 @@ fn extract_common_language_type_symbols_emit_definition_facts() {
                 predicate: "defines".to_string(),
                 object: "Protocol:Recallable".to_string(),
             })
+    );
+}
+
+#[test]
+fn extract_facts_for_path_dispatches_common_language_extensions() {
+    let cases = [
+        ("src/lib.rs", "fn remember() {}", "Function:remember"),
+        ("agent.py", "def recall():\n    pass\n", "Function:recall"),
+        ("store.ts", "class Store {}", "Class:Store"),
+        ("store.js", "class Store {}", "Class:Store"),
+        (
+            "memory.go",
+            "package memory\nfunc Remember() {}",
+            "Function:Remember",
+        ),
+        (
+            "Memory.java",
+            "interface Recallable {}",
+            "Interface:Recallable",
+        ),
+        (
+            "memory.c",
+            "int remember(void) { return 1; }",
+            "Function:remember",
+        ),
+        ("memory.cpp", "struct Chunk {};", "Struct:Chunk"),
+        (
+            "Memory.cs",
+            "enum MemoryKind { Episodic }",
+            "Enum:MemoryKind",
+        ),
+        ("store.rb", "class Store\nend", "Class:Store"),
+        (
+            "store.php",
+            "<?php interface Recallable {}",
+            "Interface:Recallable",
+        ),
+        ("Store.kt", "class Store", "Class:Store"),
+        (
+            "Store.swift",
+            "protocol Recallable {}",
+            "Protocol:Recallable",
+        ),
+    ];
+
+    for (path, source, object) in cases {
+        assert!(
+            extract_facts_for_path(path, source)
+                .unwrap()
+                .contains(&ExtractedFact {
+                    subject: path.to_string(),
+                    predicate: "defines".to_string(),
+                    object: object.to_string(),
+                }),
+            "expected {path} to emit {object}"
+        );
+    }
+
+    assert!(
+        extract_facts_for_path("README.md", "# Notes")
+            .unwrap()
+            .is_empty()
     );
 }

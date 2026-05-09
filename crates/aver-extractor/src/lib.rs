@@ -4,6 +4,7 @@ pub mod prose;
 
 use std::collections::HashSet;
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use tree_sitter::{Language, Node, Parser};
@@ -640,6 +641,31 @@ pub fn extract_swift_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact
         extract_swift_protocols(source)?,
     ));
     Ok(facts)
+}
+
+pub fn extract_facts_for_path(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let extension = Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    match extension.as_str() {
+        "rs" => extract_rust_facts(path, source),
+        "py" => extract_python_facts(path, source),
+        "ts" | "tsx" => extract_typescript_facts(path, source),
+        "js" | "jsx" => extract_javascript_facts(path, source),
+        "go" => extract_go_facts(path, source),
+        "java" => extract_java_facts(path, source),
+        "c" | "h" => extract_c_facts(path, source),
+        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => extract_cpp_facts(path, source),
+        "cs" => extract_csharp_facts(path, source),
+        "rb" => extract_ruby_facts(path, source),
+        "php" => extract_php_facts(path, source),
+        "kt" | "kts" => extract_kotlin_facts(path, source),
+        "swift" => extract_swift_facts(path, source),
+        _ => Ok(Vec::new()),
+    }
 }
 
 pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
