@@ -2009,12 +2009,7 @@ fn collect_java_interface_extends_facts(
         && let Some(extends_interfaces) = first_named_descendant_of_kind(node, "extends_interfaces")
     {
         let mut base_names = Vec::new();
-        collect_descendant_texts(
-            extends_interfaces,
-            source,
-            &["type_identifier", "identifier"],
-            &mut base_names,
-        )?;
+        collect_java_implements_names(extends_interfaces, source, &mut base_names)?;
         let subject = format!("Interface:{}", interface_name.utf8_text(source)?);
         facts.extend(base_names.into_iter().map(|base_name| ExtractedFact {
             subject: subject.clone(),
