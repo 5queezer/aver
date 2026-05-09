@@ -513,6 +513,15 @@ pub fn extract_cpp_enums(source: &str) -> Result<Vec<String>, Error> {
     collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["enum_specifier"])
 }
 
+pub fn extract_cpp_namespaces(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_cpp::language())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["namespace_definition"],
+    )
+}
+
 pub fn extract_cpp_type_aliases(source: &str) -> Result<Vec<String>, Error> {
     let tree = parse_with_language(source, tree_sitter_cpp::language())?;
     let mut aliases = Vec::new();
@@ -543,6 +552,11 @@ pub fn extract_cpp_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>,
         path,
         "TypeAlias",
         extract_cpp_type_aliases(source)?,
+    ));
+    facts.extend(definition_facts(
+        path,
+        "Namespace",
+        extract_cpp_namespaces(source)?,
     ));
     Ok(facts)
 }
