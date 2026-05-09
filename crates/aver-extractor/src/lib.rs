@@ -265,24 +265,51 @@ pub fn extract_typescript_classes(source: &str) -> Result<Vec<String>, Error> {
     Ok(classes)
 }
 
+pub fn extract_typescript_interfaces(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_typescript::language_typescript())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["interface_declaration"],
+    )
+}
+
+pub fn extract_typescript_type_aliases(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_typescript::language_typescript())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["type_alias_declaration"],
+    )
+}
+
+pub fn extract_typescript_enums(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_typescript::language_typescript())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["enum_declaration"])
+}
+
 pub fn extract_typescript_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut facts = extract_typescript_functions(source)?
-        .into_iter()
-        .map(|function| ExtractedFact {
-            subject: path.to_string(),
-            predicate: "defines".to_string(),
-            object: format!("Function:{function}"),
-        })
-        .collect::<Vec<_>>();
-    facts.extend(
-        extract_typescript_classes(source)?
-            .into_iter()
-            .map(|class_name| ExtractedFact {
-                subject: path.to_string(),
-                predicate: "defines".to_string(),
-                object: format!("Class:{class_name}"),
-            }),
-    );
+    let mut facts = definition_facts(path, "Function", extract_typescript_functions(source)?);
+    facts.extend(definition_facts(
+        path,
+        "Class",
+        extract_typescript_classes(source)?,
+    ));
+    facts.extend(definition_facts(
+        path,
+        "Interface",
+        extract_typescript_interfaces(source)?,
+    ));
+    facts.extend(definition_facts(
+        path,
+        "TypeAlias",
+        extract_typescript_type_aliases(source)?,
+    ));
+    facts.extend(definition_facts(
+        path,
+        "Enum",
+        extract_typescript_enums(source)?,
+    ));
     facts.extend(extract_typescript_extends_facts(source));
     Ok(facts)
 }

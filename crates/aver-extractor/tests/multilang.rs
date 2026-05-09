@@ -12,7 +12,8 @@ use aver_extractor::{
     extract_python_facts, extract_python_functions, extract_ruby_classes, extract_ruby_facts,
     extract_ruby_functions, extract_ruby_modules, extract_swift_classes, extract_swift_enums,
     extract_swift_facts, extract_swift_functions, extract_swift_protocols, extract_swift_structs,
-    extract_typescript_classes, extract_typescript_facts, extract_typescript_functions,
+    extract_typescript_classes, extract_typescript_enums, extract_typescript_facts,
+    extract_typescript_functions, extract_typescript_interfaces, extract_typescript_type_aliases,
 };
 
 #[test]
@@ -94,6 +95,40 @@ fn extract_javascript_and_typescript_arrow_function_variables() {
         extract_typescript_functions("const recall = (): boolean => true;").unwrap(),
         vec!["recall".to_string()]
     );
+}
+
+#[test]
+fn extract_typescript_type_symbols_emit_definition_facts() {
+    let source = "interface Recallable {} type MemoryId = string; enum MemoryKind { Episodic }";
+
+    assert_eq!(
+        extract_typescript_interfaces(source).unwrap(),
+        vec!["Recallable".to_string()]
+    );
+    assert_eq!(
+        extract_typescript_type_aliases(source).unwrap(),
+        vec!["MemoryId".to_string()]
+    );
+    assert_eq!(
+        extract_typescript_enums(source).unwrap(),
+        vec!["MemoryKind".to_string()]
+    );
+    let facts = extract_typescript_facts("memory.ts", source).unwrap();
+    assert!(facts.contains(&ExtractedFact {
+        subject: "memory.ts".to_string(),
+        predicate: "defines".to_string(),
+        object: "Interface:Recallable".to_string(),
+    }));
+    assert!(facts.contains(&ExtractedFact {
+        subject: "memory.ts".to_string(),
+        predicate: "defines".to_string(),
+        object: "TypeAlias:MemoryId".to_string(),
+    }));
+    assert!(facts.contains(&ExtractedFact {
+        subject: "memory.ts".to_string(),
+        predicate: "defines".to_string(),
+        object: "Enum:MemoryKind".to_string(),
+    }));
 }
 
 #[test]
