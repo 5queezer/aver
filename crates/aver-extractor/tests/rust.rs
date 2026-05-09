@@ -61,6 +61,22 @@ fn extract_rust_imports_normalizes_aliasing_and_visibility_prefix() {
 }
 
 #[test]
+fn extract_rust_imports_normalizes_pub_visibility_forms() {
+    let imports =
+        extract_rust_imports("pub(crate) use std::collections as collections;\npub(super) use crate::storage::Engine as EngineAlias;\npub(in super::util) use crate::events::{self as events};")
+            .unwrap();
+
+    assert_eq!(
+        imports,
+        vec![
+            "std::collections".to_string(),
+            "crate::storage::Engine".to_string(),
+            "crate::events".to_string()
+        ]
+    );
+}
+
+#[test]
 fn extract_rust_calls_finds_called_function_name() {
     let calls = extract_rust_calls("fn main() { remember(); }").unwrap();
 
