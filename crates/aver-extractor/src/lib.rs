@@ -837,6 +837,14 @@ pub fn extract_php_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>,
         extract_php_namespaces(source)?,
     ));
     facts.extend(extract_php_extends_facts(source)?);
+    facts.extend(extract_php_implements_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_php_implements_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let tree = parse_with_language(source, tree_sitter_php::language_php())?;
+    let mut facts = Vec::new();
+    collect_php_implements_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -1548,6 +1556,40 @@ fn collect_ruby_extends_facts(
     Ok(())
 }
 
+fn collect_php_implements_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "class_declaration"
+        && let Some(class_name) = node.child_by_field_name("name")
+        && let Some(interfaces) = first_named_descendant_of_kind(node, "class_interface_clause")
+    {
+        let mut interface_names = Vec::new();
+        collect_descendant_texts(
+            interfaces,
+            source,
+            &["name", "qualified_name"],
+            &mut interface_names,
+        )?;
+        facts.extend(
+            interface_names
+                .into_iter()
+                .map(|interface_name| ExtractedFact {
+                    subject: format!("Class:{}", class_name.utf8_text(source).unwrap_or_default()),
+                    predicate: "implements".to_string(),
+                    object: format!("Interface:{interface_name}"),
+                }),
+        );
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_php_implements_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
 fn collect_php_extends_facts(
     node: Node<'_>,
     source: &[u8],
@@ -1709,13 +1751,15 @@ fn collect_python_extends_facts(
     if node.kind() == "class_definition"
         && let Some(class_name) = node.child_by_field_name("name")
         && let Some(superclasses) = node.child_by_field_name("superclasses")
-        && let Some(base_name) = first_named_descendant_of_kind(superclasses, "identifier")
     {
-        facts.push(ExtractedFact {
-            subject: format!("Class:{}", class_name.utf8_text(source)?),
+        let mut base_names = Vec::new();
+        collect_descendant_texts(superclasses, source, &["identifier"], &mut base_names)?;
+        let subject = format!("Class:{}", class_name.utf8_text(source)?);
+        facts.extend(base_names.into_iter().map(|base_name| ExtractedFact {
+            subject: subject.clone(),
             predicate: "extends".to_string(),
-            object: format!("Class:{}", base_name.utf8_text(source)?),
-        });
+            object: format!("Class:{base_name}"),
+        }));
     }
 
     let mut cursor = node.walk();

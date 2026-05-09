@@ -53,6 +53,23 @@ fn extract_python_facts_emit_class_extends_triple() {
 }
 
 #[test]
+fn extract_python_facts_emit_multiple_class_extends_triples() {
+    let facts =
+        extract_python_facts("store.py", "class Store(BaseStore, Auditable):\n    pass\n").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:BaseStore".to_string(),
+    }));
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:Auditable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_python_classes_and_go_type_symbols_emit_definition_facts() {
     let python = "class Store:\n    pass\n";
     assert_eq!(
@@ -503,6 +520,18 @@ fn extract_php_facts_emit_class_extends_triple() {
         subject: "Class:Store".to_string(),
         predicate: "extends".to_string(),
         object: "Class:BaseStore".to_string(),
+    }));
+}
+
+#[test]
+fn extract_php_facts_emit_class_implements_triple() {
+    let facts =
+        extract_php_facts("Store.php", "<?php class Store implements Recallable {} ").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Recallable".to_string(),
     }));
 }
 
