@@ -1686,10 +1686,10 @@ fn collect_kotlin_extends_facts(
     facts: &mut Vec<ExtractedFact>,
 ) -> Result<(), Error> {
     if node.kind() == "class_declaration" {
-        let text = node.utf8_text(source)?.trim_start();
-        let kind = if text.starts_with("class ") {
+        let keywords: Vec<&str> = node.utf8_text(source)?.split_whitespace().collect();
+        let kind = if keywords.contains(&"class") {
             Some("Class")
-        } else if text.starts_with("interface ") {
+        } else if keywords.contains(&"interface") {
             Some("Interface")
         } else {
             None

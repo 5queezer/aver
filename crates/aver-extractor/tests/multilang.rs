@@ -1202,6 +1202,18 @@ fn extract_kotlin_facts_emit_object_implements_interface_triple() {
 }
 
 #[test]
+fn extract_kotlin_facts_emit_data_class_extends_triple() {
+    let facts =
+        extract_kotlin_facts("Store.kt", "data class Store(val id: String) : BaseStore()").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:BaseStore".to_string(),
+    }));
+}
+
+#[test]
 fn extract_kotlin_facts_emit_delegation_extends_triples() {
     let class_facts = extract_kotlin_facts("Store.kt", "class Store : BaseStore()").unwrap();
     assert!(class_facts.contains(&ExtractedFact {
