@@ -1508,7 +1508,11 @@ fn collect_swift_inheritance_type_names(
     names: &mut Vec<String>,
 ) -> Result<(), Error> {
     if node.kind() == "inheritance_specifier" {
-        collect_descendant_texts(node, source, &["user_type"], names)?;
+        if let Some(inherits_from) = node.child_by_field_name("inherits_from")
+            && let Some(name) = first_named_descendant_of_kind(inherits_from, "type_identifier")
+        {
+            names.push(name.utf8_text(source)?.to_string());
+        }
         return Ok(());
     }
 
@@ -1540,13 +1544,16 @@ fn collect_swift_extends_facts(
     if let Some(type_kind) = type_kind
         && let Some(type_name) = node.child_by_field_name("name")
         && let Some(inheritance) = first_named_descendant_of_kind(node, "inheritance_specifier")
-        && let Some(base_name) = inheritance.child_by_field_name("inherits_from")
     {
-        facts.push(ExtractedFact {
-            subject: format!("{}:{}", type_kind, type_name.utf8_text(source)?),
-            predicate: "extends".to_string(),
-            object: format!("{}:{}", type_kind, base_name.utf8_text(source)?),
-        });
+        let mut base_names = Vec::new();
+        collect_swift_inheritance_type_names(inheritance, source, &mut base_names)?;
+        if let Some(base_name) = base_names.into_iter().next() {
+            facts.push(ExtractedFact {
+                subject: format!("{}:{}", type_kind, type_name.utf8_text(source)?),
+                predicate: "extends".to_string(),
+                object: format!("{}:{base_name}", type_kind),
+            });
+        }
     }
 
     let mut cursor = node.walk();

@@ -739,6 +739,26 @@ fn extract_php_namespaces_emit_definition_facts() {
 }
 
 #[test]
+fn extract_swift_facts_do_not_treat_generic_superclass_arguments_as_protocol_conformance() {
+    let facts = extract_swift_facts(
+        "Store.swift",
+        "protocol Memory {}\nclass BaseStore<T> {}\nclass Store: BaseStore<Memory> {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:BaseStore".to_string(),
+    }));
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Protocol:Memory".to_string(),
+    }));
+}
+
+#[test]
 fn extract_swift_facts_emit_class_implements_protocol_triple() {
     let facts = extract_swift_facts(
         "Store.swift",
