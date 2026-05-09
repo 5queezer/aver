@@ -2045,12 +2045,7 @@ fn collect_java_implements_facts(
         && let Some(interfaces) = node.child_by_field_name("interfaces")
     {
         let mut interface_names = Vec::new();
-        collect_descendant_texts(
-            interfaces,
-            source,
-            &["type_identifier", "identifier"],
-            &mut interface_names,
-        )?;
+        collect_java_implements_names(interfaces, source, &mut interface_names)?;
         let subject = format!("{}:{}", type_kind, type_name.utf8_text(source)?);
         facts.extend(
             interface_names
@@ -2362,6 +2357,34 @@ fn first_named_descendant_of_kind<'tree>(node: Node<'tree>, kind: &str) -> Optio
         }
     }
     None
+}
+
+fn collect_java_implements_names(
+    node: Node<'_>,
+    source: &[u8],
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    if node.kind() == "generic_type" {
+        if let Some(name) = first_named_descendant_of_kind(node, "type_identifier")
+            .or_else(|| first_named_descendant_of_kind(node, "scoped_type_identifier"))
+        {
+            names.push(name.utf8_text(source)?.to_string());
+        }
+        return Ok(());
+    }
+    if node.kind() == "type_arguments" {
+        return Ok(());
+    }
+    if matches!(node.kind(), "type_identifier" | "identifier") {
+        names.push(node.utf8_text(source)?.to_string());
+        return Ok(());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_java_implements_names(child, source, names)?;
+    }
+    Ok(())
 }
 
 fn extract_typescript_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
