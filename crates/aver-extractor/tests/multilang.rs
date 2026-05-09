@@ -7,9 +7,9 @@ use aver_extractor::{
     extract_csharp_records, extract_csharp_structs, extract_facts_for_path, extract_go_facts,
     extract_go_functions, extract_go_interfaces, extract_go_structs, extract_java_annotations,
     extract_java_classes, extract_java_enums, extract_java_facts, extract_java_functions,
-    extract_java_interfaces, extract_java_records, extract_javascript_classes,
-    extract_javascript_facts, extract_javascript_functions, extract_kotlin_classes,
-    extract_kotlin_enums, extract_kotlin_facts, extract_kotlin_functions,
+    extract_java_interfaces, extract_java_packages, extract_java_records,
+    extract_javascript_classes, extract_javascript_facts, extract_javascript_functions,
+    extract_kotlin_classes, extract_kotlin_enums, extract_kotlin_facts, extract_kotlin_functions,
     extract_kotlin_interfaces, extract_php_classes, extract_php_enums, extract_php_facts,
     extract_php_functions, extract_php_interfaces, extract_php_namespaces, extract_php_traits,
     extract_python_classes, extract_python_facts, extract_python_functions, extract_ruby_classes,
@@ -327,6 +327,25 @@ fn extract_common_language_basic_symbols_emit_definition_facts() {
                 subject: "Store.swift".to_string(),
                 predicate: "defines".to_string(),
                 object: "Class:Store".to_string(),
+            })
+    );
+}
+
+#[test]
+fn extract_java_packages_emit_definition_facts() {
+    let source = "package memory.core; public class Store {}";
+
+    assert_eq!(
+        extract_java_packages(source).unwrap(),
+        vec!["memory.core".to_string()]
+    );
+    assert!(
+        extract_java_facts("Store.java", source)
+            .unwrap()
+            .contains(&ExtractedFact {
+                subject: "Store.java".to_string(),
+                predicate: "defines".to_string(),
+                object: "Package:memory.core".to_string(),
             })
     );
 }
