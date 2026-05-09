@@ -1341,6 +1341,21 @@ fn extract_php_facts_do_not_split_qualified_superclass_references_into_top_level
 }
 
 #[test]
+fn extract_php_facts_do_not_split_qualified_interface_references_into_top_level_interfaces() {
+    let facts = extract_php_facts(
+        "Store.php",
+        "<?php interface Memory {} class Store implements Memory\\Recallable {}",
+    )
+    .unwrap();
+
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Memory".to_string(),
+    }));
+}
+
+#[test]
 fn extract_php_facts_emit_class_uses_trait_triple() {
     let facts = extract_php_facts(
         "Store.php",

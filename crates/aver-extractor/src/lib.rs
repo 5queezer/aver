@@ -1981,12 +1981,7 @@ fn collect_php_implements_facts(
         && let Some(interfaces) = first_named_descendant_of_kind(node, "class_interface_clause")
     {
         let mut interface_names = Vec::new();
-        collect_descendant_texts(
-            interfaces,
-            source,
-            &["name", "qualified_name"],
-            &mut interface_names,
-        )?;
+        collect_php_reference_names(interfaces, source, &mut interface_names)?;
         facts.extend(
             interface_names
                 .into_iter()
@@ -2001,6 +1996,27 @@ fn collect_php_implements_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_php_implements_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_php_reference_names(
+    node: Node<'_>,
+    source: &[u8],
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    if node.kind() == "qualified_name" {
+        names.push(node.utf8_text(source)?.to_string());
+        return Ok(());
+    }
+    if node.kind() == "name" {
+        names.push(node.utf8_text(source)?.to_string());
+        return Ok(());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_php_reference_names(child, source, names)?;
     }
     Ok(())
 }
