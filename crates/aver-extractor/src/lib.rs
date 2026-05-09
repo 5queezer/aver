@@ -1634,13 +1634,23 @@ fn collect_csharp_extends_facts(
     if let Some(type_kind) = type_kind
         && let Some(type_name) = node.child_by_field_name("name")
         && let Some(base_list) = first_named_descendant_of_kind(node, "base_list")
-        && let Some(base_name) = first_named_descendant_of_kind(base_list, "identifier")
     {
-        facts.push(ExtractedFact {
-            subject: format!("{}:{}", type_kind, type_name.utf8_text(source)?),
-            predicate: "extends".to_string(),
-            object: format!("{}:{}", type_kind, base_name.utf8_text(source)?),
-        });
+        let subject = format!("{}:{}", type_kind, type_name.utf8_text(source)?);
+        if type_kind == "Interface" {
+            let mut base_names = Vec::new();
+            collect_csharp_base_type_names(base_list, source, &mut base_names)?;
+            facts.extend(base_names.into_iter().map(|base_name| ExtractedFact {
+                subject: subject.clone(),
+                predicate: "extends".to_string(),
+                object: format!("Interface:{base_name}"),
+            }));
+        } else if let Some(base_name) = first_named_descendant_of_kind(base_list, "identifier") {
+            facts.push(ExtractedFact {
+                subject,
+                predicate: "extends".to_string(),
+                object: format!("{}:{}", type_kind, base_name.utf8_text(source)?),
+            });
+        }
     }
 
     let mut cursor = node.walk();

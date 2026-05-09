@@ -850,6 +850,26 @@ fn extract_csharp_facts_emit_interface_extends_triple() {
 }
 
 #[test]
+fn extract_csharp_facts_emit_multiple_interface_extends_triples() {
+    let facts = extract_csharp_facts(
+        "Memory.cs",
+        "interface Recallable : BaseRecallable, Auditable {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Interface:Recallable".to_string(),
+        predicate: "extends".to_string(),
+        object: "Interface:BaseRecallable".to_string(),
+    }));
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Interface:Recallable".to_string(),
+        predicate: "extends".to_string(),
+        object: "Interface:Auditable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_csharp_namespaces_emit_definition_facts() {
     let source = "namespace Memory.Core { class Store {} }";
 
