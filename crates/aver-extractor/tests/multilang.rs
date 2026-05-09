@@ -243,6 +243,21 @@ fn extract_go_facts_do_not_treat_named_struct_fields_as_extends() {
 }
 
 #[test]
+fn extract_go_facts_do_not_treat_method_parameter_types_as_interface_extends() {
+    let facts = extract_go_facts(
+        "memory.go",
+        "package memory\ntype Recallable interface { Recall(ctx Context) }",
+    )
+    .unwrap();
+
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Interface:Recallable".to_string(),
+        predicate: "extends".to_string(),
+        object: "Interface:Context".to_string(),
+    }));
+}
+
+#[test]
 fn extract_go_facts_emit_interface_extends_triple() {
     let facts = extract_go_facts(
         "memory.go",

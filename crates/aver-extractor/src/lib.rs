@@ -2178,12 +2178,7 @@ fn collect_go_extends_facts(
         && let Some(interface_name) = node.child_by_field_name("name")
     {
         let mut embedded = Vec::new();
-        collect_descendant_texts(
-            interface_node,
-            source,
-            &["type_identifier", "qualified_type"],
-            &mut embedded,
-        )?;
+        collect_go_interface_embedding_names(interface_node, source, &mut embedded)?;
         facts.extend(embedded.into_iter().map(|base| ExtractedFact {
             subject: format!(
                 "Interface:{}",
@@ -2197,6 +2192,23 @@ fn collect_go_extends_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_go_extends_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_go_interface_embedding_names(
+    node: Node<'_>,
+    source: &[u8],
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    if node.kind() == "type_elem" {
+        collect_descendant_texts(node, source, &["type_identifier", "qualified_type"], names)?;
+        return Ok(());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_go_interface_embedding_names(child, source, names)?;
     }
     Ok(())
 }
