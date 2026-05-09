@@ -489,6 +489,19 @@ pub fn extract_cpp_enums(source: &str) -> Result<Vec<String>, Error> {
     collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["enum_specifier"])
 }
 
+pub fn extract_cpp_type_aliases(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_cpp::language())?;
+    let mut aliases = Vec::new();
+    collect_named_nodes(
+        tree.root_node(),
+        source.as_bytes(),
+        &["alias_declaration"],
+        &mut aliases,
+    )?;
+    collect_type_definition_aliases(tree.root_node(), source.as_bytes(), &mut aliases)?;
+    Ok(aliases)
+}
+
 pub fn extract_cpp_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
     let mut facts = definition_facts(path, "Function", extract_cpp_functions(source)?);
     facts.extend(definition_facts(
@@ -502,6 +515,11 @@ pub fn extract_cpp_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>,
         extract_cpp_structs(source)?,
     ));
     facts.extend(definition_facts(path, "Enum", extract_cpp_enums(source)?));
+    facts.extend(definition_facts(
+        path,
+        "TypeAlias",
+        extract_cpp_type_aliases(source)?,
+    ));
     Ok(facts)
 }
 
