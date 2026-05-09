@@ -228,6 +228,21 @@ fn extract_go_facts_emit_struct_embedding_extends_triple() {
 }
 
 #[test]
+fn extract_go_facts_do_not_treat_named_struct_fields_as_extends() {
+    let facts = extract_go_facts(
+        "store.go",
+        "package memory\ntype BaseStore struct {}\ntype Store struct { base BaseStore }",
+    )
+    .unwrap();
+
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Struct:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Struct:BaseStore".to_string(),
+    }));
+}
+
+#[test]
 fn extract_go_facts_emit_interface_extends_triple() {
     let facts = extract_go_facts(
         "memory.go",

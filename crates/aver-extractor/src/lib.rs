@@ -2083,7 +2083,7 @@ fn collect_go_struct_embedding_facts(
     {
         let struct_name = struct_name.utf8_text(source)?;
         let mut embedded = Vec::new();
-        collect_descendant_texts(struct_node, source, &["type_identifier"], &mut embedded)?;
+        collect_go_embedded_struct_names(struct_node, source, &mut embedded)?;
         facts.extend(
             embedded
                 .into_iter()
@@ -2133,6 +2133,25 @@ fn collect_go_extends_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_go_extends_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_go_embedded_struct_names(
+    node: Node<'_>,
+    source: &[u8],
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    if node.kind() == "field_declaration"
+        && first_named_descendant_of_kind(node, "field_identifier").is_none()
+        && let Some(name) = first_named_descendant_of_kind(node, "type_identifier")
+    {
+        names.push(name.utf8_text(source)?.to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_go_embedded_struct_names(child, source, names)?;
     }
     Ok(())
 }
