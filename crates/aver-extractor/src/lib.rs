@@ -1948,12 +1948,7 @@ fn collect_php_trait_use_facts(
         for child in body.children(&mut cursor) {
             if child.kind() == "use_declaration" {
                 let mut trait_names = Vec::new();
-                collect_descendant_texts(
-                    child,
-                    source,
-                    &["name", "qualified_name"],
-                    &mut trait_names,
-                )?;
+                collect_php_reference_names(child, source, &mut trait_names)?;
                 let subject = format!("Class:{}", class_name.utf8_text(source)?);
                 facts.extend(trait_names.into_iter().map(|trait_name| ExtractedFact {
                     subject: subject.clone(),

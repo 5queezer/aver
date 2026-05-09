@@ -1356,6 +1356,21 @@ fn extract_php_facts_do_not_split_qualified_interface_references_into_top_level_
 }
 
 #[test]
+fn extract_php_facts_do_not_split_qualified_trait_references_into_top_level_traits() {
+    let facts = extract_php_facts(
+        "Store.php",
+        "<?php trait Memory {} class Store { use Memory\\RecordsMemory; }",
+    )
+    .unwrap();
+
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "uses".to_string(),
+        object: "Trait:Memory".to_string(),
+    }));
+}
+
+#[test]
 fn extract_php_facts_emit_class_uses_trait_triple() {
     let facts = extract_php_facts(
         "Store.php",
