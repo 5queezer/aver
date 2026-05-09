@@ -454,6 +454,21 @@ fn extract_php_facts_emit_class_extends_triple() {
 }
 
 #[test]
+fn extract_php_facts_emit_interface_extends_triple() {
+    let facts = extract_php_facts(
+        "memory.php",
+        "<?php interface Recallable extends BaseRecallable {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Interface:Recallable".to_string(),
+        predicate: "extends".to_string(),
+        object: "Interface:BaseRecallable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_php_namespaces_emit_definition_facts() {
     let source = "<?php namespace Memory\\Core; class Store {}";
 
@@ -769,6 +784,17 @@ fn extract_common_language_type_symbols_emit_definition_facts() {
                 object: "Protocol:Recallable".to_string(),
             })
     );
+}
+
+#[test]
+fn extract_ruby_facts_emit_class_extends_triple() {
+    let facts = extract_ruby_facts("store.rb", "class Store < BaseStore\nend").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:BaseStore".to_string(),
+    }));
 }
 
 #[test]
