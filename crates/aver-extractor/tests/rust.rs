@@ -14,6 +14,13 @@ fn extract_rust_functions_finds_function_name() {
 }
 
 #[test]
+fn extract_rust_functions_normalizes_raw_identifier_names() {
+    let functions = extract_rust_functions("fn r#type() {}").unwrap();
+
+    assert_eq!(functions, vec!["type".to_string()]);
+}
+
+#[test]
 fn extract_rust_imports_finds_use_path() {
     let imports = extract_rust_imports("use std::fs;\nfn main() {}").unwrap();
 

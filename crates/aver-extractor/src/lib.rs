@@ -2632,7 +2632,7 @@ fn collect_function_names(
     if node.kind() == "function_item"
         && let Some(name) = node.child_by_field_name("name")
     {
-        functions.push(name.utf8_text(source)?.to_string());
+        functions.push(normalize_rust_identifier(name.utf8_text(source)?));
     }
 
     let mut cursor = node.walk();
@@ -2640,6 +2640,13 @@ fn collect_function_names(
         collect_function_names(child, source, functions)?;
     }
     Ok(())
+}
+
+fn normalize_rust_identifier(identifier: &str) -> String {
+    identifier
+        .strip_prefix("r#")
+        .unwrap_or(identifier)
+        .to_string()
 }
 
 fn collect_imports(node: Node<'_>, source: &[u8], imports: &mut Vec<String>) -> Result<(), Error> {
