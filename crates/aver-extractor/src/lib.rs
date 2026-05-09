@@ -2063,13 +2063,16 @@ fn collect_javascript_extends_facts(
     if node.kind() == "class_declaration"
         && let Some(class_name) = node.child_by_field_name("name")
         && let Some(heritage) = first_named_descendant_of_kind(node, "class_heritage")
-        && let Some(base_name) = first_named_descendant_of_kind(heritage, "identifier")
     {
-        facts.push(ExtractedFact {
-            subject: format!("Class:{}", class_name.utf8_text(source)?),
-            predicate: "extends".to_string(),
-            object: format!("Class:{}", base_name.utf8_text(source)?),
-        });
+        let mut base_name = None;
+        collect_heritage_type_name(heritage, source, &mut base_name)?;
+        if let Some(base_name) = base_name {
+            facts.push(ExtractedFact {
+                subject: format!("Class:{}", class_name.utf8_text(source)?),
+                predicate: "extends".to_string(),
+                object: format!("Class:{base_name}"),
+            });
+        }
     }
 
     let mut cursor = node.walk();
@@ -2498,15 +2501,16 @@ fn collect_typescript_extends_facts(
         && let Some(class_name) = node.child_by_field_name("name")
         && let Some(heritage) = first_named_descendant_of_kind(node, "class_heritage")
     {
-        if let Some(extends_clause) = first_named_descendant_of_kind(heritage, "extends_clause")
-            && let Some(base_name) = first_named_descendant_of_kind(extends_clause, "identifier")
-                .or_else(|| first_named_descendant_of_kind(extends_clause, "type_identifier"))
-        {
-            facts.push(ExtractedFact {
-                subject: format!("Class:{}", class_name.utf8_text(source)?),
-                predicate: "extends".to_string(),
-                object: format!("Class:{}", base_name.utf8_text(source)?),
-            });
+        if let Some(extends_clause) = first_named_descendant_of_kind(heritage, "extends_clause") {
+            let mut base_name = None;
+            collect_heritage_type_name(extends_clause, source, &mut base_name)?;
+            if let Some(base_name) = base_name {
+                facts.push(ExtractedFact {
+                    subject: format!("Class:{}", class_name.utf8_text(source)?),
+                    predicate: "extends".to_string(),
+                    object: format!("Class:{base_name}"),
+                });
+            }
         }
 
         if let Some(implements_clause) =
@@ -2567,6 +2571,47 @@ fn collect_typescript_implements_names(
             _ => collect_typescript_implements_names(child, source, names)?,
         }
     }
+    Ok(())
+}
+
+fn collect_heritage_type_name(
+    node: Node<'_>,
+    source: &[u8],
+    out: &mut Option<String>,
+) -> Result<(), Error> {
+    if out.is_some() {
+        return Ok(());
+    }
+
+    match node.kind() {
+        "identifier"
+        | "type_identifier"
+        | "nested_type_identifier"
+        | "member_expression"
+        | "scoped_type_identifier" => {
+            *out = Some(node.utf8_text(source)?.to_string());
+            return Ok(());
+        }
+        "generic_type" => {
+            if let Some(name) = first_named_descendant_of_kind(node, "type_identifier")
+                .or_else(|| first_named_descendant_of_kind(node, "identifier"))
+            {
+                *out = Some(name.utf8_text(source)?.to_string());
+            }
+            return Ok(());
+        }
+        "type_arguments" => return Ok(()),
+        _ => {}
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor).filter(|child| child.is_named()) {
+        collect_heritage_type_name(child, source, out)?;
+        if out.is_some() {
+            break;
+        }
+    }
+
     Ok(())
 }
 

@@ -227,6 +227,23 @@ fn extract_javascript_facts_emit_class_extends_triple() {
 }
 
 #[test]
+fn extract_javascript_facts_do_not_split_scoped_extends_reference_into_top_level_class() {
+    let facts =
+        extract_javascript_facts("store.js", "class Store extends Memory.BaseStore {}").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:Memory.BaseStore".to_string(),
+    }));
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:Memory".to_string(),
+    }));
+}
+
+#[test]
 fn extract_typescript_facts_do_not_treat_generic_type_arguments_as_implemented_interfaces() {
     let facts =
         extract_typescript_facts("store.ts", "class Store implements Recallable<Memory> {}")
