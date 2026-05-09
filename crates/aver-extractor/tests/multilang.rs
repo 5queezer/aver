@@ -12,10 +12,11 @@ use aver_extractor::{
     extract_kotlin_interfaces, extract_php_classes, extract_php_enums, extract_php_facts,
     extract_php_functions, extract_php_interfaces, extract_php_traits, extract_python_classes,
     extract_python_facts, extract_python_functions, extract_ruby_classes, extract_ruby_facts,
-    extract_ruby_functions, extract_ruby_modules, extract_swift_classes, extract_swift_enums,
-    extract_swift_facts, extract_swift_functions, extract_swift_protocols, extract_swift_structs,
-    extract_typescript_classes, extract_typescript_enums, extract_typescript_facts,
-    extract_typescript_functions, extract_typescript_interfaces, extract_typescript_type_aliases,
+    extract_ruby_functions, extract_ruby_modules, extract_swift_actors, extract_swift_classes,
+    extract_swift_enums, extract_swift_facts, extract_swift_functions, extract_swift_protocols,
+    extract_swift_structs, extract_typescript_classes, extract_typescript_enums,
+    extract_typescript_facts, extract_typescript_functions, extract_typescript_interfaces,
+    extract_typescript_type_aliases,
 };
 
 #[test]
@@ -325,6 +326,25 @@ fn extract_common_language_basic_symbols_emit_definition_facts() {
                 subject: "Store.swift".to_string(),
                 predicate: "defines".to_string(),
                 object: "Class:Store".to_string(),
+            })
+    );
+}
+
+#[test]
+fn extract_swift_actors_emit_definition_facts() {
+    let source = "actor MemoryStore {}";
+
+    assert_eq!(
+        extract_swift_actors(source).unwrap(),
+        vec!["MemoryStore".to_string()]
+    );
+    assert!(
+        extract_swift_facts("Memory.swift", source)
+            .unwrap()
+            .contains(&ExtractedFact {
+                subject: "Memory.swift".to_string(),
+                predicate: "defines".to_string(),
+                object: "Actor:MemoryStore".to_string(),
             })
     );
 }

@@ -800,6 +800,17 @@ pub fn extract_swift_enums(source: &str) -> Result<Vec<String>, Error> {
     )
 }
 
+pub fn extract_swift_actors(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_swift::language())?;
+    collect_names_from_kinds_with_field_text(
+        tree.root_node(),
+        source.as_bytes(),
+        &["class_declaration"],
+        "declaration_kind",
+        "actor",
+    )
+}
+
 pub fn extract_swift_protocols(source: &str) -> Result<Vec<String>, Error> {
     let tree = parse_with_language(source, tree_sitter_swift::language())?;
     collect_names_from_kinds(
@@ -822,6 +833,11 @@ pub fn extract_swift_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact
         extract_swift_structs(source)?,
     ));
     facts.extend(definition_facts(path, "Enum", extract_swift_enums(source)?));
+    facts.extend(definition_facts(
+        path,
+        "Actor",
+        extract_swift_actors(source)?,
+    ));
     facts.extend(definition_facts(
         path,
         "Protocol",
