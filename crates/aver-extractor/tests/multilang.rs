@@ -11,13 +11,13 @@ use aver_extractor::{
     extract_javascript_facts, extract_javascript_functions, extract_kotlin_classes,
     extract_kotlin_enums, extract_kotlin_facts, extract_kotlin_functions,
     extract_kotlin_interfaces, extract_php_classes, extract_php_enums, extract_php_facts,
-    extract_php_functions, extract_php_interfaces, extract_php_traits, extract_python_classes,
-    extract_python_facts, extract_python_functions, extract_ruby_classes, extract_ruby_facts,
-    extract_ruby_functions, extract_ruby_modules, extract_swift_actors, extract_swift_classes,
-    extract_swift_enums, extract_swift_facts, extract_swift_functions, extract_swift_protocols,
-    extract_swift_structs, extract_typescript_classes, extract_typescript_enums,
-    extract_typescript_facts, extract_typescript_functions, extract_typescript_interfaces,
-    extract_typescript_type_aliases,
+    extract_php_functions, extract_php_interfaces, extract_php_namespaces, extract_php_traits,
+    extract_python_classes, extract_python_facts, extract_python_functions, extract_ruby_classes,
+    extract_ruby_facts, extract_ruby_functions, extract_ruby_modules, extract_swift_actors,
+    extract_swift_classes, extract_swift_enums, extract_swift_facts, extract_swift_functions,
+    extract_swift_protocols, extract_swift_structs, extract_typescript_classes,
+    extract_typescript_enums, extract_typescript_facts, extract_typescript_functions,
+    extract_typescript_interfaces, extract_typescript_type_aliases,
 };
 
 #[test]
@@ -327,6 +327,25 @@ fn extract_common_language_basic_symbols_emit_definition_facts() {
                 subject: "Store.swift".to_string(),
                 predicate: "defines".to_string(),
                 object: "Class:Store".to_string(),
+            })
+    );
+}
+
+#[test]
+fn extract_php_namespaces_emit_definition_facts() {
+    let source = "<?php namespace Memory\\Core; class Store {}";
+
+    assert_eq!(
+        extract_php_namespaces(source).unwrap(),
+        vec!["Memory\\Core".to_string()]
+    );
+    assert!(
+        extract_php_facts("Memory.php", source)
+            .unwrap()
+            .contains(&ExtractedFact {
+                subject: "Memory.php".to_string(),
+                predicate: "defines".to_string(),
+                object: "Namespace:Memory\\Core".to_string(),
             })
     );
 }

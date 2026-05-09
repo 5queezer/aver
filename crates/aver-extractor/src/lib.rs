@@ -724,6 +724,15 @@ pub fn extract_php_traits(source: &str) -> Result<Vec<String>, Error> {
     collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["trait_declaration"])
 }
 
+pub fn extract_php_namespaces(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_php::language_php())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["namespace_definition"],
+    )
+}
+
 pub fn extract_php_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
     let mut facts = definition_facts(path, "Function", extract_php_functions(source)?);
     facts.extend(definition_facts(
@@ -738,6 +747,11 @@ pub fn extract_php_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>,
     ));
     facts.extend(definition_facts(path, "Enum", extract_php_enums(source)?));
     facts.extend(definition_facts(path, "Trait", extract_php_traits(source)?));
+    facts.extend(definition_facts(
+        path,
+        "Namespace",
+        extract_php_namespaces(source)?,
+    ));
     Ok(facts)
 }
 
