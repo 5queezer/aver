@@ -420,6 +420,15 @@ pub fn extract_java_records(source: &str) -> Result<Vec<String>, Error> {
     collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["record_declaration"])
 }
 
+pub fn extract_java_annotations(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_java::language())?;
+    collect_names_from_kinds(
+        tree.root_node(),
+        source.as_bytes(),
+        &["annotation_type_declaration"],
+    )
+}
+
 pub fn extract_java_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
     let mut facts = definition_facts(path, "Function", extract_java_functions(source)?);
     facts.extend(definition_facts(
@@ -437,6 +446,11 @@ pub fn extract_java_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>
         path,
         "Record",
         extract_java_records(source)?,
+    ));
+    facts.extend(definition_facts(
+        path,
+        "Annotation",
+        extract_java_annotations(source)?,
     ));
     Ok(facts)
 }

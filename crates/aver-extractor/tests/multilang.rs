@@ -5,8 +5,8 @@ use aver_extractor::{
     extract_csharp_delegates, extract_csharp_enums, extract_csharp_facts, extract_csharp_functions,
     extract_csharp_interfaces, extract_csharp_records, extract_csharp_structs,
     extract_facts_for_path, extract_go_facts, extract_go_functions, extract_go_interfaces,
-    extract_go_structs, extract_java_classes, extract_java_enums, extract_java_facts,
-    extract_java_functions, extract_java_interfaces, extract_java_records,
+    extract_go_structs, extract_java_annotations, extract_java_classes, extract_java_enums,
+    extract_java_facts, extract_java_functions, extract_java_interfaces, extract_java_records,
     extract_javascript_classes, extract_javascript_facts, extract_javascript_functions,
     extract_kotlin_classes, extract_kotlin_enums, extract_kotlin_facts, extract_kotlin_functions,
     extract_kotlin_interfaces, extract_php_classes, extract_php_enums, extract_php_facts,
@@ -325,6 +325,25 @@ fn extract_common_language_basic_symbols_emit_definition_facts() {
                 subject: "Store.swift".to_string(),
                 predicate: "defines".to_string(),
                 object: "Class:Store".to_string(),
+            })
+    );
+}
+
+#[test]
+fn extract_java_annotations_emit_definition_facts() {
+    let source = "@interface DurableMemory {}";
+
+    assert_eq!(
+        extract_java_annotations(source).unwrap(),
+        vec!["DurableMemory".to_string()]
+    );
+    assert!(
+        extract_java_facts("Memory.java", source)
+            .unwrap()
+            .contains(&ExtractedFact {
+                subject: "Memory.java".to_string(),
+                predicate: "defines".to_string(),
+                object: "Annotation:DurableMemory".to_string(),
             })
     );
 }
