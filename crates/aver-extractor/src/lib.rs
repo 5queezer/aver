@@ -2652,34 +2652,48 @@ fn collect_imports(node: Node<'_>, source: &[u8], imports: &mut Vec<String>) -> 
 }
 
 fn expand_rust_use_declaration(declaration: &str) -> Vec<String> {
-    if let Some(brace_pos) = declaration.find("::{") {
-        let (prefix, rest) = declaration.split_at(brace_pos);
-        if let Some(suffix_end) = rest.rfind('}') {
-            let suffix = &rest[3..suffix_end];
-            let mut expanded = Vec::new();
-            for item in split_top_level_commas(suffix) {
-                let item = item.trim();
-                if item.is_empty() {
-                    continue;
-                }
-
-                if item == "self" {
-                    expanded.push(prefix.to_string());
-                    continue;
-                }
-
-                let (item, _) = item
-                    .split_once(" as ")
-                    .map_or((item, ""), |(item, alias)| (item, alias));
-                let item = item.trim();
-                expanded.push(format!("{}::{}", prefix, item));
-            }
-
-            return expanded;
-        }
+    if let Some((prefix, rest)) = declaration.split_once("::{")
+        && let Some(suffix_end) = rest.rfind('}')
+    {
+        let suffix = &rest[..suffix_end];
+        return expand_rust_use_items(prefix, suffix);
     }
 
     vec![declaration.to_string()]
+}
+
+fn expand_rust_use_items(prefix: &str, items: &str) -> Vec<String> {
+    let mut expanded = Vec::new();
+
+    for item in split_top_level_commas(items) {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+
+        if let Some((nested_prefix, rest)) = item.split_once("::{")
+            && let Some(suffix_end) = rest.rfind('}')
+        {
+            let nested_items = &rest[..suffix_end];
+            let child_prefix = format!("{}::{}", prefix, nested_prefix);
+            expanded.extend(expand_rust_use_items(&child_prefix, nested_items));
+            continue;
+        }
+
+        let item = item
+            .split_once(" as ")
+            .map_or(item, |(item, _)| item)
+            .trim();
+
+        if item == "self" {
+            expanded.push(prefix.to_string());
+            continue;
+        }
+
+        expanded.push(format!("{}::{}", prefix, item));
+    }
+
+    expanded
 }
 
 fn split_top_level_commas(text: &str) -> Vec<&str> {

@@ -31,6 +31,23 @@ fn extract_rust_imports_expands_brace_grouped_imports() {
 }
 
 #[test]
+fn extract_rust_imports_expands_nested_brace_grouped_imports() {
+    let imports = extract_rust_imports(
+        "use std::{fs::{self as stds, read_to_string}, path::Path};\nfn main() {}",
+    )
+    .unwrap();
+
+    assert_eq!(
+        imports,
+        vec![
+            "std::fs".to_string(),
+            "std::fs::read_to_string".to_string(),
+            "std::path::Path".to_string()
+        ]
+    );
+}
+
+#[test]
 fn extract_rust_calls_finds_called_function_name() {
     let calls = extract_rust_calls("fn main() { remember(); }").unwrap();
 
