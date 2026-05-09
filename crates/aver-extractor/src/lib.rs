@@ -723,6 +723,17 @@ pub fn extract_csharp_facts(path: &str, source: &str) -> Result<Vec<ExtractedFac
         extract_csharp_namespaces(source)?,
     ));
     facts.extend(extract_csharp_extends_facts(source)?);
+    facts.extend(extract_csharp_implements_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_csharp_implements_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let interfaces = extract_csharp_interfaces(source)?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let tree = parse_with_language(source, tree_sitter_c_sharp::language())?;
+    let mut facts = Vec::new();
+    collect_csharp_implements_facts(tree.root_node(), source.as_bytes(), &interfaces, &mut facts)?;
     Ok(facts)
 }
 
@@ -1489,6 +1500,37 @@ fn collect_swift_extends_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_swift_extends_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_csharp_implements_facts(
+    node: Node<'_>,
+    source: &[u8],
+    interfaces: &HashSet<String>,
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "class_declaration"
+        && let Some(class_name) = node.child_by_field_name("name")
+        && let Some(base_list) = first_named_descendant_of_kind(node, "base_list")
+    {
+        let mut base_names = Vec::new();
+        collect_descendant_texts(base_list, source, &["identifier"], &mut base_names)?;
+        facts.extend(
+            base_names
+                .into_iter()
+                .filter(|base| interfaces.contains(base))
+                .map(|interface_name| ExtractedFact {
+                    subject: format!("Class:{}", class_name.utf8_text(source).unwrap_or_default()),
+                    predicate: "implements".to_string(),
+                    object: format!("Interface:{interface_name}"),
+                }),
+        );
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_csharp_implements_facts(child, source, interfaces, facts)?;
     }
     Ok(())
 }

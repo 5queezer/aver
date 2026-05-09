@@ -617,6 +617,21 @@ fn extract_swift_facts_emit_protocol_extends_triple() {
 }
 
 #[test]
+fn extract_csharp_facts_emit_class_implements_interface_triple() {
+    let facts = extract_csharp_facts(
+        "Store.cs",
+        "interface IRecallable {} class Store : IRecallable {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:IRecallable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_csharp_facts_emit_record_extends_triple() {
     let facts = extract_csharp_facts("User.cs", "record User : BaseUser {}").unwrap();
 
