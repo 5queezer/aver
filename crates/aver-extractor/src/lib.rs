@@ -586,6 +586,14 @@ pub fn extract_cpp_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>,
         "Namespace",
         extract_cpp_namespaces(source)?,
     ));
+    facts.extend(extract_cpp_extends_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_cpp_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let tree = parse_with_language(source, tree_sitter_cpp::language())?;
+    let mut facts = Vec::new();
+    collect_cpp_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -1308,6 +1316,31 @@ fn collect_type_definition_aliases(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_type_definition_aliases(child, source, aliases)?;
+    }
+    Ok(())
+}
+
+fn collect_cpp_extends_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if matches!(node.kind(), "class_specifier" | "struct_specifier")
+        && let Some(class_name) = node.child_by_field_name("name")
+        && let Some(base_clause) = first_named_descendant_of_kind(node, "base_class_clause")
+        && let Some(base_name) = first_named_descendant_of_kind(base_clause, "type_identifier")
+            .or_else(|| first_named_descendant_of_kind(base_clause, "qualified_identifier"))
+    {
+        facts.push(ExtractedFact {
+            subject: format!("Class:{}", class_name.utf8_text(source)?),
+            predicate: "extends".to_string(),
+            object: format!("Class:{}", base_name.utf8_text(source)?),
+        });
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_cpp_extends_facts(child, source, facts)?;
     }
     Ok(())
 }
