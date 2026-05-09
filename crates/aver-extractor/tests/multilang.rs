@@ -213,6 +213,21 @@ fn extract_typescript_facts_emit_class_implements_triple() {
 }
 
 #[test]
+fn extract_go_facts_emit_struct_embedding_extends_triple() {
+    let facts = extract_go_facts(
+        "store.go",
+        "package memory\ntype BaseStore struct {}\ntype Store struct { BaseStore }",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Struct:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Struct:BaseStore".to_string(),
+    }));
+}
+
+#[test]
 fn extract_go_facts_emit_interface_extends_triple() {
     let facts = extract_go_facts(
         "memory.go",

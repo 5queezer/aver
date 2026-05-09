@@ -371,6 +371,17 @@ pub fn extract_go_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, 
         extract_go_interfaces(source)?,
     ));
     facts.extend(extract_go_extends_facts(source)?);
+    facts.extend(extract_go_struct_embedding_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_go_struct_embedding_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let structs = extract_go_structs(source)?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let tree = parse_with_language(source, tree_sitter_go::language())?;
+    let mut facts = Vec::new();
+    collect_go_struct_embedding_facts(tree.root_node(), source.as_bytes(), &structs, &mut facts)?;
     Ok(facts)
 }
 
@@ -2055,6 +2066,39 @@ fn collect_kotlin_prefixed_type_names(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_kotlin_prefixed_type_names(child, source, prefix, names)?;
+    }
+    Ok(())
+}
+
+fn collect_go_struct_embedding_facts(
+    node: Node<'_>,
+    source: &[u8],
+    structs: &HashSet<String>,
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "type_spec"
+        && let Some(struct_node) = node.child_by_field_name("type")
+        && struct_node.kind() == "struct_type"
+        && let Some(struct_name) = node.child_by_field_name("name")
+    {
+        let struct_name = struct_name.utf8_text(source)?;
+        let mut embedded = Vec::new();
+        collect_descendant_texts(struct_node, source, &["type_identifier"], &mut embedded)?;
+        facts.extend(
+            embedded
+                .into_iter()
+                .filter(|base| base != struct_name && structs.contains(base))
+                .map(|base| ExtractedFact {
+                    subject: format!("Struct:{struct_name}"),
+                    predicate: "extends".to_string(),
+                    object: format!("Struct:{base}"),
+                }),
+        );
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_go_struct_embedding_facts(child, source, structs, facts)?;
     }
     Ok(())
 }
