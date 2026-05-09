@@ -1918,8 +1918,8 @@ fn collect_ruby_extends_facts(
     if node.kind() == "class"
         && let Some(class_name) = node.child_by_field_name("name")
         && let Some(superclass) = node.child_by_field_name("superclass")
-        && let Some(base_name) = first_named_descendant_of_kind(superclass, "constant")
-            .or_else(|| first_named_descendant_of_kind(superclass, "scope_resolution"))
+        && let Some(base_name) = first_named_descendant_of_kind(superclass, "scope_resolution")
+            .or_else(|| first_named_descendant_of_kind(superclass, "constant"))
     {
         facts.push(ExtractedFact {
             subject: format!("Class:{}", class_name.utf8_text(source)?),
