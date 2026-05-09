@@ -849,6 +849,14 @@ pub fn extract_php_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>,
     ));
     facts.extend(extract_php_extends_facts(source)?);
     facts.extend(extract_php_implements_facts(source)?);
+    facts.extend(extract_php_trait_use_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_php_trait_use_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let tree = parse_with_language(source, tree_sitter_php::language_php())?;
+    let mut facts = Vec::new();
+    collect_php_trait_use_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -1691,6 +1699,42 @@ fn collect_ruby_extends_facts(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_ruby_extends_facts(child, source, facts)?;
+    }
+    Ok(())
+}
+
+fn collect_php_trait_use_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "class_declaration"
+        && let Some(class_name) = node.child_by_field_name("name")
+        && let Some(body) = node.child_by_field_name("body")
+    {
+        let mut cursor = body.walk();
+        for child in body.children(&mut cursor) {
+            if child.kind() == "use_declaration" {
+                let mut trait_names = Vec::new();
+                collect_descendant_texts(
+                    child,
+                    source,
+                    &["name", "qualified_name"],
+                    &mut trait_names,
+                )?;
+                let subject = format!("Class:{}", class_name.utf8_text(source)?);
+                facts.extend(trait_names.into_iter().map(|trait_name| ExtractedFact {
+                    subject: subject.clone(),
+                    predicate: "uses".to_string(),
+                    object: format!("Trait:{trait_name}"),
+                }));
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_php_trait_use_facts(child, source, facts)?;
     }
     Ok(())
 }

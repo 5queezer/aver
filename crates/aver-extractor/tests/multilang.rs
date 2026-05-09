@@ -980,6 +980,21 @@ fn extract_ruby_facts_emit_class_extends_triple() {
 }
 
 #[test]
+fn extract_php_facts_emit_class_uses_trait_triple() {
+    let facts = extract_php_facts(
+        "Store.php",
+        "<?php trait RecordsMemory {} class Store { use RecordsMemory; }",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "uses".to_string(),
+        object: "Trait:RecordsMemory".to_string(),
+    }));
+}
+
+#[test]
 fn extract_ruby_modules_and_php_traits_emit_definition_facts() {
     let ruby = "module Memory\nend";
     assert_eq!(
