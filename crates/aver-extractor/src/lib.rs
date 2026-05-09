@@ -929,6 +929,14 @@ pub fn extract_swift_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact
         "Protocol",
         extract_swift_protocols(source)?,
     ));
+    facts.extend(extract_swift_extends_facts(source)?);
+    Ok(facts)
+}
+
+fn extract_swift_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let tree = parse_with_language(source, tree_sitter_swift::language())?;
+    let mut facts = Vec::new();
+    collect_swift_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
     Ok(facts)
 }
 
@@ -1324,6 +1332,36 @@ fn collect_type_definition_aliases(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_type_definition_aliases(child, source, aliases)?;
+    }
+    Ok(())
+}
+
+fn collect_swift_extends_facts(
+    node: Node<'_>,
+    source: &[u8],
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    if node.kind() == "class_declaration"
+        && node
+            .child_by_field_name("declaration_kind")
+            .is_some_and(|kind| {
+                kind.utf8_text(source)
+                    .is_ok_and(|text| matches!(text, "class" | "actor"))
+            })
+        && let Some(class_name) = node.child_by_field_name("name")
+        && let Some(inheritance) = first_named_descendant_of_kind(node, "inheritance_specifier")
+        && let Some(base_name) = inheritance.child_by_field_name("inherits_from")
+    {
+        facts.push(ExtractedFact {
+            subject: format!("Class:{}", class_name.utf8_text(source)?),
+            predicate: "extends".to_string(),
+            object: format!("Class:{}", base_name.utf8_text(source)?),
+        });
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_swift_extends_facts(child, source, facts)?;
     }
     Ok(())
 }
