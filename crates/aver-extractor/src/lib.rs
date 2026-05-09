@@ -1739,7 +1739,7 @@ fn collect_ruby_include_names(
     if node.kind() == "call"
         && matches!(
             node.utf8_text(source)?.split_whitespace().next(),
-            Some("include" | "prepend")
+            Some("include" | "prepend" | "extend")
         )
     {
         collect_descendant_texts(node, source, &["constant"], names)?;

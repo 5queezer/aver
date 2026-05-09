@@ -1052,6 +1052,21 @@ fn extract_php_facts_emit_class_uses_trait_triple() {
 }
 
 #[test]
+fn extract_ruby_facts_emit_class_extends_module_triple() {
+    let facts = extract_ruby_facts(
+        "store.rb",
+        "module Auditable\nend\nclass Store\n  extend Auditable\nend",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Module:Auditable".to_string(),
+    }));
+}
+
+#[test]
 fn extract_ruby_facts_emit_class_prepends_module_triple() {
     let facts = extract_ruby_facts(
         "store.rb",
