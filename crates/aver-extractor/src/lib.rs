@@ -2635,13 +2635,13 @@ fn collect_function_names(
 
 fn collect_imports(node: Node<'_>, source: &[u8], imports: &mut Vec<String>) -> Result<(), Error> {
     if node.kind() == "use_declaration" {
-        let text = node.utf8_text(source)?;
-        imports.push(
-            text.trim()
-                .trim_start_matches("use ")
-                .trim_end_matches(';')
-                .to_string(),
-        );
+        let text = node
+            .utf8_text(source)?
+            .trim()
+            .trim_start_matches("use ")
+            .trim_end_matches(';')
+            .trim();
+        imports.extend(expand_rust_use_declaration(text));
     }
 
     let mut cursor = node.walk();
@@ -2649,6 +2649,58 @@ fn collect_imports(node: Node<'_>, source: &[u8], imports: &mut Vec<String>) -> 
         collect_imports(child, source, imports)?;
     }
     Ok(())
+}
+
+fn expand_rust_use_declaration(declaration: &str) -> Vec<String> {
+    if let Some(brace_pos) = declaration.find("::{") {
+        let (prefix, rest) = declaration.split_at(brace_pos);
+        if let Some(suffix_end) = rest.rfind('}') {
+            let suffix = &rest[3..suffix_end];
+            let mut expanded = Vec::new();
+            for item in split_top_level_commas(suffix) {
+                let item = item.trim();
+                if item.is_empty() {
+                    continue;
+                }
+
+                if item == "self" {
+                    expanded.push(prefix.to_string());
+                    continue;
+                }
+
+                let (item, _) = item
+                    .split_once(" as ")
+                    .map_or((item, ""), |(item, alias)| (item, alias));
+                let item = item.trim();
+                expanded.push(format!("{}::{}", prefix, item));
+            }
+
+            return expanded;
+        }
+    }
+
+    vec![declaration.to_string()]
+}
+
+fn split_top_level_commas(text: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+
+    for (idx, ch) in text.char_indices() {
+        match ch {
+            '{' | '[' | '(' => depth += 1,
+            '}' | ']' | ')' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(&text[start..idx]);
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+
+    parts.push(&text[start..]);
+    parts
 }
 
 fn collect_calls(node: Node<'_>, source: &[u8], calls: &mut Vec<String>) -> Result<(), Error> {
