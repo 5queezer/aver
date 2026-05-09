@@ -1941,8 +1941,13 @@ fn collect_java_implements_facts(
     source: &[u8],
     facts: &mut Vec<ExtractedFact>,
 ) -> Result<(), Error> {
-    if node.kind() == "class_declaration"
-        && let Some(class_name) = node.child_by_field_name("name")
+    let type_kind = match node.kind() {
+        "class_declaration" => Some("Class"),
+        "record_declaration" => Some("Record"),
+        _ => None,
+    };
+    if let Some(type_kind) = type_kind
+        && let Some(type_name) = node.child_by_field_name("name")
         && let Some(interfaces) = node.child_by_field_name("interfaces")
     {
         let mut interface_names = Vec::new();
@@ -1952,7 +1957,7 @@ fn collect_java_implements_facts(
             &["type_identifier", "identifier"],
             &mut interface_names,
         )?;
-        let subject = format!("Class:{}", class_name.utf8_text(source)?);
+        let subject = format!("{}:{}", type_kind, type_name.utf8_text(source)?);
         facts.extend(
             interface_names
                 .into_iter()
