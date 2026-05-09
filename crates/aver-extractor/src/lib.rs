@@ -529,12 +529,22 @@ pub fn extract_ruby_classes(source: &str) -> Result<Vec<String>, Error> {
     collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["class"])
 }
 
+pub fn extract_ruby_modules(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_ruby::language())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["module"])
+}
+
 pub fn extract_ruby_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
     let mut facts = definition_facts(path, "Function", extract_ruby_functions(source)?);
     facts.extend(definition_facts(
         path,
         "Class",
         extract_ruby_classes(source)?,
+    ));
+    facts.extend(definition_facts(
+        path,
+        "Module",
+        extract_ruby_modules(source)?,
     ));
     Ok(facts)
 }
@@ -567,6 +577,11 @@ pub fn extract_php_enums(source: &str) -> Result<Vec<String>, Error> {
     collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["enum_declaration"])
 }
 
+pub fn extract_php_traits(source: &str) -> Result<Vec<String>, Error> {
+    let tree = parse_with_language(source, tree_sitter_php::language_php())?;
+    collect_names_from_kinds(tree.root_node(), source.as_bytes(), &["trait_declaration"])
+}
+
 pub fn extract_php_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
     let mut facts = definition_facts(path, "Function", extract_php_functions(source)?);
     facts.extend(definition_facts(
@@ -580,6 +595,7 @@ pub fn extract_php_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>,
         extract_php_interfaces(source)?,
     ));
     facts.extend(definition_facts(path, "Enum", extract_php_enums(source)?));
+    facts.extend(definition_facts(path, "Trait", extract_php_traits(source)?));
     Ok(facts)
 }
 
