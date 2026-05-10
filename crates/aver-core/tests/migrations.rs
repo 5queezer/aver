@@ -211,6 +211,29 @@ fn claims_source_refs_must_not_be_empty() {
 }
 
 #[test]
+fn claims_source_refs_text_elements_must_not_be_blank() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let valid_id = store
+        .add_claim("Aver", "uses", "SQLite", "test")
+        .expect("valid source_refs produced by Store should insert");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "UPDATE claims SET source_refs = '[\"test\", \"   \"]' WHERE id = ?1",
+            [valid_id],
+        )
+        .expect_err("blank source_refs elements should be rejected");
+    assert!(
+        err.to_string()
+            .contains("claims.source_refs elements must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn observations_source_event_ids_must_be_valid_json_array() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
