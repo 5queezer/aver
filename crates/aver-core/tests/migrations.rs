@@ -157,3 +157,50 @@ fn claims_source_refs_must_be_valid_json_array() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn observations_source_event_ids_must_be_valid_json_array() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let event_id = store
+        .record_event("session-1", "user_message", "safe payload", "test")
+        .expect("event insert should succeed");
+    let observation_id = store
+        .record_observation(
+            "session-1",
+            "Aver remembers schema facts.",
+            aver_core::ObservationRelevance::High,
+            &[event_id],
+            "observer",
+        )
+        .expect("valid source_event_ids produced by Store should insert");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
+                                       agent_id, agent_kind, derivation, ts)
+             VALUES ('bad-json', 'session-1', 'bad', 'high', 'not-json',
+                     'observer', 'LLM', 'test', 0)",
+            [],
+        )
+        .expect_err("invalid JSON source_event_ids should be rejected");
+    assert!(
+        err.to_string()
+            .contains("observations.source_event_ids must be a JSON array"),
+        "unexpected error: {err}"
+    );
+
+    let err = conn
+        .execute(
+            "UPDATE observations SET source_event_ids = '{\"not\":\"an array\"}' WHERE id = ?1",
+            [observation_id],
+        )
+        .expect_err("non-array JSON source_event_ids should be rejected");
+    assert!(
+        err.to_string()
+            .contains("observations.source_event_ids must be a JSON array"),
+        "unexpected error: {err}"
+    );
+}

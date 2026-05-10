@@ -87,6 +87,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0012_source_refs_json_checks",
         include_str!("../../../migrations/0012_source_refs_json_checks.sql"),
     ),
+    (
+        "0013_observation_source_event_ids_json_checks",
+        include_str!("../../../migrations/0013_observation_source_event_ids_json_checks.sql"),
+    ),
 ];
 
 /// Canonical embedding dimension for the `vec0` ANN index (ADR-0017
