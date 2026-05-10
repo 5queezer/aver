@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use base64::Engine;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -23,6 +23,102 @@ pub struct RegisteredClient {
 pub struct TokenPair {
     pub access_token: String,
     pub refresh_token: String,
+}
+
+/// Origin of an end user's identity record.
+///
+/// Slice 1 of ADR-0020 only persists `Local` users. The `Header` and `Oidc`
+/// variants are reserved for later slices that introduce reverse-proxy and
+/// OIDC-backed identity sources; they are not yet emitted or consumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UserKind {
+    /// Locally-authenticated user (the only kind written today).
+    Local,
+    /// Reserved: identity asserted by a trusted reverse-proxy header.
+    Header,
+    /// Reserved: identity from an OIDC issuer, identified by the issuer URL.
+    Oidc(String),
+}
+
+impl UserKind {
+    /// Encodes the kind into the two columns persisted in `users`:
+    /// `(kind, external_id)`.
+    fn to_columns(&self) -> (&'static str, Option<String>) {
+        match self {
+            UserKind::Local => ("local", None),
+            UserKind::Header => ("header", None),
+            UserKind::Oidc(issuer) => ("oidc", Some(issuer.clone())),
+        }
+    }
+
+    fn from_columns(kind: &str, external_id: Option<String>) -> anyhow::Result<Self> {
+        match kind {
+            "local" => Ok(UserKind::Local),
+            "header" => Ok(UserKind::Header),
+            "oidc" => {
+                let issuer = external_id
+                    .ok_or_else(|| anyhow::anyhow!("oidc user is missing external_id"))?;
+                Ok(UserKind::Oidc(issuer))
+            }
+            other => anyhow::bail!("unknown user kind {other:?}"),
+        }
+    }
+}
+
+/// Aver end user record. Time fields are seconds since the UNIX epoch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct User {
+    pub id: String,
+    pub kind: UserKind,
+    pub external_id: Option<String>,
+    pub created_at: i64,
+}
+
+/// Per-user, per-OAuth-client consent grant.
+///
+/// `granted_scopes` is a list of OAuth scope strings; persisted as a single
+/// space-separated string to match the OAuth scope convention.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientConsent {
+    pub user_id: String,
+    pub client_id: String,
+    pub granted_scopes: Vec<String>,
+    pub granted_at: i64,
+    pub last_used_at: Option<i64>,
+    pub revoked_at: Option<i64>,
+}
+
+/// Browser session bound to a user.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Session {
+    pub id: String,
+    pub user_id: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+}
+
+fn now_unix() -> i64 {
+    time::OffsetDateTime::now_utc().unix_timestamp()
+}
+
+fn encode_scopes(scopes: &[String]) -> String {
+    scopes.join(" ")
+}
+
+fn decode_scopes(raw: &str) -> Vec<String> {
+    raw.split_ascii_whitespace().map(str::to_string).collect()
+}
+
+/// Generates a 256-bit random session identifier.
+///
+/// Two `uuid::Uuid::new_v4()` values are concatenated (32 bytes total) and
+/// encoded as URL-safe base64 without padding. UUID v4 uses OS-provided
+/// randomness, so this matches the entropy budget the brief calls for.
+fn random_session_id() -> String {
+    let mut bytes = [0u8; 32];
+    bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    bytes[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
 pub struct AuthDb {
@@ -64,6 +160,32 @@ impl AuthDb {
                 token_hash TEXT PRIMARY KEY,
                 user_id    TEXT NOT NULL,
                 created_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS users (
+                id          TEXT PRIMARY KEY,
+                kind        TEXT NOT NULL,
+                external_id TEXT,
+                created_at  INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS client_consents (
+                user_id         TEXT NOT NULL,
+                client_id       TEXT NOT NULL,
+                granted_scopes  TEXT NOT NULL,
+                granted_at      INTEGER NOT NULL,
+                last_used_at    INTEGER,
+                revoked_at      INTEGER,
+                PRIMARY KEY (user_id, client_id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS sessions (
+                id         TEXT PRIMARY KEY,
+                user_id    TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id)
             );",
         )?;
         // Migrate existing DBs that lack the new columns (SQLite returns an
@@ -277,5 +399,220 @@ impl AuthDb {
             Some(row) => Some(row.get(0)?),
             None => None,
         })
+    }
+
+    /// Inserts the user if absent or updates `kind`/`external_id` in place.
+    ///
+    /// `created_at` is preserved on update so existing records are not
+    /// retro-dated. The supplied `User` is stored verbatim on insert.
+    pub fn upsert_user(&self, user: &User) -> anyhow::Result<()> {
+        anyhow::ensure!(!user.id.trim().is_empty(), "user id is required");
+        anyhow::ensure!(user.created_at > 0, "user created_at must be positive");
+        let (kind_str, encoded_external_id) = user.kind.to_columns();
+        // Prefer the encoded external_id from the kind variant when present
+        // (e.g. Oidc carries the issuer), otherwise fall back to the explicit
+        // field so callers that build a `User` by hand still round-trip.
+        let external_id = encoded_external_id.or_else(|| user.external_id.clone());
+        self.conn.execute(
+            "INSERT INTO users (id, kind, external_id, created_at)
+                  VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET
+                  kind = excluded.kind,
+                  external_id = excluded.external_id",
+            params![user.id, kind_str, external_id, user.created_at],
+        )?;
+        Ok(())
+    }
+
+    /// Loads a user by id, or returns `None` if no such user exists.
+    pub fn get_user(&self, user_id: &str) -> anyhow::Result<Option<User>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, kind, external_id, created_at FROM users WHERE id = ?1",
+                [user_id],
+                |row| {
+                    let id: String = row.get(0)?;
+                    let kind: String = row.get(1)?;
+                    let external_id: Option<String> = row.get(2)?;
+                    let created_at: i64 = row.get(3)?;
+                    Ok((id, kind, external_id, created_at))
+                },
+            )
+            .optional()?;
+        let Some((id, kind, external_id, created_at)) = row else {
+            return Ok(None);
+        };
+        let user_kind = UserKind::from_columns(&kind, external_id.clone())?;
+        Ok(Some(User {
+            id,
+            kind: user_kind,
+            external_id,
+            created_at,
+        }))
+    }
+
+    /// Records (or refreshes) a client's consent for a user.
+    ///
+    /// On update, `granted_scopes` and `granted_at` are overwritten and any
+    /// prior `revoked_at` is cleared, modelling re-grant after revocation.
+    /// `last_used_at` is left untouched here; advance it via
+    /// [`AuthDb::touch_consent_last_used`].
+    pub fn record_consent(
+        &self,
+        user_id: &str,
+        client_id: &str,
+        granted_scopes: &[String],
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(!user_id.trim().is_empty(), "user_id is required");
+        anyhow::ensure!(!client_id.trim().is_empty(), "client_id is required");
+        let now = now_unix();
+        let scopes = encode_scopes(granted_scopes);
+        self.conn.execute(
+            "INSERT INTO client_consents
+                    (user_id, client_id, granted_scopes, granted_at, last_used_at, revoked_at)
+                  VALUES (?1, ?2, ?3, ?4, NULL, NULL)
+             ON CONFLICT(user_id, client_id) DO UPDATE SET
+                    granted_scopes = excluded.granted_scopes,
+                    granted_at = excluded.granted_at,
+                    revoked_at = NULL",
+            params![user_id, client_id, scopes, now],
+        )?;
+        Ok(())
+    }
+
+    /// Loads the consent record for a `(user, client)` pair, if any.
+    ///
+    /// Returns `Some` even when the record has been revoked; callers are
+    /// expected to inspect `revoked_at` to decide whether the grant is live.
+    pub fn get_consent(
+        &self,
+        user_id: &str,
+        client_id: &str,
+    ) -> anyhow::Result<Option<ClientConsent>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT user_id, client_id, granted_scopes, granted_at, last_used_at, revoked_at
+                   FROM client_consents
+                  WHERE user_id = ?1 AND client_id = ?2",
+                params![user_id, client_id],
+                |row| {
+                    let user_id: String = row.get(0)?;
+                    let client_id: String = row.get(1)?;
+                    let scopes: String = row.get(2)?;
+                    let granted_at: i64 = row.get(3)?;
+                    let last_used_at: Option<i64> = row.get(4)?;
+                    let revoked_at: Option<i64> = row.get(5)?;
+                    Ok((
+                        user_id,
+                        client_id,
+                        scopes,
+                        granted_at,
+                        last_used_at,
+                        revoked_at,
+                    ))
+                },
+            )
+            .optional()?;
+        Ok(row.map(
+            |(user_id, client_id, scopes, granted_at, last_used_at, revoked_at)| ClientConsent {
+                user_id,
+                client_id,
+                granted_scopes: decode_scopes(&scopes),
+                granted_at,
+                last_used_at,
+                revoked_at,
+            },
+        ))
+    }
+
+    /// Marks a consent record as revoked at the current time. No-op if the
+    /// `(user, client)` pair has never been granted.
+    pub fn revoke_consent(&self, user_id: &str, client_id: &str) -> anyhow::Result<()> {
+        let now = now_unix();
+        self.conn.execute(
+            "UPDATE client_consents
+                SET revoked_at = ?3
+              WHERE user_id = ?1 AND client_id = ?2",
+            params![user_id, client_id, now],
+        )?;
+        Ok(())
+    }
+
+    /// Advances `last_used_at` to the current time for an active consent.
+    /// No-op if no matching record exists.
+    pub fn touch_consent_last_used(&self, user_id: &str, client_id: &str) -> anyhow::Result<()> {
+        let now = now_unix();
+        self.conn.execute(
+            "UPDATE client_consents
+                SET last_used_at = ?3
+              WHERE user_id = ?1 AND client_id = ?2",
+            params![user_id, client_id, now],
+        )?;
+        Ok(())
+    }
+
+    /// Creates a new browser session with a 256-bit random id.
+    ///
+    /// `ttl_secs` must be positive. The returned [`Session`] carries the
+    /// generated id; callers persist it client-side as a cookie value.
+    pub fn create_session(&self, user_id: &str, ttl_secs: i64) -> anyhow::Result<Session> {
+        anyhow::ensure!(!user_id.trim().is_empty(), "user_id is required");
+        anyhow::ensure!(ttl_secs > 0, "session ttl must be positive");
+        let id = random_session_id();
+        let created_at = now_unix();
+        let expires_at = created_at + ttl_secs;
+        self.conn.execute(
+            "INSERT INTO sessions (id, user_id, created_at, expires_at)
+                  VALUES (?1, ?2, ?3, ?4)",
+            params![id, user_id, created_at, expires_at],
+        )?;
+        Ok(Session {
+            id,
+            user_id: user_id.to_string(),
+            created_at,
+            expires_at,
+        })
+    }
+
+    /// Returns the session if it exists and has not yet expired.
+    ///
+    /// Expired sessions are reported as `None` without being deleted; pruning
+    /// is a separate concern.
+    pub fn get_session(&self, session_id: &str) -> anyhow::Result<Option<Session>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, user_id, created_at, expires_at FROM sessions WHERE id = ?1",
+                [session_id],
+                |row| {
+                    let id: String = row.get(0)?;
+                    let user_id: String = row.get(1)?;
+                    let created_at: i64 = row.get(2)?;
+                    let expires_at: i64 = row.get(3)?;
+                    Ok(Session {
+                        id,
+                        user_id,
+                        created_at,
+                        expires_at,
+                    })
+                },
+            )
+            .optional()?;
+        let Some(session) = row else {
+            return Ok(None);
+        };
+        if now_unix() >= session.expires_at {
+            return Ok(None);
+        }
+        Ok(Some(session))
+    }
+
+    /// Removes a session. No-op if the id is unknown.
+    pub fn delete_session(&self, session_id: &str) -> anyhow::Result<()> {
+        self.conn
+            .execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
+        Ok(())
     }
 }
