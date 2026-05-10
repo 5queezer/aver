@@ -217,6 +217,27 @@ fn ontology_extension_agent_id_allows_only_portable_identifier_chars() {
 }
 
 #[test]
+fn ontology_extension_created_at_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
+             VALUES ('custom_predicate', 'relates_to', 'agent', 0)",
+            [],
+        )
+        .expect_err("ontology extension timestamps should be positive");
+    assert!(
+        err.to_string()
+            .contains("ontology_extension_log.created_at must be positive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_entity_type_closure_table() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");

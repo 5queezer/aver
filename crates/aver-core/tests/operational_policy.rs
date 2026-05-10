@@ -260,7 +260,7 @@ fn replay_walks_rotated_logs_in_numeric_order() {
     // Manually craft two rotated logs and an active log with claims 1, 2, 3.
     let make_line = |id: i64, subject: &str| {
         format!(
-            r#"{{"kind":"add_claim","ts":0,"claim_id":{id},"subject":"{subject}","predicate":"p","object":"o","source":"s","agent_id":"local","agent_kind":"HUMAN","confidence":1.0}}"#
+            r#"{{"kind":"add_claim","ts":1,"claim_id":{id},"subject":"{subject}","predicate":"p","object":"o","source":"s","agent_id":"local","agent_kind":"HUMAN","confidence":1.0}}"#
         )
     };
     use flate2::Compression;
