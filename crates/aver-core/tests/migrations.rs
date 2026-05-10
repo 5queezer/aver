@@ -855,7 +855,7 @@ fn vector_chunk_embedding_json_must_be_null_or_json_array() {
     let err = conn
         .execute(
             "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
-             VALUES (?1, 'bad', 'nomic-embed-text', 'not-json', 0)",
+             VALUES (?1, 'bad', 'nomic-embed-text', 'not-json', 1)",
             [claim_id],
         )
         .expect_err("invalid JSON embedding_json should be rejected");
@@ -868,7 +868,7 @@ fn vector_chunk_embedding_json_must_be_null_or_json_array() {
     let err = conn
         .execute(
             "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
-             VALUES (?1, 'bad', 'nomic-embed-text', '{\"not\":\"an array\"}', 0)",
+             VALUES (?1, 'bad', 'nomic-embed-text', '{\"not\":\"an array\"}', 1)",
             [claim_id],
         )
         .expect_err("non-array JSON embedding_json should be rejected");
@@ -891,7 +891,7 @@ fn vector_chunk_embedding_json_array_elements_must_be_numeric() {
     let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
     conn.execute(
         "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
-         VALUES (?1, 'ok', 'nomic-embed-text', '[0.1, 2, -3.5]', 0)",
+         VALUES (?1, 'ok', 'nomic-embed-text', '[0.1, 2, -3.5]', 1)",
         [claim_id],
     )
     .expect("numeric JSON array embedding_json should remain valid");
@@ -899,7 +899,7 @@ fn vector_chunk_embedding_json_array_elements_must_be_numeric() {
     let err = conn
         .execute(
             "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
-             VALUES (?1, 'bad', 'nomic-embed-text', '[0.1, \"not-a-number\"]', 0)",
+             VALUES (?1, 'bad', 'nomic-embed-text', '[0.1, \"not-a-number\"]', 1)",
             [claim_id],
         )
         .expect_err("non-numeric embedding_json elements should be rejected");
@@ -923,7 +923,7 @@ fn vector_chunk_embedding_json_must_not_be_empty_array() {
     let err = conn
         .execute(
             "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
-             VALUES (?1, 'bad', 'nomic-embed-text', '[]', 0)",
+             VALUES (?1, 'bad', 'nomic-embed-text', '[]', 1)",
             [claim_id],
         )
         .expect_err("empty embedding_json arrays should be rejected");
@@ -947,7 +947,7 @@ fn vector_chunk_text_must_not_be_blank() {
     let err = conn
         .execute(
             "INSERT INTO vector_chunks (claim_id, text, embedding_model, created_at)
-             VALUES (?1, '   ', 'nomic-embed-text', 0)",
+             VALUES (?1, '   ', 'nomic-embed-text', 1)",
             [claim_id],
         )
         .expect_err("blank vector chunk text should be rejected");
@@ -971,13 +971,37 @@ fn vector_chunk_embedding_model_must_not_be_blank() {
     let err = conn
         .execute(
             "INSERT INTO vector_chunks (claim_id, text, embedding_model, created_at)
-             VALUES (?1, 'valid chunk', '   ', 0)",
+             VALUES (?1, 'valid chunk', '   ', 1)",
             [claim_id],
         )
         .expect_err("blank embedding_model should be rejected");
     assert!(
         err.to_string()
             .contains("vector_chunks.embedding_model must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn vector_chunk_created_at_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let claim_id = store
+        .add_claim("Aver", "uses", "SQLite", "test")
+        .expect("claim insert should succeed");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO vector_chunks (claim_id, text, embedding_model, created_at)
+             VALUES (?1, 'valid chunk', 'nomic-embed-text', 0)",
+            [claim_id],
+        )
+        .expect_err("vector chunk timestamps must be positive");
+    assert!(
+        err.to_string()
+            .contains("vector_chunks.created_at must be positive"),
         "unexpected error: {err}"
     );
 }
