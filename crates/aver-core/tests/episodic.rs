@@ -623,6 +623,8 @@ fn recall_observation_returns_exact_source_events() {
         recalled.events[0].payload,
         "Build failed: E0425 cannot find function assemble_compaction_summary."
     );
+    assert_eq!(recalled.audit_status, None);
+    assert_eq!(recalled.prune_marker_id, None);
 }
 
 #[test]
@@ -970,6 +972,15 @@ fn recall_pruned_observation_includes_audit_marker_and_prune_status() {
             "mock-observer",
         )
         .unwrap();
+    let _high = store
+        .record_observation(
+            "session-1",
+            "Build stayed green after the observation layer shipped.",
+            ObservationRelevance::High,
+            &[event],
+            "mock-observer",
+        )
+        .unwrap();
 
     let pruned = store.prune_observations("session-1", 1).unwrap();
     assert_eq!(pruned, 1);
@@ -1000,5 +1011,8 @@ fn recall_pruned_observation_includes_audit_marker_and_prune_status() {
         "Build failed: E0425 cannot find function assemble_compaction_summary."
     );
     assert_eq!(recalled.audit_status.as_deref(), Some("pruned"));
-    assert_eq!(recalled.prune_marker_id.as_deref(), Some(marker_id.as_str()));
+    assert_eq!(
+        recalled.prune_marker_id.as_deref(),
+        Some(marker_id.as_str())
+    );
 }

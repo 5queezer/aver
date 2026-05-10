@@ -29,7 +29,8 @@ The goal is a trustworthy substrate for coding agents that can:
 - **Contradiction records and confidence decay** — contradictions are explicit audit records; consolidation can decay contradicted active claims and report merged/superseded/decayed counts.
 - **Deterministic code extraction** — `aver-extractor` uses Tree-sitter Rust to extract functions, imports, calls, structs, enums, traits, impl methods, tests, and code facts.
 - **Candidate claim workflow** — episodic events can produce staged claims that are promoted or rejected explicitly.
-- **Observation projections for compaction continuity** — episodic events can produce privacy-checked, source-backed observations, recallable by id and mechanically rendered into session compaction summaries without becoming durable claims.
+- **Observation continuity surfaces** — episodic events can produce privacy-checked, source-backed observations that are recallable by ID, summarized by compaction, and coverage-accounted across full session event ranges.
+- **Continuity reliability controls** — coverage accounting, deterministic `catch-up`, gap warnings in summaries, destructive prune operations blocked when gaps remain, prune markers preserved in logs, and audit-aware observation recall.
 - **MCP/OAuth server** — `aver-server` exposes memory tools over Streamable HTTP MCP behind a local OAuth-style token flow, including the ADR-0008 five-tool surface with validated recall/write/event/extraction-trigger parameters, observation projection tools, explicit unsupported-scope errors, persisted confidence overrides, and recall subgraphs with confidence floors.
 - **Evaluation harnesses** — fixture evaluation plus a BEAM100K runner using local Ollama for embeddings, answer generation, and judging.
 
@@ -89,6 +90,9 @@ The design maps to the ADRs:
 
 - **Episodic log** — chronological append-only record in `log.jsonl` and `events.jsonl`.
 - **Observation projection** — privacy-checked session-continuity observations over episodic events, with source-event provenance and mechanical compaction summaries.
+- **Observation coverage accounting** — `Store::observation_coverage()` computes covered/uncovered event IDs per session; uncovered IDs are exposed to callers and used to block unsafe pruning.
+- **Continuity blockers** — session summaries mark uncovered ranges explicitly, and pruning refuses to proceed until coverage gaps are resolved by catch-up projection.
+- **Prune markers + audit recall** — pruning emits append-only tombstones in `observations.jsonl`; pruned observations disappear from default views but remain recallable with audit metadata.
 - **Semantic graph** — durable claims/triples in SQLite.
 - **Ontology reasoner** — ADR-0010 entity and predicate hierarchies are seeded on open, materialized into closure tables, and used by graph expansion so abstract filters such as `depends_on` also match descendant predicates like `calls` and `imports`.
 - **Typed entities** — claim subjects/objects are projected into `entities` with prefix-based types such as `Function:*` and fallback `Thing` for unknown entities.
@@ -123,6 +127,23 @@ Current CLI commands:
 | `status` | Open the store and report readiness. |
 | `remember` | Append a user-asserted structured claim. |
 | `recall` | Search active claims by keyword. |
+| `record-event` | Record an episodic event with session/kind/payload and optional source. |
+| `should-extract-memories` | Check extraction trigger conditions for a session. |
+| `propose` | Propose a candidate claim from an event. |
+| `list-candidates` | List candidate claims with optional session/status filters. |
+| `promote` | Promote a candidate claim into durable memory. |
+| `reject` | Reject a candidate claim with a reason. |
+| `record-observation` | Record a session observation from source events. |
+| `recall-observation` | Recall an observation with its supporting event payloads and audit status. |
+| `observation-coverage` | Report event coverage and uncovered ranges for a session. |
+| `catch-up` | Run a deterministic catch-up projection over uncovered events. |
+| `compaction-summary` | Assemble a continuity summary including coverage gap warnings. |
+| `expand` | Expand an entity neighborhood from the local claim graph. |
+| `add-triple` | Append a confidence-bearing structured triple. |
+| `contradict` | Record a contradiction for a claim id and optional replacement claim. |
+| `consolidate` | Consolidate active duplicates/conflicts and apply confidence decay. |
+| `vacuum` | Run `VACUUM` (and optional analysis). |
+| `replay` | Rebuild SQLite from the append-only logs. |
 
 ## Server and MCP Usage
 
@@ -195,7 +216,12 @@ Operational triggered-memory tools are also exposed:
 - `reject_candidate_claim`
 - `record_observation`
 - `recall_observation`
+- `observation_coverage`
 - `assemble_compaction_summary`
+
+CLI-only continuity and maintenance surfaces (`catch-up`, `compaction-summary`) are implemented in `aver-cli`; MCP exposes core observation continuity read tools (`recall_observation`, `observation_coverage`, `assemble_compaction_summary`) and `record_observation`.
+
+Adapter boundaries are explicit in `aver-server` via the `adapters` module (`Pi`, `ClaudeCode`, `CodexOpenAi`, `OpenCode`, `Mcp`, `JsonlCliHarness`) so host runtimes can be added without leaking host-specific logic into `aver-core`.
 
 ## Evaluation
 
@@ -303,7 +329,7 @@ Implemented today:
 - graph expansion/traversal over active claim triples,
 - explicit contradiction records and confidence decay for contradicted active claims,
 - basic consolidation for duplicate/conflicting claims,
-- CLI `status`, `remember`, and `recall`,
+- CLI `status`, `remember`, `recall`, and observation continuity surfaces (`record-observation`, `recall-observation`, `observation-coverage`, `catch-up`, `compaction-summary`),
 - Tree-sitter Rust extraction,
 - structured prose fact parsing,
 - MCP/OAuth server with ADR-0008 recall/expand/add-triple/contradict/consolidate tools, staged candidate-claim workflow, and observation recall/compaction-summary tools,
@@ -313,6 +339,7 @@ Implemented today:
 Partial or planned:
 
 - sqlite-vss-backed nearest-neighbor virtual table integration beyond the current SQLite metadata plus JSON embedding storage,
+- adapter-boundary runtime integration crates/modules for Pi, Claude Code, Codex/OpenAI, OpenCode, MCP, and JSONL/CLI harnesses are defined by stable config/runtime types and adapter tests; runtime connectors remain partially implemented outside core types.
 - production shared-graph backend adapter beyond the current local connected-component community detection,
 - broader production packaging, signed releases, and release automation beyond the current installer/`just dist` workflow.
 

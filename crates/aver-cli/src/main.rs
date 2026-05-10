@@ -101,6 +101,18 @@ enum Command {
         id: String,
     },
 
+    /// Report coverage for a session's episodic events.
+    ObservationCoverage {
+        #[arg(long)]
+        session_id: String,
+    },
+
+    /// Run a deterministic catch-up pass over uncovered session events.
+    CatchUp {
+        #[arg(long)]
+        session_id: String,
+    },
+
     /// Assemble a compaction summary from current session observations.
     CompactionSummary {
         #[arg(long)]
@@ -300,6 +312,43 @@ fn main() -> anyhow::Result<()> {
             println!("observation={}", recall.observation.content);
             for event in recall.events {
                 println!("  event_id={} kind={}", event.id, event.kind);
+            }
+        }
+
+        Command::ObservationCoverage { session_id } => {
+            let coverage = store.observation_coverage(&session_id)?;
+            println!("event_ids={:?}", coverage.event_ids);
+            println!("covered_event_ids={:?}", coverage.covered_event_ids);
+            println!("uncovered_event_ids={:?}", coverage.uncovered_event_ids);
+        }
+
+        Command::CatchUp { session_id } => {
+            let coverage = store.observation_coverage(&session_id)?;
+            if coverage.uncovered_event_ids.is_empty() {
+                println!("catch_up=complete");
+            } else {
+                let events = store.list_events_for_session(&session_id)?;
+                let uncovered_events = events
+                    .into_iter()
+                    .filter(|event| coverage.uncovered_event_ids.contains(&event.id))
+                    .collect::<Vec<_>>();
+                let payloads = uncovered_events
+                    .iter()
+                    .map(|event| format!("{}:{}", event.id, event.payload))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                let content = format!(
+                    "Catch-up observation for session {session_id}: uncovered event ids {:?}; payloads: {payloads}",
+                    coverage.uncovered_event_ids
+                );
+                let observation_id = store.record_observation(
+                    &session_id,
+                    &content,
+                    ObservationRelevance::Medium,
+                    &coverage.uncovered_event_ids,
+                    "cli-catch-up",
+                )?;
+                println!("observation_id={observation_id}");
             }
         }
 

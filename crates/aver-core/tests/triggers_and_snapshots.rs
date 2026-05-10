@@ -67,6 +67,33 @@ fn extraction_decision_reports_richer_deterministic_trigger_reasons() {
 }
 
 #[test]
+fn extraction_decision_surfaces_uncovered_coverage_gap() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    store
+        .record_event(
+            "s1",
+            "user_message",
+            "first uncovered event",
+            "conversation",
+        )
+        .unwrap();
+    store
+        .record_event("s1", "assistant_action", "second uncovered event", "tool")
+        .unwrap();
+
+    let decision = store.extraction_decision("s1", 100, Some(1_000)).unwrap();
+
+    assert!(decision.should_extract);
+    assert!(
+        decision
+            .reasons
+            .contains(&ExtractionTriggerReason::UncoveredCoverageGap)
+    );
+}
+
+#[test]
 fn graph_drift_snapshot_includes_privacy_rejection_counts() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

@@ -196,6 +196,7 @@ pub enum ExtractionTriggerReason {
     ExplicitRemember,
     EventCountThreshold,
     ObservationTokenThreshold,
+    UncoveredCoverageGap,
     SessionEnd,
     Correction,
     CommitCompleted,

@@ -1356,6 +1356,13 @@ impl Store {
             }
         }
 
+        if observation_token_threshold.is_some() {
+            let coverage = self.observation_coverage(session_id)?;
+            if !coverage.uncovered_event_ids.is_empty() {
+                reasons.push(ExtractionTriggerReason::UncoveredCoverageGap);
+            }
+        }
+
         let event_count: usize = self.conn.query_row(
             "SELECT COUNT(*) FROM episodic_events WHERE session_id = ?1",
             [session_id],
