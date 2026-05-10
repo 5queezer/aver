@@ -140,7 +140,7 @@ Default configuration:
 | `AVER_PORT` | `3317` | Bind port. |
 | `AVER_BASE_URL` | `http://127.0.0.1:3317` | Public base URL used in OAuth metadata. |
 | `AVER_MEMORY_DIR` | `.aver` | Memory store directory. |
-| `AVER_AUTH_DB_PATH` | `aver-auth.db` | SQLite auth database path. |
+| `AVER_AUTH_DB_PATH` | `<AVER_MEMORY_DIR>/auth.db` | SQLite auth database path. |
 | `AVER_CORS_ORIGINS` | *(allow any origin)* | Optional comma-separated allowed origins for protected MCP CORS responses. |
 | `AVER_LOCAL_AUTHORIZATION_TOKEN` | *(unset)* | Local approval token required by `/oauth/authorize`; requests must include `approval_token=<token>`. When unset, authorization-code minting returns `401` so public registration cannot self-authorize memory access. |
 
