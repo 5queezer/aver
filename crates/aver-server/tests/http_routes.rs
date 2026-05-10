@@ -51,6 +51,7 @@ async fn oauth_token_route_exchanges_authorization_code_with_pkce() {
             "user-1",
             &pkce_s256_challenge(verifier),
             "http://localhost:8080/callback",
+            &[],
         )
         .unwrap();
     drop(db);
@@ -96,8 +97,12 @@ async fn protected_health_requires_bearer_token() {
     let dir = tempfile::tempdir().unwrap();
     let auth_db_path = dir.path().join("auth.db");
     let db = AuthDb::open(&auth_db_path).unwrap();
-    db.store_access_token_hash(&aver_server::auth::hash_token("secret-token"), "user-1")
-        .unwrap();
+    db.store_access_token_hash(
+        &aver_server::auth::hash_token("secret-token"),
+        "user-1",
+        &[],
+    )
+    .unwrap();
     drop(db);
 
     let config = ServerConfig {

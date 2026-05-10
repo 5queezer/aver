@@ -12,6 +12,7 @@ fn auth_code_exchange_issues_refresh_token_and_allows_refresh_grant() {
             "user-1",
             &aver_server::oauth::pkce_s256_challenge(verifier),
             redirect,
+            &[],
         )
         .unwrap();
 

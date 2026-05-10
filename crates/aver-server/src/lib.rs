@@ -5,4 +5,5 @@ pub mod http;
 pub mod mcp;
 pub mod oauth;
 pub mod origin;
+pub mod scopes;
 pub mod tools;

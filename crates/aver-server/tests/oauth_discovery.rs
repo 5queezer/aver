@@ -29,4 +29,15 @@ fn oauth_metadata_advertises_pkce_authorization_code_flow() {
         metadata["token_endpoint_auth_methods_supported"],
         serde_json::json!(["none"])
     );
+    assert_eq!(
+        metadata["scopes_supported"],
+        serde_json::json!([
+            "claims:read",
+            "claims:write",
+            "events:write",
+            "candidates:manage",
+            "observations:read",
+            "observations:write",
+        ]),
+    );
 }
