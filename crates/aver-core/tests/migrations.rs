@@ -238,6 +238,27 @@ fn ontology_extension_created_at_must_be_positive() {
 }
 
 #[test]
+fn ontology_extension_parent_must_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
+             VALUES ('custom_predicate', 'missing_parent', 'agent', 1)",
+            [],
+        )
+        .expect_err("ontology extension parents should exist in predicate_types");
+    assert!(
+        err.to_string()
+            .contains("ontology_extension_log.parent must exist in predicate_types"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_entity_type_closure_table() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
