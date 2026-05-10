@@ -1058,6 +1058,40 @@ fn claims_last_verified_at_must_be_positive_when_set() {
 }
 
 #[test]
+fn claims_last_verified_at_must_not_precede_created_at_when_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let valid_id = store
+        .add_claim("Aver", "uses", "SQLite", "test")
+        .expect("valid claim should insert");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.execute(
+        "UPDATE claims SET created_at = 10, last_verified_at = NULL WHERE id = ?1",
+        [valid_id],
+    )
+    .expect("null verification timestamp should remain valid");
+    conn.execute(
+        "UPDATE claims SET created_at = 10, last_verified_at = 10 WHERE id = ?1",
+        [valid_id],
+    )
+    .expect("verification at creation time should remain valid");
+
+    let err = conn
+        .execute(
+            "UPDATE claims SET created_at = 10, last_verified_at = 9 WHERE id = ?1",
+            [valid_id],
+        )
+        .expect_err("claim last_verified_at before created_at should be rejected when set");
+    assert!(
+        err.to_string()
+            .contains("claims.last_verified_at must be >= created_at when set"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn claims_agent_id_allows_only_portable_identifier_chars() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
