@@ -71,6 +71,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0008_privacy_rejections",
         include_str!("../../../migrations/0008_privacy_rejections.sql"),
     ),
+    (
+        "0009_value_range_checks",
+        include_str!("../../../migrations/0009_value_range_checks.sql"),
+    ),
 ];
 
 /// Local storage for Aver (ADR-0006).

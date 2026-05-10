@@ -1002,3 +1002,43 @@ fn add_claim_rejects_empty_source_before_log_write() {
     assert!(err.to_string().contains("source"));
     assert!(!dir.path().join("log.jsonl").exists());
 }
+
+#[test]
+fn migration_0009_rejects_out_of_range_confidence_and_invalid_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let valid_id = store
+        .add_claim_with_confidence("a", "rel", "b", "test_session", 0.7)
+        .expect("confidence 0.7 should be accepted by triggers");
+    assert_eq!(store.get_claim(valid_id).unwrap().confidence, 0.7);
+
+    drop(store);
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+
+    let err = conn
+        .execute(
+            "INSERT INTO claims (subject, predicate, object, source_refs, provenance, confidence, status, created_at, last_seen_at) \
+             VALUES ('a', 'rel', 'b', '[]', 'USER_ASSERTED', 1.5, 'ACTIVE', 0, 0)",
+            [],
+        )
+        .expect_err("confidence 1.5 should be rejected by trigger");
+    assert!(err.to_string().contains("confidence must be in [0, 1]"));
+
+    let err = conn
+        .execute(
+            "INSERT INTO claims (subject, predicate, object, source_refs, provenance, confidence, status, created_at, last_seen_at) \
+             VALUES ('a', 'rel', 'b', '[]', 'USER_ASSERTED', -0.1, 'ACTIVE', 0, 0)",
+            [],
+        )
+        .expect_err("confidence -0.1 should be rejected by trigger");
+    assert!(err.to_string().contains("confidence must be in [0, 1]"));
+
+    let err = conn
+        .execute(
+            "UPDATE claims SET status = 'BOGUS' WHERE id = ?1",
+            [valid_id],
+        )
+        .expect_err("status 'BOGUS' should be rejected by trigger");
+    assert!(err.to_string().contains("status must be"));
+}
