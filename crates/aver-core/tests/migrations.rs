@@ -1014,14 +1014,14 @@ fn claims_last_seen_at_must_not_precede_created_at() {
 
     let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
     conn.execute(
-        "UPDATE claims SET created_at = 10, last_seen_at = 10 WHERE id = ?1",
+        "UPDATE claims SET write_ts = 10, created_at = 10, last_seen_at = 10 WHERE id = ?1",
         [valid_id],
     )
     .expect("matching positive timestamps should remain valid");
 
     let err = conn
         .execute(
-            "UPDATE claims SET created_at = 10, last_seen_at = 9 WHERE id = ?1",
+            "UPDATE claims SET write_ts = 10, created_at = 10, last_seen_at = 9 WHERE id = ?1",
             [valid_id],
         )
         .expect_err("claim last_seen_at before created_at should be rejected");
@@ -1047,6 +1047,35 @@ fn claims_write_ts_must_be_positive() {
         .expect_err("non-positive claim write_ts should be rejected");
     assert!(
         err.to_string().contains("claims.write_ts must be positive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn claims_created_at_must_not_precede_write_ts() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let valid_id = store
+        .add_claim("Aver", "uses", "SQLite", "test")
+        .expect("valid claim should insert");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.execute(
+        "UPDATE claims SET write_ts = 10, created_at = 10 WHERE id = ?1",
+        [valid_id],
+    )
+    .expect("creation at write time should remain valid");
+
+    let err = conn
+        .execute(
+            "UPDATE claims SET write_ts = 10, created_at = 9 WHERE id = ?1",
+            [valid_id],
+        )
+        .expect_err("claim created_at before write_ts should be rejected");
+    assert!(
+        err.to_string()
+            .contains("claims.created_at must be >= write_ts"),
         "unexpected error: {err}"
     );
 }
@@ -1091,19 +1120,19 @@ fn claims_last_verified_at_must_not_precede_created_at_when_set() {
 
     let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
     conn.execute(
-        "UPDATE claims SET created_at = 10, last_verified_at = NULL WHERE id = ?1",
+        "UPDATE claims SET write_ts = 10, created_at = 10, last_verified_at = NULL WHERE id = ?1",
         [valid_id],
     )
     .expect("null verification timestamp should remain valid");
     conn.execute(
-        "UPDATE claims SET created_at = 10, last_verified_at = 10 WHERE id = ?1",
+        "UPDATE claims SET write_ts = 10, created_at = 10, last_verified_at = 10 WHERE id = ?1",
         [valid_id],
     )
     .expect("verification at creation time should remain valid");
 
     let err = conn
         .execute(
-            "UPDATE claims SET created_at = 10, last_verified_at = 9 WHERE id = ?1",
+            "UPDATE claims SET write_ts = 10, created_at = 10, last_verified_at = 9 WHERE id = ?1",
             [valid_id],
         )
         .expect_err("claim last_verified_at before created_at should be rejected when set");
