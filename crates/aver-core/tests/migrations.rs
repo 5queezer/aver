@@ -89,7 +89,7 @@ fn episodic_event_session_id_must_not_be_blank() {
     let err = conn
         .execute(
             "INSERT INTO episodic_events (session_id, kind, payload, source, agent_id, agent_kind, ts)
-             VALUES ('   ', 'message', 'payload', 'test', 'local', 'HUMAN', 0)",
+             VALUES ('   ', 'message', 'payload', 'test', 'local', 'HUMAN', 1)",
             [],
         )
         .expect_err("blank episodic event session_id should be rejected");
@@ -110,7 +110,7 @@ fn episodic_event_kind_must_not_be_blank() {
     let err = conn
         .execute(
             "INSERT INTO episodic_events (session_id, kind, payload, source, agent_id, agent_kind, ts)
-             VALUES ('session-1', '   ', 'payload', 'test', 'local', 'HUMAN', 0)",
+             VALUES ('session-1', '   ', 'payload', 'test', 'local', 'HUMAN', 1)",
             [],
         )
         .expect_err("blank episodic event kind should be rejected");
@@ -131,7 +131,7 @@ fn episodic_event_source_must_not_be_blank() {
     let err = conn
         .execute(
             "INSERT INTO episodic_events (session_id, kind, payload, source, agent_id, agent_kind, ts)
-             VALUES ('session-1', 'message', 'payload', '   ', 'local', 'HUMAN', 0)",
+             VALUES ('session-1', 'message', 'payload', '   ', 'local', 'HUMAN', 1)",
             [],
         )
         .expect_err("blank episodic event source should be rejected");
@@ -152,7 +152,7 @@ fn episodic_event_agent_id_must_not_be_blank() {
     let err = conn
         .execute(
             "INSERT INTO episodic_events (session_id, kind, payload, source, agent_id, agent_kind, ts)
-             VALUES ('session-1', 'message', 'payload', 'test', '   ', 'HUMAN', 0)",
+             VALUES ('session-1', 'message', 'payload', 'test', '   ', 'HUMAN', 1)",
             [],
         )
         .expect_err("blank episodic event agent_id should be rejected");
@@ -172,7 +172,7 @@ fn episodic_event_agent_id_allows_only_portable_identifier_chars() {
     let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
     conn.execute(
         "INSERT INTO episodic_events (session_id, kind, payload, source, agent_id, agent_kind, ts)
-         VALUES ('session-1', 'message', 'payload', 'test', 'agent_1-ok', 'HUMAN', 0)",
+         VALUES ('session-1', 'message', 'payload', 'test', 'agent_1-ok', 'HUMAN', 1)",
         [],
     )
     .expect("portable agent ids should remain valid");
@@ -180,13 +180,34 @@ fn episodic_event_agent_id_allows_only_portable_identifier_chars() {
     let err = conn
         .execute(
             "INSERT INTO episodic_events (session_id, kind, payload, source, agent_id, agent_kind, ts)
-             VALUES ('session-1', 'message', 'payload', 'test', 'bad id!', 'HUMAN', 0)",
+             VALUES ('session-1', 'message', 'payload', 'test', 'bad id!', 'HUMAN', 1)",
             [],
         )
         .expect_err("agent ids with spaces/punctuation should be rejected");
     assert!(
         err.to_string()
             .contains("episodic_events.agent_id contains invalid characters"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn episodic_event_timestamp_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO episodic_events (session_id, kind, payload, source, agent_id, agent_kind, ts)
+             VALUES ('session-1', 'message', 'payload', 'test', 'local', 'HUMAN', 0)",
+            [],
+        )
+        .expect_err("episodic event timestamps must be positive");
+    assert!(
+        err.to_string()
+            .contains("episodic_events.ts must be positive"),
         "unexpected error: {err}"
     );
 }
