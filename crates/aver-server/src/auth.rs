@@ -186,6 +186,11 @@ impl AuthDb {
                 created_at INTEGER NOT NULL,
                 expires_at INTEGER NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS server_secrets (
+                name  TEXT PRIMARY KEY,
+                value BLOB NOT NULL
             );",
         )?;
         // Migrate existing DBs that lack the new columns (SQLite returns an
@@ -250,6 +255,20 @@ impl AuthDb {
             client_name: row.get(1)?,
             redirect_uris: serde_json::from_str(&redirect_uris_json)?,
         }))
+    }
+
+    /// Returns the registration `created_at` of the named client, or `None`
+    /// if no such client exists. Used by the ADR-0020 consent screen.
+    pub fn client_created_at(&self, client_id: &str) -> anyhow::Result<Option<i64>> {
+        let row: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT created_at FROM oauth_clients WHERE client_id = ?1",
+                [client_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(row)
     }
 
     pub fn client_allows_redirect_uri(
@@ -614,5 +633,38 @@ impl AuthDb {
         self.conn
             .execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
         Ok(())
+    }
+
+    /// Returns the named 32-byte server secret, generating and persisting it
+    /// on first call. Used by ADR-0020 slice 2 for the anti-CSRF HMAC key.
+    pub fn get_or_create_server_secret(&self, name: &str) -> anyhow::Result<Vec<u8>> {
+        anyhow::ensure!(!name.trim().is_empty(), "secret name is required");
+        let existing: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT value FROM server_secrets WHERE name = ?1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(value) = existing {
+            return Ok(value);
+        }
+        // Two UUID v4 values (16 bytes each) give 32 bytes of OS-random entropy
+        // without requiring an extra dependency on `rand`.
+        let mut value = [0u8; 32];
+        value[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        value[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        self.conn.execute(
+            "INSERT OR IGNORE INTO server_secrets (name, value) VALUES (?1, ?2)",
+            params![name, value.as_slice()],
+        )?;
+        // Race-safe re-read: another connection may have inserted concurrently.
+        let stored: Vec<u8> = self.conn.query_row(
+            "SELECT value FROM server_secrets WHERE name = ?1",
+            [name],
+            |row| row.get(0),
+        )?;
+        Ok(stored)
     }
 }
