@@ -15,10 +15,10 @@ use crate::scopes::{Scope, required_scope_for_tool};
 use crate::tools::{
     AddTripleParams, AddVectorChunkParams, AssembleCompactionSummaryParams, AverTools,
     ConsolidateParams, ContradictParams, ExpandParams, ListCandidateClaimsParams,
-    PromoteCandidateClaimParams, ProposeCandidateClaimParams, RecallObservationParams,
-    RecallParams as CoreRecallParams, RecordEventParams, RecordObservationParams,
-    RejectCandidateClaimParams, RememberClaimParams as CoreRememberClaimParams,
-    ShouldExtractMemoriesParams,
+    ObservationCoverageParams, PromoteCandidateClaimParams, ProposeCandidateClaimParams,
+    RecallObservationParams, RecallParams as CoreRecallParams, RecordEventParams,
+    RecordObservationParams, RejectCandidateClaimParams,
+    RememberClaimParams as CoreRememberClaimParams, ShouldExtractMemoriesParams,
 };
 
 /// Looks up the scope required for `tool_name` and verifies the request's
@@ -404,6 +404,27 @@ impl AverMcpService {
         json_tool_result(result, "recall_observation")
     }
 
+    #[tool(description = "Report which session events are covered by observations.")]
+    async fn observation_coverage(
+        &self,
+        Parameters(params): Parameters<ObservationCoverageParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "observation_coverage")?;
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .observation_coverage(params);
+        json_tool_result(result, "observation_coverage")
+    }
+
     #[tool(description = "Mechanically assemble a compaction summary from current observations.")]
     async fn assemble_compaction_summary(
         &self,
@@ -510,7 +531,7 @@ impl ServerHandler for AverMcpService {
                     .with_icons(vec![Icon::new(icon_url).with_mime_type("image/svg+xml")]),
             )
             .with_instructions(
-                "Available tools: recall, expand, add_triple, contradict, consolidate, remember_claim, record_event, should_extract_memories, propose_candidate_claim, list_candidate_claims, promote_candidate_claim, reject_candidate_claim, record_observation, recall_observation, assemble_compaction_summary, add_vector_chunk.".to_string(),
+                "Available tools: recall, expand, add_triple, contradict, consolidate, remember_claim, record_event, should_extract_memories, propose_candidate_claim, list_candidate_claims, promote_candidate_claim, reject_candidate_claim, record_observation, recall_observation, observation_coverage, assemble_compaction_summary, add_vector_chunk.".to_string(),
             )
     }
 }

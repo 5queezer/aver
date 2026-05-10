@@ -137,6 +137,15 @@ pub struct ObservationDraft {
 pub struct ObservationRecall {
     pub observation: Observation,
     pub events: Vec<EpisodicEvent>,
+    pub audit_status: Option<String>,
+    pub prune_marker_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ObservationCoverage {
+    pub event_ids: Vec<i64>,
+    pub covered_event_ids: Vec<i64>,
+    pub uncovered_event_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone)]

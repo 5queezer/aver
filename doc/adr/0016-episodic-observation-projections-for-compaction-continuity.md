@@ -53,11 +53,15 @@ Observation generation must be implemented behind a pluggable boundary, analogou
 
 Every observation must pass the privacy filter before it is persisted. Secret-bearing or otherwise rejected observation content must not be written to SQLite, JSONL projection logs, checkpoint summaries, or downstream candidate claims.
 
-Aver may prune observations and checkpoints to fit a session-continuity budget. Pruning only affects derived projections. It must never delete or rewrite `events.jsonl`, `log.jsonl`, `episodic_events`, promoted claims, or candidate-claim audit history.
+Aver may prune observations and checkpoints to fit a session-continuity budget. Pruning only affects derived continuity surfaces. It must never delete or rewrite `events.jsonl`, `log.jsonl`, `episodic_events`, promoted claims, candidate-claim audit history, or the original observation records. Pruning decisions must be represented as append-only durable markers/tombstones so replay produces the same visible state: pruned observations are excluded from ordinary summaries and list views after the marker, while explicit audit recall can still recover the original observation, its supporting events, and the pruning marker.
+
+Aver should track observation coverage over episodic events. Automatic destructive continuity operations such as pruning, replacing detailed transcript context with a compacted summary, or agent-runtime compaction hooks must treat uncovered event gaps as hard blockers until a catch-up observer has attempted to cover the gap. Generated summaries should still be mechanically available for audit and manual use, but they must visibly report uncovered ranges and state that continuity is incomplete. User-forced/manual summaries may proceed with these warnings.
 
 Aver should expose recall-by-id for observations and checkpoint items. Given an observation or checkpoint id, the agent should be able to recover the supporting event ids and the exact source event content when available. This is a provenance tool, not semantic search.
 
-Triggering should extend the existing `should_extract_memories` surface rather than introduce an unrelated scheduler. New trigger reasons may include observation-token thresholds, event-count thresholds, session end, idle compaction, explicit remember events, user corrections, and commit completion.
+Triggering should extend the existing `should_extract_memories` surface rather than introduce an unrelated scheduler in core. New trigger reasons may include observation-token thresholds, uncovered coverage gaps, event-count thresholds, session end, idle compaction, explicit remember events, user corrections, and commit completion. Runtime-specific adapters may provide background schedulers or hooks for their host agent, but those adapters should call the core trigger/coverage primitives rather than duplicating policy.
+
+Aver should provide integration adapters outside `aver-core` for coding-agent runtimes. Pi, Claude Code, Codex/OpenAI coding agents, OpenCode, MCP clients, and generic JSONL/CLI harnesses should be able to record session events, run catch-up observation, request coverage-aware compaction summaries, and inject recall ids back into their own context-management mechanisms without making core storage depend on any one agent runtime.
 
 ## Consequences
 
@@ -66,7 +70,11 @@ Triggering should extend the existing `should_extract_memories` surface rather t
 - (+) Recall-by-id lets agents recover exact evidence behind compacted observations and checkpoints.
 - (+) Relevance-aware pruning can control prompt size while keeping critical corrections, durable user assertions, decisions, and concrete completions.
 - (+) The design aligns with ADR-0014: observations summarize events, while durable memory still flows through candidate claims and promoted graph claims.
-- (+) The projection can support Pi, Claude, Codex, MCP clients, and other harnesses without making Aver depend on a specific agent runtime.
+- (+) The projection can support Pi, Claude Code, Codex/OpenAI coding agents, OpenCode, MCP clients, and other harnesses without making Aver depend on a specific agent runtime.
+- (+) Append-only prune markers preserve auditability while allowing normal continuity prompts to stay within budget.
+- (+) Coverage-aware compaction prevents agents from silently treating uncovered transcript ranges as safely summarized.
+- (-) Runtime adapters add compatibility and packaging work across multiple agent hook/plugin systems.
+- (-) Durable prune markers add replay complexity because projection code must apply visibility state in log order.
 - (-) LLM-generated observations are not deterministic unless their outputs are recorded as auditable projection records. The implementation must choose and document whether observations are replayable projections or non-canonical caches.
 - (-) The system gains another state layer: event, observation, checkpoint, candidate claim, promoted claim.
 - (-) Bad observation extraction can omit useful working context or preserve too much noise. Evaluation needs to measure continuity quality separately from durable claim quality.
@@ -77,8 +85,12 @@ Triggering should extend the existing `should_extract_memories` surface rather t
 1. Add an `Observation` model and SQLite projection table keyed by stable ids.
 2. Add an `Observer` trait with deterministic/mock implementations for tests and optional live implementations outside the offline path.
 3. Store source-event provenance for every observation. Unsupported observations are rejected.
-4. Add `assemble_compaction_summary(session_id)` as a pure mechanical renderer over selected observations and checkpoint state.
-5. Add `recall_observation(id)` or equivalent MCP/CLI surface that returns the observation plus its supporting event content.
-6. Extend trigger reporting with observation/checkpoint reasons instead of creating a parallel trigger mechanism.
-7. Treat reflections from systems like `pi-observational-memory` as either regenerable checkpoint prose or candidate-claim input. Do not introduce a durable prose-reflection memory tier.
-8. Update evaluation fixtures to distinguish three questions: did the agent preserve session continuity, did candidate extraction propose supported claims, and did durable recall return promoted facts correctly?
+4. Add coverage accounting for which episodic event ids/ranges are represented by non-pruned observations.
+5. Add append-only prune/tombstone records and replay logic so pruned observations are hidden from ordinary continuity surfaces without erasing audit history.
+6. Add `assemble_compaction_summary(session_id)` as a pure mechanical renderer over selected observations and checkpoint state; include explicit uncovered-gap warnings when coverage is incomplete.
+7. Add catch-up observation before automatic compaction/pruning so uncovered ranges are observed or explicitly reported before context is discarded.
+8. Add `recall_observation(id)` or equivalent MCP/CLI surface that returns the observation plus its supporting event content and any prune marker affecting ordinary visibility.
+9. Extend trigger reporting with observation/checkpoint/coverage reasons instead of creating a parallel core trigger mechanism.
+10. Keep runtime adapters separate from `aver-core`; adapter crates or plugins for Pi, Claude Code, Codex/OpenAI coding agents, OpenCode, MCP, and generic JSONL/CLI harnesses should translate host hooks into core event, observation, coverage, and summary calls.
+11. Treat reflections from systems like `pi-observational-memory` as either regenerable checkpoint prose or candidate-claim input. Do not introduce a durable prose-reflection memory tier.
+12. Update evaluation fixtures to distinguish four questions: did the agent preserve session continuity, did coverage accounting prevent unsafe compaction gaps, did candidate extraction propose supported claims, and did durable recall return promoted facts correctly?

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use aver_core::{
     AgentKind, CandidateClaim, Claim, ContradictionRecord, EpisodicEvent, NewClaim, Observation,
-    ObservationRecall, ObservationRelevance, Store,
+    ObservationCoverage, ObservationRecall, ObservationRelevance, Store,
 };
 use serde::{Deserialize, Serialize};
 
@@ -147,6 +147,11 @@ pub struct RecordObservationParams {
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct ObservationCoverageParams {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RecallObservationParams {
     pub observation_id: String,
 }
@@ -218,6 +223,15 @@ pub struct ObservationView {
 pub struct ObservationRecallView {
     pub observation: ObservationView,
     pub events: Vec<EventView>,
+    pub audit_status: Option<String>,
+    pub prune_marker_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ObservationCoverageView {
+    pub event_ids: Vec<i64>,
+    pub covered_event_ids: Vec<i64>,
+    pub uncovered_event_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -343,6 +357,18 @@ impl From<ObservationRecall> for ObservationRecallView {
         Self {
             observation: recall.observation.into(),
             events: recall.events.into_iter().map(EventView::from).collect(),
+            audit_status: recall.audit_status,
+            prune_marker_id: recall.prune_marker_id,
+        }
+    }
+}
+
+impl From<ObservationCoverage> for ObservationCoverageView {
+    fn from(coverage: ObservationCoverage) -> Self {
+        Self {
+            event_ids: coverage.event_ids,
+            covered_event_ids: coverage.covered_event_ids,
+            uncovered_event_ids: coverage.uncovered_event_ids,
         }
     }
 }
@@ -606,6 +632,13 @@ impl AverTools {
             .store
             .recall_observation(&params.observation_id)?
             .into())
+    }
+
+    pub fn observation_coverage(
+        &self,
+        params: ObservationCoverageParams,
+    ) -> anyhow::Result<ObservationCoverageView> {
+        Ok(self.store.observation_coverage(&params.session_id)?.into())
     }
 
     pub fn assemble_compaction_summary(

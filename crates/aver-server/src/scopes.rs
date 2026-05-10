@@ -135,7 +135,7 @@ pub fn serialize_scope_list(scopes: &[Scope]) -> String {
 /// - `propose_candidate_claim`, `list_candidate_claims`,
 ///   `promote_candidate_claim`, `reject_candidate_claim`
 ///   → `candidates:manage`
-/// - `recall_observation`, `assemble_compaction_summary`
+/// - `recall_observation`, `observation_coverage`, `assemble_compaction_summary`
 ///   → `observations:read`
 /// - `record_observation` → `observations:write`
 pub fn required_scope_for_tool(tool: &str) -> Option<Scope> {
@@ -149,7 +149,9 @@ pub fn required_scope_for_tool(tool: &str) -> Option<Scope> {
         | "list_candidate_claims"
         | "promote_candidate_claim"
         | "reject_candidate_claim" => Scope::CandidatesManage,
-        "recall_observation" | "assemble_compaction_summary" => Scope::ObservationsRead,
+        "recall_observation" | "observation_coverage" | "assemble_compaction_summary" => {
+            Scope::ObservationsRead
+        }
         "record_observation" => Scope::ObservationsWrite,
         _ => return None,
     })
@@ -173,6 +175,7 @@ pub const ALL_TOOL_NAMES: &[&str] = &[
     "promote_candidate_claim",
     "reject_candidate_claim",
     "recall_observation",
+    "observation_coverage",
     "assemble_compaction_summary",
     "record_observation",
 ];

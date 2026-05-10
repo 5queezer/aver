@@ -15,8 +15,8 @@ pub use types::{
     AgentKind, CandidateClaim, CandidateClaimDraft, Claim, ClaimStatus, Community,
     ConsolidationReport, ContradictionRecord, EpisodicEvent, ExtractionDecision,
     ExtractionTriggerReason, GraphDriftSnapshot, GraphExpansion, NewClaim, Observation,
-    ObservationDraft, ObservationRecall, ObservationRelevance, Provenance, StorageMode,
-    VectorChunk,
+    ObservationCoverage, ObservationDraft, ObservationRecall, ObservationRelevance, Provenance,
+    StorageMode, VectorChunk,
 };
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -951,15 +951,31 @@ impl Store {
     ) -> Result<Vec<String>, Error> {
         let events = self.list_events_for_session(session_id)?;
         let drafts = observer.observe(&events)?;
+        let mut covered_event_ids = self
+            .observation_coverage(session_id)?
+            .covered_event_ids
+            .into_iter()
+            .collect::<HashSet<_>>();
         let mut ids = Vec::new();
+
         for draft in drafts {
-            ids.push(self.record_observation(
+            let uncovered_event_ids: Vec<i64> = draft
+                .source_event_ids
+                .into_iter()
+                .filter(|event_id| covered_event_ids.insert(*event_id))
+                .collect();
+            if uncovered_event_ids.is_empty() {
+                continue;
+            }
+
+            let id = self.record_observation(
                 session_id,
                 &draft.content,
                 draft.relevance,
-                &draft.source_event_ids,
+                &uncovered_event_ids,
                 &draft.derivation,
-            )?);
+            )?;
+            ids.push(id);
         }
         Ok(ids)
     }
@@ -1010,15 +1026,44 @@ impl Store {
         session_id: &str,
     ) -> Result<Vec<Observation>, Error> {
         validate_event_field("session_id", session_id)?;
+        let pruned_observation_ids = self.pruned_observation_ids_for_session(session_id)?;
         let mut stmt = self
             .conn
             .prepare("SELECT id FROM observations WHERE session_id = ?1 ORDER BY ts, id")?;
         let rows = stmt.query_map([session_id], |row| row.get::<_, String>(0))?;
         let mut observations = Vec::new();
         for row in rows {
-            observations.push(self.get_observation(&row?)?);
+            let id = row?;
+            if pruned_observation_ids.contains(&id) {
+                continue;
+            }
+            observations.push(self.get_observation(&id)?);
         }
         Ok(observations)
+    }
+
+    pub fn observation_coverage(&self, session_id: &str) -> Result<ObservationCoverage, Error> {
+        validate_event_field("session_id", session_id)?;
+        let event_ids: Vec<i64> = self
+            .list_events_for_session(session_id)?
+            .into_iter()
+            .map(|event| event.id)
+            .collect();
+        let covered: HashSet<i64> = self
+            .list_observations_for_session(session_id)?
+            .into_iter()
+            .flat_map(|observation| observation.source_event_ids)
+            .collect();
+        let (covered_event_ids, uncovered_event_ids) = event_ids
+            .iter()
+            .copied()
+            .partition(|event_id| covered.contains(event_id));
+
+        Ok(ObservationCoverage {
+            event_ids,
+            covered_event_ids,
+            uncovered_event_ids,
+        })
     }
 
     pub fn recall_observation(&self, id: &str) -> Result<ObservationRecall, Error> {
@@ -1027,10 +1072,61 @@ impl Store {
         for event_id in &observation.source_event_ids {
             events.push(self.get_event(*event_id)?);
         }
+        let prune_marker_id = self.prune_marker_id_for_observation(&observation.session_id, id)?;
+        let audit_status = prune_marker_id.as_ref().map(|_| "pruned".to_string());
         Ok(ObservationRecall {
             observation,
             events,
+            audit_status,
+            prune_marker_id,
         })
+    }
+
+    fn pruned_observation_ids_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<HashSet<String>, Error> {
+        validate_event_field("session_id", session_id)?;
+        let mut stmt = self.conn.prepare(
+            "SELECT pruned_observation_ids
+               FROM observation_prune_markers
+              WHERE session_id = ?1
+           ORDER BY ts, id",
+        )?;
+        let rows = stmt.query_map([session_id], |row| row.get::<_, String>(0))?;
+        let mut pruned_observation_ids = HashSet::new();
+        for row in rows {
+            let ids_json = row?;
+            let ids: Vec<String> = serde_json::from_str(&ids_json)?;
+            pruned_observation_ids.extend(ids);
+        }
+        Ok(pruned_observation_ids)
+    }
+
+    fn prune_marker_id_for_observation(
+        &self,
+        session_id: &str,
+        observation_id: &str,
+    ) -> Result<Option<String>, Error> {
+        validate_event_field("session_id", session_id)?;
+        validate_observation_field("id", observation_id)?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, pruned_observation_ids
+               FROM observation_prune_markers
+              WHERE session_id = ?1
+           ORDER BY ts DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([session_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (marker_id, ids_json) = row?;
+            let ids: Vec<String> = serde_json::from_str(&ids_json)?;
+            if ids.iter().any(|candidate| candidate == observation_id) {
+                return Ok(Some(marker_id));
+            }
+        }
+        Ok(None)
     }
 
     pub fn assemble_compaction_summary(&self, session_id: &str) -> Result<String, Error> {
@@ -1040,7 +1136,7 @@ impl Store {
             summary.push_str("No observations recorded.\n");
             return Ok(summary);
         }
-        for observation in observations {
+        for observation in &observations {
             summary.push_str(&format!(
                 "- [{}] {} (id={}, source_events={:?})\n",
                 observation.relevance.as_str(),
@@ -1049,6 +1145,38 @@ impl Store {
                 observation.source_event_ids
             ));
         }
+
+        let coverage = self.observation_coverage(session_id)?;
+        if !coverage.uncovered_event_ids.is_empty() {
+            let mut ranges = Vec::new();
+            let mut range_start = coverage.uncovered_event_ids[0];
+            let mut range_end = coverage.uncovered_event_ids[0];
+
+            for event_id in coverage.uncovered_event_ids.iter().skip(1).copied() {
+                if event_id == range_end + 1 {
+                    range_end = event_id;
+                } else {
+                    if range_start == range_end {
+                        ranges.push(range_start.to_string());
+                    } else {
+                        ranges.push(format!("{range_start}-{range_end}"));
+                    }
+                    range_start = event_id;
+                    range_end = event_id;
+                }
+            }
+            if range_start == range_end {
+                ranges.push(range_start.to_string());
+            } else {
+                ranges.push(format!("{range_start}-{range_end}"));
+            }
+
+            summary.push_str(&format!(
+                "continuity is incomplete; uncovered event ranges: {}\n",
+                ranges.join(", "),
+            ));
+        }
+
         Ok(summary)
     }
 
@@ -1056,6 +1184,13 @@ impl Store {
         validate_event_field("session_id", session_id)?;
         let mut observations = self.list_observations_for_session(session_id)?;
         if observations.len() <= keep {
+            return Ok(0);
+        }
+        if !self
+            .observation_coverage(session_id)?
+            .uncovered_event_ids
+            .is_empty()
+        {
             return Ok(0);
         }
         observations.sort_by_key(|observation| {
@@ -1066,10 +1201,32 @@ impl Store {
             )
         });
         let drop_count = observations.len() - keep;
-        for observation in observations.iter().take(drop_count) {
-            self.conn
-                .execute("DELETE FROM observations WHERE id = ?1", [&observation.id])?;
-        }
+        let pruned_observation_ids: Vec<String> = observations
+            .iter()
+            .take(drop_count)
+            .map(|observation| observation.id.clone())
+            .collect();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let marker_id = observation_prune_marker_id(session_id, &pruned_observation_ids, now);
+        let entry = ObservationPruneLogEntry {
+            kind: "prune_observations",
+            ts: now,
+            prune_marker_id: &marker_id,
+            session_id,
+            pruned_observation_ids: &pruned_observation_ids,
+        };
+        append_jsonl(&self.observation_log_path, &entry)?;
+        self.conn.execute(
+            "INSERT INTO observation_prune_markers
+             (id, session_id, pruned_observation_ids, ts)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                marker_id,
+                session_id,
+                serde_json::to_string(&pruned_observation_ids)?,
+                now,
+            ],
+        )?;
         Ok(drop_count)
     }
 
@@ -2555,6 +2712,15 @@ struct ObservationLogEntry<'a> {
 }
 
 #[derive(Serialize)]
+struct ObservationPruneLogEntry<'a> {
+    kind: &'a str,
+    ts: i64,
+    prune_marker_id: &'a str,
+    session_id: &'a str,
+    pruned_observation_ids: &'a [String],
+}
+
+#[derive(Serialize)]
 struct LogEntry<'a> {
     kind: &'a str,
     ts: i64,
@@ -2582,6 +2748,34 @@ fn observation_id(session_id: &str, content: &str, source_event_ids: &[i64]) -> 
             source_event_ids
                 .iter()
                 .flat_map(|id| id.to_le_bytes())
+                .collect::<Vec<_>>()
+                .iter(),
+        )
+    {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")[..12].to_string()
+}
+
+fn observation_prune_marker_id(
+    session_id: &str,
+    pruned_observation_ids: &[String],
+    ts: i64,
+) -> String {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = FNV_OFFSET;
+    for byte in session_id
+        .as_bytes()
+        .iter()
+        .chain([0xfd].iter())
+        .chain(ts.to_le_bytes().iter())
+        .chain([0xfc].iter())
+        .chain(
+            pruned_observation_ids
+                .iter()
+                .flat_map(|id| id.as_bytes().iter().copied())
                 .collect::<Vec<_>>()
                 .iter(),
         )
@@ -3151,6 +3345,7 @@ fn apply_log_line(
         "add_claim" => apply_add_claim(conn, &value, path, lineno, report),
         "record_event" => apply_record_event(conn, &value, path, lineno, report),
         "record_observation" => apply_record_observation(conn, &value, path, lineno, report),
+        "prune_observations" => apply_prune_observations(conn, &value, path, lineno, report),
         other => Err(Error::ReplayUnknownKind {
             kind: other.to_string(),
         }),
@@ -3504,5 +3699,46 @@ fn apply_record_observation(
         ],
     )?;
     report.observations += 1;
+    Ok(())
+}
+
+fn apply_prune_observations(
+    conn: &Connection,
+    value: &serde_json::Value,
+    path: &str,
+    lineno: usize,
+    _report: &mut ReplayReport,
+) -> Result<(), Error> {
+    let marker_id = replay_str(value, "prune_marker_id", path, lineno)?;
+    let ts = replay_i64(value, "ts", path, lineno)?;
+    let session_id = replay_str(value, "session_id", path, lineno)?;
+    let pruned_observation_ids = replay_field(value, "pruned_observation_ids", path, lineno)?;
+    let pruned_observation_ids_json = pruned_observation_ids.to_string();
+
+    let existing: Option<(String, String, String)> = conn
+        .query_row(
+            "SELECT session_id, pruned_observation_ids, ts
+               FROM observation_prune_markers WHERE id = ?1",
+            [marker_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)?.to_string())),
+        )
+        .optional()?;
+    if let Some(existing) = existing {
+        let matches = existing.0 == session_id
+            && existing.1 == pruned_observation_ids_json
+            && existing.2 == ts.to_string();
+        if !matches {
+            return Err(Error::ReplayDuplicateId {
+                detail: format!("prune_marker_id={marker_id} content mismatch at {path}:{lineno}"),
+            });
+        }
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO observation_prune_markers
+         (id, session_id, pruned_observation_ids, ts)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![marker_id, session_id, pruned_observation_ids_json, ts],
+    )?;
     Ok(())
 }
