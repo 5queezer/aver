@@ -443,6 +443,26 @@ fn fresh_database_has_contradictions_table() {
 }
 
 #[test]
+fn privacy_rejection_reason_must_not_be_blank() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO privacy_rejections (reason, count) VALUES ('   ', 1)",
+            [],
+        )
+        .expect_err("blank privacy rejection reasons should be rejected");
+    assert!(
+        err.to_string()
+            .contains("privacy_rejections.reason must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn contradiction_reason_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
