@@ -219,6 +219,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0045_vector_chunk_created_at_positive_checks",
         include_str!("../../../migrations/0045_vector_chunk_created_at_positive_checks.sql"),
     ),
+    (
+        "0046_observation_ts_positive_checks",
+        include_str!("../../../migrations/0046_observation_ts_positive_checks.sql"),
+    ),
 ];
 
 /// Canonical embedding dimension for the `vec0` ANN index (ADR-0017

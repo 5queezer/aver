@@ -591,7 +591,7 @@ fn observations_source_event_ids_must_be_valid_json_array() {
             "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
                                        agent_id, agent_kind, derivation, ts)
              VALUES ('bad-json', 'session-1', 'bad', 'high', 'not-json',
-                     'observer', 'LLM', 'test', 0)",
+                     'observer', 'LLM', 'test', 1)",
             [],
         )
         .expect_err("invalid JSON source_event_ids should be rejected");
@@ -626,7 +626,7 @@ fn observations_agent_id_must_not_be_blank() {
             "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
                                        agent_id, agent_kind, derivation, ts)
              VALUES ('blank-agent', 'session-1', 'bad', 'high', '[1]',
-                     '   ', 'LLM', 'test', 0)",
+                     '   ', 'LLM', 'test', 1)",
             [],
         )
         .expect_err("blank observation agent_id should be rejected");
@@ -648,7 +648,7 @@ fn observations_agent_id_allows_only_portable_identifier_chars() {
         "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
                                    agent_id, agent_kind, derivation, ts)
          VALUES ('valid-agent', 'session-1', 'ok', 'high', '[1]',
-                 'agent_1-ok', 'LLM', 'test', 0)",
+                 'agent_1-ok', 'LLM', 'test', 1)",
         [],
     )
     .expect("portable observation agent ids should remain valid");
@@ -658,7 +658,7 @@ fn observations_agent_id_allows_only_portable_identifier_chars() {
             "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
                                        agent_id, agent_kind, derivation, ts)
              VALUES ('bad-agent', 'session-1', 'bad', 'high', '[1]',
-                     'bad id!', 'LLM', 'test', 0)",
+                     'bad id!', 'LLM', 'test', 1)",
             [],
         )
         .expect_err("observation agent ids with spaces/punctuation should be rejected");
@@ -681,7 +681,7 @@ fn observations_session_id_must_not_be_blank() {
             "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
                                        agent_id, agent_kind, derivation, ts)
              VALUES ('blank-session', '   ', 'bad', 'high', '[1]',
-                     'agent', 'LLM', 'test', 0)",
+                     'agent', 'LLM', 'test', 1)",
             [],
         )
         .expect_err("blank observation session_id should be rejected");
@@ -704,7 +704,7 @@ fn observations_content_must_not_be_blank() {
             "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
                                        agent_id, agent_kind, derivation, ts)
              VALUES ('blank-content', 'session-1', '   ', 'high', '[1]',
-                     'agent', 'LLM', 'test', 0)",
+                     'agent', 'LLM', 'test', 1)",
             [],
         )
         .expect_err("blank observation content should be rejected");
@@ -727,7 +727,7 @@ fn observations_derivation_must_not_be_blank() {
             "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
                                        agent_id, agent_kind, derivation, ts)
              VALUES ('blank-derivation', 'session-1', 'content', 'high', '[1]',
-                     'agent', 'LLM', '   ', 0)",
+                     'agent', 'LLM', '   ', 1)",
             [],
         )
         .expect_err("blank observation derivation should be rejected");
@@ -750,13 +750,35 @@ fn observations_id_must_not_be_blank() {
             "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
                                        agent_id, agent_kind, derivation, ts)
              VALUES ('   ', 'session-1', 'content', 'high', '[1]',
-                     'agent', 'LLM', 'test', 0)",
+                     'agent', 'LLM', 'test', 1)",
             [],
         )
         .expect_err("blank observation id should be rejected");
     assert!(
         err.to_string()
             .contains("observations.id must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn observations_timestamp_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
+                                       agent_id, agent_kind, derivation, ts)
+             VALUES ('zero-ts', 'session-1', 'content', 'high', '[1]',
+                     'agent', 'LLM', 'test', 0)",
+            [],
+        )
+        .expect_err("observation timestamps must be positive");
+    assert!(
+        err.to_string().contains("observations.ts must be positive"),
         "unexpected error: {err}"
     );
 }
@@ -772,7 +794,7 @@ fn observations_source_event_ids_array_elements_must_be_integers() {
         "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
                                    agent_id, agent_kind, derivation, ts)
          VALUES ('ok-ids', 'session-1', 'ok', 'high', '[1, 2, 3]',
-                 'observer', 'LLM', 'test', 0)",
+                 'observer', 'LLM', 'test', 1)",
         [],
     )
     .expect("integer source_event_ids should remain valid");
@@ -782,7 +804,7 @@ fn observations_source_event_ids_array_elements_must_be_integers() {
             "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
                                        agent_id, agent_kind, derivation, ts)
              VALUES ('bad-id', 'session-1', 'bad', 'high', '[1, \"not-an-id\"]',
-                     'observer', 'LLM', 'test', 0)",
+                     'observer', 'LLM', 'test', 1)",
             [],
         )
         .expect_err("non-integer source_event_ids elements should be rejected");
@@ -805,7 +827,7 @@ fn observations_source_event_ids_must_not_be_empty() {
             "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
                                        agent_id, agent_kind, derivation, ts)
              VALUES ('empty-ids', 'session-1', 'bad', 'high', '[]',
-                     'observer', 'LLM', 'test', 0)",
+                     'observer', 'LLM', 'test', 1)",
             [],
         )
         .expect_err("empty source_event_ids should be rejected");
@@ -828,7 +850,7 @@ fn observations_source_event_ids_must_be_positive() {
             "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
                                        agent_id, agent_kind, derivation, ts)
              VALUES ('zero-id', 'session-1', 'bad', 'high', '[0]',
-                     'observer', 'LLM', 'test', 0)",
+                     'observer', 'LLM', 'test', 1)",
             [],
         )
         .expect_err("non-positive source_event_ids should be rejected");
