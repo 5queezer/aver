@@ -410,7 +410,7 @@ fn candidate_claim_subject_must_not_be_blank() {
     let err = conn
         .execute(
             "INSERT INTO candidate_claims (event_id, subject, predicate, object, created_at)
-             VALUES (?1, '   ', 'uses', 'SQLite', 0)",
+             VALUES (?1, '   ', 'uses', 'SQLite', 1)",
             [event_id],
         )
         .expect_err("blank candidate claim subject should be rejected");
@@ -434,7 +434,7 @@ fn candidate_claim_predicate_must_not_be_blank() {
     let err = conn
         .execute(
             "INSERT INTO candidate_claims (event_id, subject, predicate, object, created_at)
-             VALUES (?1, 'Aver', '   ', 'SQLite', 0)",
+             VALUES (?1, 'Aver', '   ', 'SQLite', 1)",
             [event_id],
         )
         .expect_err("blank candidate claim predicate should be rejected");
@@ -458,7 +458,7 @@ fn candidate_claim_object_must_not_be_blank() {
     let err = conn
         .execute(
             "INSERT INTO candidate_claims (event_id, subject, predicate, object, created_at)
-             VALUES (?1, 'Aver', 'uses', '   ', 0)",
+             VALUES (?1, 'Aver', 'uses', '   ', 1)",
             [event_id],
         )
         .expect_err("blank candidate claim object should be rejected");
@@ -518,6 +518,30 @@ fn promoted_candidate_claims_must_reference_claim() {
     assert!(
         err.to_string()
             .contains("candidate_claims.promoted_claim_id must be set when status is PROMOTED"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn candidate_claim_created_at_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let event_id = store
+        .record_event("session-1", "message", "payload", "test")
+        .expect("event insert should succeed");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO candidate_claims (event_id, subject, predicate, object, created_at)
+             VALUES (?1, 'Aver', 'uses', 'SQLite', 0)",
+            [event_id],
+        )
+        .expect_err("candidate claim timestamps must be positive");
+    assert!(
+        err.to_string()
+            .contains("candidate_claims.created_at must be positive"),
         "unexpected error: {err}"
     );
 }
