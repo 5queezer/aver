@@ -61,6 +61,10 @@ pub fn validate_browser_origin(
         .to_str()
         .map_err(|_| OriginError::InvalidOriginHeader)?;
 
+    if origin_str.eq_ignore_ascii_case("null") && has_non_cross_site_fetch_metadata(headers) {
+        return Ok(());
+    }
+
     let origin_url = Url::parse(origin_str).map_err(|_| OriginError::InvalidOriginHeader)?;
     if allowed_base_urls
         .iter()
@@ -76,6 +80,17 @@ fn origins_match(a: &Url, b: &Url) -> bool {
     a.scheme() == b.scheme()
         && a.host_str() == b.host_str()
         && a.port_or_known_default() == b.port_or_known_default()
+}
+
+fn has_non_cross_site_fetch_metadata(headers: &HeaderMap) -> bool {
+    headers
+        .get("sec-fetch-site")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|site| {
+            site.eq_ignore_ascii_case("same-origin")
+                || site.eq_ignore_ascii_case("same-site")
+                || site.eq_ignore_ascii_case("none")
+        })
 }
 
 #[cfg(test)]
@@ -195,7 +210,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_null_origin() {
+    fn allows_null_origin_when_fetch_metadata_is_not_cross_site() {
+        let mut headers = HeaderMap::new();
+        headers.insert("sec-fetch-site", HeaderValue::from_static("same-origin"));
+        headers.insert(header::ORIGIN, HeaderValue::from_static("null"));
+        assert_eq!(validate_browser_origin(&headers, &allowed()), Ok(()));
+    }
+
+    #[test]
+    fn rejects_null_origin_without_fetch_metadata() {
         let mut headers = HeaderMap::new();
         headers.insert(header::ORIGIN, HeaderValue::from_static("null"));
         assert!(validate_browser_origin(&headers, &allowed()).is_err());

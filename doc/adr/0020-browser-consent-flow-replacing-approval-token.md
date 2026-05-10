@@ -105,7 +105,10 @@ trigger one).
   defends against DNS-rebinding (a malicious page hitting `127.0.0.1:3317`
   would have to also click Approve in the user's browser).
 - A `Sec-Fetch-Site` / `Origin` check rejects cross-site `POST /oauth/authorize`
-  to harden against rebinding.
+  to harden against rebinding. Browser `Origin: null` submissions are accepted
+  only when Fetch Metadata explicitly reports a non-cross-site navigation; this
+  keeps Claude Code/browser privacy-extension flows working while still rejecting
+  cross-site form posts.
 
 #### Profile B — Docker on the user's machine
 
