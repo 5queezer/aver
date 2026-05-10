@@ -159,6 +159,35 @@ fn claims_source_refs_must_be_valid_json_array() {
 }
 
 #[test]
+fn claims_source_refs_array_elements_must_be_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let valid_id = store
+        .add_claim("Aver", "uses", "SQLite", "test")
+        .expect("valid source_refs produced by Store should insert");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.execute(
+        "UPDATE claims SET source_refs = '[\"manual\", \"event:1\"]' WHERE id = ?1",
+        [valid_id],
+    )
+    .expect("string source_refs should remain valid");
+
+    let err = conn
+        .execute(
+            "UPDATE claims SET source_refs = '[\"manual\", 42]' WHERE id = ?1",
+            [valid_id],
+        )
+        .expect_err("non-text source_refs elements should be rejected");
+    assert!(
+        err.to_string()
+            .contains("claims.source_refs elements must be text"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn observations_source_event_ids_must_be_valid_json_array() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");

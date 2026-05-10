@@ -103,6 +103,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0016_observation_source_event_ids_integer_checks",
         include_str!("../../../migrations/0016_observation_source_event_ids_integer_checks.sql"),
     ),
+    (
+        "0017_claim_source_refs_text_checks",
+        include_str!("../../../migrations/0017_claim_source_refs_text_checks.sql"),
+    ),
 ];
 
 /// Canonical embedding dimension for the `vec0` ANN index (ADR-0017
