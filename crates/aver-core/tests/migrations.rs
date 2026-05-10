@@ -204,3 +204,43 @@ fn observations_source_event_ids_must_be_valid_json_array() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn vector_chunk_embedding_json_must_be_null_or_json_array() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let claim_id = store
+        .add_claim("Aver", "uses", "SQLite", "test")
+        .expect("claim insert should succeed");
+    store
+        .add_vector_chunk(claim_id, "chunk without embedding", "nomic-embed-text")
+        .expect("NULL embedding_json should remain valid");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
+             VALUES (?1, 'bad', 'nomic-embed-text', 'not-json', 0)",
+            [claim_id],
+        )
+        .expect_err("invalid JSON embedding_json should be rejected");
+    assert!(
+        err.to_string()
+            .contains("vector_chunks.embedding_json must be NULL or a JSON array"),
+        "unexpected error: {err}"
+    );
+
+    let err = conn
+        .execute(
+            "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
+             VALUES (?1, 'bad', 'nomic-embed-text', '{\"not\":\"an array\"}', 0)",
+            [claim_id],
+        )
+        .expect_err("non-array JSON embedding_json should be rejected");
+    assert!(
+        err.to_string()
+            .contains("vector_chunks.embedding_json must be NULL or a JSON array"),
+        "unexpected error: {err}"
+    );
+}
