@@ -523,6 +523,29 @@ fn observations_session_id_must_not_be_blank() {
 }
 
 #[test]
+fn observations_content_must_not_be_blank() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
+                                       agent_id, agent_kind, derivation, ts)
+             VALUES ('blank-content', 'session-1', '   ', 'high', '[1]',
+                     'agent', 'LLM', 'test', 0)",
+            [],
+        )
+        .expect_err("blank observation content should be rejected");
+    assert!(
+        err.to_string()
+            .contains("observations.content must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn observations_source_event_ids_array_elements_must_be_integers() {
     let dir = tempfile::tempdir().unwrap();
     let _store = Store::open(dir.path()).expect("open should succeed");
