@@ -223,6 +223,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0046_observation_ts_positive_checks",
         include_str!("../../../migrations/0046_observation_ts_positive_checks.sql"),
     ),
+    (
+        "0047_candidate_rejection_promotion_exclusion",
+        include_str!("../../../migrations/0047_candidate_rejection_promotion_exclusion.sql"),
+    ),
 ];
 
 /// Canonical embedding dimension for the `vec0` ANN index (ADR-0017
