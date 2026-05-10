@@ -1,12 +1,13 @@
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use axum::{
     Form, Json, Router,
     body::Body,
-    extract::Query,
-    http::{HeaderValue, Request, StatusCode, header},
+    extract::{ConnectInfo, Query},
+    http::{HeaderMap, HeaderValue, Request, StatusCode, header},
     middleware::Next,
-    response::{IntoResponse, Redirect},
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
 };
 use rmcp::transport::{
@@ -19,6 +20,7 @@ use tower_http::cors::{Any as CorsAny, CorsLayer};
 use crate::{
     auth::{AuthDb, hash_token},
     config::ServerConfig,
+    consent::{ConsentDeps, handle_authorize_decision, handle_loopback_get_authorize},
     mcp::AverMcpService,
     oauth::authorization_server_metadata,
 };
@@ -27,11 +29,20 @@ use crate::{
 struct HttpState {
     config: ServerConfig,
     auth_db: Arc<Mutex<AuthDb>>,
+    consent_deps: Arc<ConsentDeps>,
 }
 
 pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
     let auth_db = Arc::new(Mutex::new(AuthDb::open(&config.auth_db_path)?));
-    let state = HttpState { config, auth_db };
+    let consent_deps = Arc::new(ConsentDeps {
+        auth_db: auth_db.clone(),
+        base_url: config.base_url.clone(),
+    });
+    let state = HttpState {
+        config,
+        auth_db,
+        consent_deps,
+    };
     let protected_api = Router::new().route("/api/health", get(health)).route_layer(
         axum::middleware::from_fn_with_state(state.clone(), validate_bearer_token),
     );
@@ -76,6 +87,7 @@ pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
         )
         .route("/oauth/register", post(oauth_register))
         .route("/oauth/authorize", get(oauth_authorize))
+        .route("/oauth/authorize/decision", post(oauth_authorize_decision))
         .route("/oauth/token", post(oauth_token))
         .merge(protected_api)
         .merge(protected_mcp)
@@ -155,7 +167,7 @@ async fn oauth_register(
 }
 
 #[derive(Debug, Deserialize)]
-struct AuthorizeRequest {
+struct LegacyAuthorizeQuery {
     response_type: String,
     client_id: String,
     redirect_uri: String,
@@ -167,45 +179,140 @@ struct AuthorizeRequest {
     approval_token: Option<String>,
 }
 
+/// Dispatcher for `GET /oauth/authorize`.
+///
+/// ADR-0020 slice 2 introduces the loopback consent screen. To avoid breaking
+/// the existing approval_token path (slice 6 removes it), we branch on the
+/// peer address: loopback requests get the new consent flow, every other
+/// caller stays on the legacy gate.
+///
+/// `ConnectInfo<SocketAddr>` is only present when the server was started via
+/// `into_make_service_with_connect_info`. When absent (most unit tests), we
+/// treat the request as non-loopback and fall through to the legacy handler,
+/// which preserves all pre-existing test behaviour.
 async fn oauth_authorize(
     axum::extract::State(state): axum::extract::State<HttpState>,
-    Query(request): Query<AuthorizeRequest>,
-) -> Result<Redirect, StatusCode> {
-    if request.response_type != "code" || request.code_challenge_method != "S256" {
-        return Err(StatusCode::BAD_REQUEST);
+    request: Request<Body>,
+) -> Response {
+    let connect_info = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .copied();
+    let is_loopback = connect_info
+        .map(|ConnectInfo(addr)| addr.ip().is_loopback())
+        .unwrap_or(false);
+
+    if is_loopback {
+        // Re-extract the parts we need; the consent module owns its own
+        // Query/Form/header parsing so we just pass the request through.
+        let (mut parts, body) = request.into_parts();
+        let headers = std::mem::take(&mut parts.headers);
+        let query_str = parts.uri.query().unwrap_or("");
+        let query: crate::consent::AuthorizeQuery = match serde_urlencoded::from_str(query_str) {
+            Ok(q) => q,
+            Err(_) => {
+                // Fall through to the legacy handler so existing 400 codes
+                // for malformed queries are unchanged. Re-build the request.
+                let request = Request::from_parts(parts, body);
+                return legacy_oauth_authorize(state, request).await;
+            }
+        };
+        let connect = connect_info.expect("checked is_loopback above");
+        return handle_loopback_get_authorize(
+            axum::extract::State(state.consent_deps.clone()),
+            connect,
+            Query(query),
+            headers,
+        )
+        .await;
+    }
+
+    legacy_oauth_authorize(state, request).await
+}
+
+/// The pre-ADR-0020 `approval_token`-gated handler. Preserved verbatim so
+/// non-loopback callers keep working until slice 6 retires the path.
+async fn legacy_oauth_authorize(state: HttpState, request: Request<Body>) -> Response {
+    let query_str = request.uri().query().unwrap_or("");
+    let query: LegacyAuthorizeQuery = match serde_urlencoded::from_str(query_str) {
+        Ok(q) => q,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    if query.response_type != "code" || query.code_challenge_method != "S256" {
+        return StatusCode::BAD_REQUEST.into_response();
     }
     let Some(expected_approval_token) = state.config.local_authorization_token.as_deref() else {
-        return Err(StatusCode::UNAUTHORIZED);
+        return StatusCode::UNAUTHORIZED.into_response();
     };
-    if request.approval_token.as_deref() != Some(expected_approval_token) {
-        return Err(StatusCode::UNAUTHORIZED);
+    if query.approval_token.as_deref() != Some(expected_approval_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
     }
-    let db = state
-        .auth_db
-        .lock()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if !db
-        .client_allows_redirect_uri(&request.client_id, &request.redirect_uri)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    {
-        return Err(StatusCode::BAD_REQUEST);
+    let db = match state.auth_db.lock() {
+        Ok(g) => g,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let allows = match db.client_allows_redirect_uri(&query.client_id, &query.redirect_uri) {
+        Ok(v) => v,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    if !allows {
+        return StatusCode::BAD_REQUEST.into_response();
     }
-    let code = db
-        .store_authorization_code(
-            &request.client_id,
-            "local",
-            &request.code_challenge,
-            &request.redirect_uri,
-        )
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let mut redirect_url =
-        url::Url::parse(&request.redirect_uri).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let code = match db.store_authorization_code(
+        &query.client_id,
+        "local",
+        &query.code_challenge,
+        &query.redirect_uri,
+    ) {
+        Ok(c) => c,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let mut redirect_url = match url::Url::parse(&query.redirect_uri) {
+        Ok(u) => u,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
     redirect_url.query_pairs_mut().append_pair("code", &code);
-    if let Some(state) = request.state {
-        redirect_url.query_pairs_mut().append_pair("state", &state);
+    if let Some(s) = query.state {
+        redirect_url.query_pairs_mut().append_pair("state", &s);
     }
-    Ok(Redirect::to(redirect_url.as_str()))
+    Redirect::to(redirect_url.as_str()).into_response()
 }
+
+async fn oauth_authorize_decision(
+    axum::extract::State(state): axum::extract::State<HttpState>,
+    request: Request<Body>,
+) -> Response {
+    // Manually extract ConnectInfo so we can return a structured HTML error
+    // when the test scaffold did not register peer addresses.
+    let connect_info = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .copied();
+    let Some(connect) = connect_info else {
+        return (StatusCode::FORBIDDEN, "loopback connect info missing").into_response();
+    };
+
+    let (mut parts, body) = request.into_parts();
+    let headers = std::mem::take(&mut parts.headers);
+    let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let form: crate::consent::DecisionForm = match serde_urlencoded::from_bytes(&bytes) {
+        Ok(f) => f,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    handle_authorize_decision(
+        axum::extract::State(state.consent_deps.clone()),
+        connect,
+        headers,
+        Form(form),
+    )
+    .await
+}
+
+#[allow(dead_code)]
+fn _force_use_headermap(_h: &HeaderMap) {}
 
 #[derive(Debug, Deserialize)]
 struct TokenRequest {
