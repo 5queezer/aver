@@ -28,7 +28,6 @@ fn base_config(dir: &tempfile::TempDir, auth_db_path: &std::path::Path) -> Serve
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: auth_db_path.to_string_lossy().to_string(),
         cors_origins: Vec::new(),
-        local_authorization_token: Some("legacy-approval".to_string()),
     }
 }
 

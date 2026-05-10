@@ -1,10 +1,10 @@
-//! Browser consent flow for ADR-0020 slice 2 (Profile A — loopback).
+//! Browser consent flow for ADR-0020 (Profile A — loopback).
 //!
 //! This module renders the HTML consent screen at `GET /oauth/authorize` and
 //! handles the form submission at `POST /oauth/authorize/decision`. It is
 //! intentionally narrow: only loopback (Profile A) is implemented here.
-//! Non-loopback callers fall through to the legacy `approval_token` gate
-//! which is still wired up in `http.rs`; that gate is removed in slice 6.
+//! Non-loopback callers are rejected by the dispatcher in `http.rs` with an
+//! HTML 403; Profile C (public deployments) is deferred to slices 4-5.
 //!
 //! Anti-CSRF design:
 //! The anti-CSRF token is `HMAC-SHA256(server_secret, session_id || "|" ||
@@ -387,10 +387,9 @@ fn lookup_client_meta(
     Ok(Some((client.client_name, client.redirect_uris, created_at)))
 }
 
-/// Loopback branch of `GET /oauth/authorize`. Returns `Ok(response)` when
-/// this branch handled the request (consent screen, immediate code mint, or
-/// HTML error). Returns `Err(query)` to signal "fall through to the legacy
-/// approval_token handler" — the caller will resume the existing flow.
+/// Loopback branch of `GET /oauth/authorize`. Returns the consent screen,
+/// an immediate authorization-code redirect (when prior consent covers the
+/// requested scopes), or an HTML error response.
 pub async fn handle_loopback_get_authorize(
     State(deps): State<Arc<ConsentDeps>>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,

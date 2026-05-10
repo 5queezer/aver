@@ -5,9 +5,9 @@ use axum::{
     Form, Json, Router,
     body::Body,
     extract::{ConnectInfo, Query},
-    http::{HeaderMap, HeaderValue, Request, StatusCode, header},
+    http::{HeaderValue, Request, StatusCode, header},
     middleware::Next,
-    response::{IntoResponse, Redirect, Response},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use rmcp::transport::{
@@ -23,7 +23,7 @@ use crate::{
     consent::{ConsentDeps, handle_authorize_decision, handle_loopback_get_authorize},
     mcp::AverMcpService,
     oauth::authorization_server_metadata,
-    scopes::{SUPPORTED, parse_scope_list_lossy},
+    scopes::parse_scope_list_lossy,
 };
 
 /// Per-request bag of OAuth scopes granted by the bearer token. Inserted as
@@ -173,30 +173,22 @@ async fn oauth_register(
     ))
 }
 
-#[derive(Debug, Deserialize)]
-struct LegacyAuthorizeQuery {
-    response_type: String,
-    client_id: String,
-    redirect_uri: String,
-    code_challenge: String,
-    code_challenge_method: String,
-    #[serde(default)]
-    state: Option<String>,
-    #[serde(default)]
-    approval_token: Option<String>,
-}
-
 /// Dispatcher for `GET /oauth/authorize`.
 ///
-/// ADR-0020 slice 2 introduces the loopback consent screen. To avoid breaking
-/// the existing approval_token path (slice 6 removes it), we branch on the
-/// peer address: loopback requests get the new consent flow, every other
-/// caller stays on the legacy gate.
+/// Profile A (loopback): delegate to the browser consent flow in
+/// [`crate::consent`]. Non-loopback callers are rejected with an HTML 403
+/// because the consent screen requires an interactive browser session bound
+/// to the local user.
 ///
-/// `ConnectInfo<SocketAddr>` is only present when the server was started via
-/// `into_make_service_with_connect_info`. When absent (most unit tests), we
-/// treat the request as non-loopback and fall through to the legacy handler,
-/// which preserves all pre-existing test behaviour.
+/// `ConnectInfo<SocketAddr>` is only populated when the server is started via
+/// `into_make_service_with_connect_info`. When absent (most direct-Router
+/// unit tests), we conservatively treat the request as non-loopback and
+/// reject — tests that need the consent flow inject `ConnectInfo` explicitly.
+///
+// Profile C (non-loopback / public deployments): future slices 4-5 will add a
+// trusted-header / login-UI surface here; for now non-loopback callers see a
+// terminal HTML error rather than an OAuth redirect-error so we never bounce
+// arbitrary `redirect_uri` query strings without first validating them.
 async fn oauth_authorize(
     axum::extract::State(state): axum::extract::State<HttpState>,
     request: Request<Body>,
@@ -209,84 +201,50 @@ async fn oauth_authorize(
         .map(|ConnectInfo(addr)| addr.ip().is_loopback())
         .unwrap_or(false);
 
-    if is_loopback {
-        // Re-extract the parts we need; the consent module owns its own
-        // Query/Form/header parsing so we just pass the request through.
-        let (mut parts, body) = request.into_parts();
-        let headers = std::mem::take(&mut parts.headers);
-        let query_str = parts.uri.query().unwrap_or("");
-        let query: crate::consent::AuthorizeQuery = match serde_urlencoded::from_str(query_str) {
-            Ok(q) => q,
-            Err(_) => {
-                // Fall through to the legacy handler so existing 400 codes
-                // for malformed queries are unchanged. Re-build the request.
-                let request = Request::from_parts(parts, body);
-                return legacy_oauth_authorize(state, request).await;
-            }
-        };
-        let connect = connect_info.expect("checked is_loopback above");
-        return handle_loopback_get_authorize(
-            axum::extract::State(state.consent_deps.clone()),
-            connect,
-            Query(query),
-            headers,
-        )
-        .await;
+    if !is_loopback {
+        return non_loopback_authorize_rejected();
     }
 
-    legacy_oauth_authorize(state, request).await
+    let (mut parts, _body) = request.into_parts();
+    let headers = std::mem::take(&mut parts.headers);
+    let query_str = parts.uri.query().unwrap_or("");
+    let query: crate::consent::AuthorizeQuery = match serde_urlencoded::from_str(query_str) {
+        Ok(q) => q,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, "invalid /oauth/authorize query").into_response();
+        }
+    };
+    let connect = connect_info.expect("checked is_loopback above");
+    handle_loopback_get_authorize(
+        axum::extract::State(state.consent_deps.clone()),
+        connect,
+        Query(query),
+        headers,
+    )
+    .await
 }
 
-/// The pre-ADR-0020 `approval_token`-gated handler. Preserved verbatim so
-/// non-loopback callers keep working until slice 6 retires the path.
-async fn legacy_oauth_authorize(state: HttpState, request: Request<Body>) -> Response {
-    let query_str = request.uri().query().unwrap_or("");
-    let query: LegacyAuthorizeQuery = match serde_urlencoded::from_str(query_str) {
-        Ok(q) => q,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
-    };
-    if query.response_type != "code" || query.code_challenge_method != "S256" {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    let Some(expected_approval_token) = state.config.local_authorization_token.as_deref() else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
-    if query.approval_token.as_deref() != Some(expected_approval_token) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let db = match state.auth_db.lock() {
-        Ok(g) => g,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-    let allows = match db.client_allows_redirect_uri(&query.client_id, &query.redirect_uri) {
-        Ok(v) => v,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-    if !allows {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    // Legacy approval_token path: grant all six canonical scopes so existing
-    // setups keep working until slice 6 retires this branch.
-    let legacy_scopes: Vec<String> = SUPPORTED.iter().map(|s| s.to_string()).collect();
-    let code = match db.store_authorization_code(
-        &query.client_id,
-        "local",
-        &query.code_challenge,
-        &query.redirect_uri,
-        &legacy_scopes,
-    ) {
-        Ok(c) => c,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-    let mut redirect_url = match url::Url::parse(&query.redirect_uri) {
-        Ok(u) => u,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
-    };
-    redirect_url.query_pairs_mut().append_pair("code", &code);
-    if let Some(s) = query.state {
-        redirect_url.query_pairs_mut().append_pair("state", &s);
-    }
-    Redirect::to(redirect_url.as_str()).into_response()
+/// Renders the terminal HTML 403 served to non-loopback /oauth/authorize
+/// callers. Kept as a free function so the test suite can pin the response
+/// shape independently of the dispatcher wiring.
+fn non_loopback_authorize_rejected() -> Response {
+    let body = concat!(
+        "<!doctype html><html><head><meta charset=\"utf-8\">",
+        "<title>Authorization unavailable</title>",
+        "<style>body{font-family:system-ui,sans-serif;max-width:480px;",
+        "margin:4em auto;padding:1em;color:#111}h1{font-size:1.2em}",
+        "p{color:#444}</style></head><body>",
+        "<h1>Authorization unavailable</h1>",
+        "<p>This Aver server only authorizes OAuth clients over a loopback ",
+        "connection. Public-internet authorization is not enabled.</p>",
+        "</body></html>",
+    );
+    let mut response = (StatusCode::FORBIDDEN, body).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    response
 }
 
 async fn oauth_authorize_decision(
@@ -321,9 +279,6 @@ async fn oauth_authorize_decision(
     )
     .await
 }
-
-#[allow(dead_code)]
-fn _force_use_headermap(_h: &HeaderMap) {}
 
 #[derive(Debug, Deserialize)]
 struct TokenRequest {

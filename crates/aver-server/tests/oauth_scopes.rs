@@ -1,9 +1,8 @@
-//! Integration tests for ADR-0020 slice 3:
+//! Integration tests for ADR-0020 slice 3 (post-slice-6):
 //!
 //! - `scopes_supported` advertised in discovery metadata.
 //! - Scoped access-token issuance via the consent flow and refresh grant.
 //! - Per-tool scope enforcement on `/mcp` (insufficient_scope rejection).
-//! - Legacy `approval_token` path still mints a fully-scoped token.
 
 use std::net::SocketAddr;
 
@@ -31,7 +30,6 @@ fn base_config(dir: &tempfile::TempDir, auth_db_path: &std::path::Path) -> Serve
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: auth_db_path.to_string_lossy().to_string(),
         cors_origins: Vec::new(),
-        local_authorization_token: Some("legacy-approval".to_string()),
     }
 }
 
@@ -508,83 +506,6 @@ async fn refresh_token_grant_preserves_scopes() {
         resp.get("error").is_none(),
         "refreshed token should still recall: {resp}",
     );
-}
-
-#[tokio::test]
-async fn legacy_approval_token_path_grants_full_access() {
-    let dir = tempfile::tempdir().unwrap();
-    let auth_db_path = dir.path().join("auth.db");
-    let _ = AuthDb::open(&auth_db_path).unwrap();
-    let client_id = register_client(&auth_db_path);
-    let config = base_config(&dir, &auth_db_path);
-    let app = build_router(config).unwrap();
-
-    // Drive the LEGACY (non-loopback, approval_token) path. base_config sets
-    // local_authorization_token to "legacy-approval"; we omit ConnectInfo so
-    // the dispatcher falls through to the legacy handler.
-    let challenge = pkce_s256_challenge(VERIFIER);
-    let uri = format!(
-        "/oauth/authorize?response_type=code&client_id={cid}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={ch}&code_challenge_method=S256&approval_token=legacy-approval",
-        cid = client_id,
-        ch = challenge,
-    );
-    let response = app
-        .clone()
-        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let location = response
-        .headers()
-        .get(header::LOCATION)
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
-    let code = extract_code_from_location(&location);
-
-    let token_form = format!(
-        "grant_type=authorization_code&code={code}&client_id={cid}&code_verifier={v}&redirect_uri={r}",
-        cid = client_id,
-        v = VERIFIER,
-        r = REDIRECT,
-    );
-    let req = Request::builder()
-        .method(Method::POST)
-        .uri("/oauth/token")
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .body(Body::from(token_form))
-        .unwrap();
-    let response = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let token = json["access_token"].as_str().unwrap().to_string();
-
-    // The token row carries all six scopes.
-    let db = AuthDb::open(&auth_db_path).unwrap();
-    let (_, scopes_raw) = db
-        .validate_access_token(&aver_server::auth::hash_token(&token))
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        scopes_raw,
-        "claims:read claims:write events:write candidates:manage observations:read observations:write",
-    );
-
-    // And every scope group works end-to-end through /mcp.
-    let resp = call_mcp_tool(&app, &token, "recall", serde_json::json!({"query": "x"})).await;
-    assert!(resp.get("error").is_none(), "recall failed: {resp}");
-    let resp = call_mcp_tool(
-        &app,
-        &token,
-        "remember_claim",
-        serde_json::json!({"subject": "a", "predicate": "relates_to", "object": "c"}),
-    )
-    .await;
-    assert!(resp.get("error").is_none(), "remember_claim failed: {resp}");
 }
 
 #[tokio::test]
