@@ -206,6 +206,38 @@ fn observations_source_event_ids_must_be_valid_json_array() {
 }
 
 #[test]
+fn observations_source_event_ids_array_elements_must_be_integers() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.execute(
+        "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
+                                   agent_id, agent_kind, derivation, ts)
+         VALUES ('ok-ids', 'session-1', 'ok', 'high', '[1, 2, 3]',
+                 'observer', 'LLM', 'test', 0)",
+        [],
+    )
+    .expect("integer source_event_ids should remain valid");
+
+    let err = conn
+        .execute(
+            "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
+                                       agent_id, agent_kind, derivation, ts)
+             VALUES ('bad-id', 'session-1', 'bad', 'high', '[1, \"not-an-id\"]',
+                     'observer', 'LLM', 'test', 0)",
+            [],
+        )
+        .expect_err("non-integer source_event_ids elements should be rejected");
+    assert!(
+        err.to_string()
+            .contains("observations.source_event_ids elements must be integers"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn vector_chunk_embedding_json_must_be_null_or_json_array() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
