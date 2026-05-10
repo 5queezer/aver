@@ -164,6 +164,34 @@ fn episodic_event_agent_id_must_not_be_blank() {
 }
 
 #[test]
+fn episodic_event_agent_id_allows_only_portable_identifier_chars() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.execute(
+        "INSERT INTO episodic_events (session_id, kind, payload, source, agent_id, agent_kind, ts)
+         VALUES ('session-1', 'message', 'payload', 'test', 'agent_1-ok', 'HUMAN', 0)",
+        [],
+    )
+    .expect("portable agent ids should remain valid");
+
+    let err = conn
+        .execute(
+            "INSERT INTO episodic_events (session_id, kind, payload, source, agent_id, agent_kind, ts)
+             VALUES ('session-1', 'message', 'payload', 'test', 'bad id!', 'HUMAN', 0)",
+            [],
+        )
+        .expect_err("agent ids with spaces/punctuation should be rejected");
+    assert!(
+        err.to_string()
+            .contains("episodic_events.agent_id contains invalid characters"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_vector_index_virtual_table() {
     let dir = tempfile::tempdir().unwrap();
     let _store = Store::open(dir.path()).expect("open should succeed");
