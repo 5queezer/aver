@@ -323,6 +323,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0071_privacy_rejection_count_positive_checks",
         include_str!("../../../migrations/0071_privacy_rejection_count_positive_checks.sql"),
     ),
+    (
+        "0072_ontology_extension_predicate_exists_checks",
+        include_str!("../../../migrations/0072_ontology_extension_predicate_exists_checks.sql"),
+    ),
 ];
 
 /// Canonical embedding dimension for the `vec0` ANN index (ADR-0017

@@ -196,7 +196,7 @@ fn ontology_extension_parent_must_not_be_blank() {
     let err = conn
         .execute(
             "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
-             VALUES ('custom_predicate', '   ', 'agent', 1)",
+             VALUES ('uses', '   ', 'agent', 1)",
             [],
         )
         .expect_err("blank ontology extension parents should be rejected");
@@ -217,7 +217,7 @@ fn ontology_extension_agent_id_must_not_be_blank() {
     let err = conn
         .execute(
             "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
-             VALUES ('custom_predicate', 'relates_to', '   ', 1)",
+             VALUES ('uses', 'relates_to', '   ', 1)",
             [],
         )
         .expect_err("blank ontology extension agent ids should be rejected");
@@ -237,7 +237,7 @@ fn ontology_extension_agent_id_allows_only_portable_identifier_chars() {
     let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
     conn.execute(
         "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
-         VALUES ('custom_predicate', 'relates_to', 'agent_1-ok', 1)",
+         VALUES ('uses', 'relates_to', 'agent_1-ok', 1)",
         [],
     )
     .expect("portable ontology extension agent ids should remain valid");
@@ -245,7 +245,7 @@ fn ontology_extension_agent_id_allows_only_portable_identifier_chars() {
     let err = conn
         .execute(
             "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
-             VALUES ('another_predicate', 'relates_to', 'bad id!', 1)",
+             VALUES ('has', 'relates_to', 'bad id!', 1)",
             [],
         )
         .expect_err("ontology extension agent ids with spaces/punctuation should be rejected");
@@ -266,7 +266,7 @@ fn ontology_extension_created_at_must_be_positive() {
     let err = conn
         .execute(
             "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
-             VALUES ('custom_predicate', 'relates_to', 'agent', 0)",
+             VALUES ('uses', 'relates_to', 'agent', 0)",
             [],
         )
         .expect_err("ontology extension timestamps should be positive");
@@ -287,13 +287,34 @@ fn ontology_extension_parent_must_exist() {
     let err = conn
         .execute(
             "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
-             VALUES ('custom_predicate', 'missing_parent', 'agent', 1)",
+             VALUES ('uses', 'missing_parent', 'agent', 1)",
             [],
         )
         .expect_err("ontology extension parents should exist in predicate_types");
     assert!(
         err.to_string()
             .contains("ontology_extension_log.parent must exist in predicate_types"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn ontology_extension_predicate_must_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
+             VALUES ('missing_predicate', 'relates_to', 'agent', 1)",
+            [],
+        )
+        .expect_err("ontology extension predicates should exist in predicate_types");
+    assert!(
+        err.to_string()
+            .contains("ontology_extension_log.predicate must exist in predicate_types"),
         "unexpected error: {err}"
     );
 }
