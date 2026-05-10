@@ -299,6 +299,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0065_predicate_type_parent_distinct_checks",
         include_str!("../../../migrations/0065_predicate_type_parent_distinct_checks.sql"),
     ),
+    (
+        "0066_entity_name_nonblank_checks",
+        include_str!("../../../migrations/0066_entity_name_nonblank_checks.sql"),
+    ),
 ];
 
 /// Canonical embedding dimension for the `vec0` ANN index (ADR-0017

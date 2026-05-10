@@ -310,6 +310,33 @@ fn fresh_database_has_entity_type_closure_table() {
 }
 
 #[test]
+fn entity_name_must_not_be_blank() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let type_id: i64 = conn
+        .query_row(
+            "SELECT id FROM entity_types WHERE name = 'Thing'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("seeded Thing entity type should exist");
+    let err = conn
+        .execute(
+            "INSERT INTO entities (name, type_id, created_at, last_seen_at)
+             VALUES ('   ', ?1, 1, 1)",
+            [type_id],
+        )
+        .expect_err("blank entity names should be rejected");
+    assert!(
+        err.to_string().contains("entities.name must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_predicate_closure_table() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
