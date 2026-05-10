@@ -168,6 +168,27 @@ fn ontology_extension_parent_must_not_be_blank() {
 }
 
 #[test]
+fn ontology_extension_agent_id_must_not_be_blank() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
+             VALUES ('custom_predicate', 'relates_to', '   ', 1)",
+            [],
+        )
+        .expect_err("blank ontology extension agent ids should be rejected");
+    assert!(
+        err.to_string()
+            .contains("ontology_extension_log.agent_id must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_entity_type_closure_table() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
