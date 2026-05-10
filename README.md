@@ -142,12 +142,14 @@ Default configuration:
 | `AVER_MEMORY_DIR` | `.aver` | Memory store directory. |
 | `AVER_AUTH_DB_PATH` | `<AVER_MEMORY_DIR>/auth.db` | SQLite auth database path. |
 | `AVER_CORS_ORIGINS` | *(allow any origin)* | Optional comma-separated allowed origins for protected MCP CORS responses. |
+| `AVER_TRUSTED_AUTH_HEADER` | *(unset)* | Optional reverse-proxy header name (for example `X-Forwarded-User`) that enables non-loopback OAuth authorization using Profile C trusted-header auth. |
+
 
 Useful endpoints:
 
 - `GET /.well-known/oauth-authorization-server`
 - `POST /oauth/register`
-- `GET /oauth/authorize` (browser consent screen, loopback only)
+- `GET /oauth/authorize` (browser consent screen; loopback by default, optional trusted-header for non-loopback)
 - `POST /oauth/authorize/decision` (consent-screen form submission)
 - `POST /oauth/token` for authorization-code + PKCE token exchange and refresh-token grants
 - `GET /api/health` with `Authorization: Bearer <token>`
@@ -155,7 +157,7 @@ Useful endpoints:
 
 `/oauth/authorize` drives a browser consent flow (ADR-0020). After a client dynamic-registers via `POST /oauth/register`, it redirects the user to `/oauth/authorize` with the standard PKCE parameters. Aver renders a consent screen showing the client name, redirect URI, and requested scopes; on **Approve** it stores a per-client consent row, mints an authorization code bound to those scopes, and redirects back to the client's `redirect_uri` with `code` and `state`. The client then exchanges the code at `/oauth/token` for an `access_token` plus `refresh_token`; refresh grants issue a new access token while preserving the existing refresh token, and access tokens carry only the scopes recorded on the consent row.
 
-Today the consent flow is restricted to loopback (`127.0.0.1` / `::1`) callers — this is "Profile A" in ADR-0020. Public-internet `/oauth/authorize` requests are rejected with an HTML 403; trust-header and login-UI surfaces for non-loopback deployments are deferred to ADR-0020 slices 4-5.
+The flow supports loopback (`127.0.0.1` / `::1`) callers by default (Profile A in ADR-0020). Non-loopback callers can also authenticate via Profile C when `AVER_TRUSTED_AUTH_HEADER` is set to a trusted upstream identity header (for example `X-Forwarded-User`); otherwise they are rejected with an HTML 403.
 
 ### Connecting an MCP client
 

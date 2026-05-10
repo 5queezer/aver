@@ -44,6 +44,7 @@ pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
     let consent_deps = Arc::new(ConsentDeps {
         auth_db: auth_db.clone(),
         base_url: config.base_url.clone(),
+        trusted_auth_header: config.trusted_auth_header.clone(),
     });
     let state = HttpState {
         config,
@@ -176,34 +177,25 @@ async fn oauth_register(
 /// Dispatcher for `GET /oauth/authorize`.
 ///
 /// Profile A (loopback): delegate to the browser consent flow in
-/// [`crate::consent`]. Non-loopback callers are rejected with an HTML 403
-/// because the consent screen requires an interactive browser session bound
-/// to the local user.
+/// [`crate::consent`]. Loopback callers are always accepted.
 ///
-/// `ConnectInfo<SocketAddr>` is only populated when the server is started via
-/// `into_make_service_with_connect_info`. When absent (most direct-Router
-/// unit tests), we conservatively treat the request as non-loopback and
-/// reject — tests that need the consent flow inject `ConnectInfo` explicitly.
+/// Non-loopback callers are accepted when `AVER_TRUSTED_AUTH_HEADER` is
+/// configured and authenticated; otherwise we keep a terminal HTML 403.
 ///
-// Profile C (non-loopback / public deployments): future slices 4-5 will add a
-// trusted-header / login-UI surface here; for now non-loopback callers see a
-// terminal HTML error rather than an OAuth redirect-error so we never bounce
-// arbitrary `redirect_uri` query strings without first validating them.
+/// `ConnectInfo<SocketAddr>` is also required to avoid bypasses in tests and direct
+/// handler calls, so absence is treated as non-loopback and rejected.
 async fn oauth_authorize(
     axum::extract::State(state): axum::extract::State<HttpState>,
     request: Request<Body>,
 ) -> Response {
-    let connect_info = request
+    let connect = match request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
-        .copied();
-    let is_loopback = connect_info
-        .map(|ConnectInfo(addr)| addr.ip().is_loopback())
-        .unwrap_or(false);
-
-    if !is_loopback {
-        return non_loopback_authorize_rejected();
-    }
+        .copied()
+    {
+        Some(conn) => conn,
+        None => return non_loopback_authorize_rejected(),
+    };
 
     let (mut parts, _body) = request.into_parts();
     let headers = std::mem::take(&mut parts.headers);
@@ -214,7 +206,6 @@ async fn oauth_authorize(
             return (StatusCode::BAD_REQUEST, "invalid /oauth/authorize query").into_response();
         }
     };
-    let connect = connect_info.expect("checked is_loopback above");
     handle_loopback_get_authorize(
         axum::extract::State(state.consent_deps.clone()),
         connect,
@@ -227,7 +218,7 @@ async fn oauth_authorize(
 /// Renders the terminal HTML 403 served to non-loopback /oauth/authorize
 /// callers. Kept as a free function so the test suite can pin the response
 /// shape independently of the dispatcher wiring.
-fn non_loopback_authorize_rejected() -> Response {
+fn html_response_unavailable() -> Response {
     let body = concat!(
         "<!doctype html><html><head><meta charset=\"utf-8\">",
         "<title>Authorization unavailable</title>",
@@ -235,8 +226,8 @@ fn non_loopback_authorize_rejected() -> Response {
         "margin:4em auto;padding:1em;color:#111}h1{font-size:1.2em}",
         "p{color:#444}</style></head><body>",
         "<h1>Authorization unavailable</h1>",
-        "<p>This Aver server only authorizes OAuth clients over a loopback ",
-        "connection. Public-internet authorization is not enabled.</p>",
+        "<p>Authorization requires loopback connectivity or a trusted",
+        "header-backed identity.</p>",
         "</body></html>",
     );
     let mut response = (StatusCode::FORBIDDEN, body).into_response();
@@ -247,18 +238,22 @@ fn non_loopback_authorize_rejected() -> Response {
     response
 }
 
+fn non_loopback_authorize_rejected() -> Response {
+    html_response_unavailable()
+}
+
 async fn oauth_authorize_decision(
     axum::extract::State(state): axum::extract::State<HttpState>,
     request: Request<Body>,
 ) -> Response {
-    // Manually extract ConnectInfo so we can return a structured HTML error
-    // when the test scaffold did not register peer addresses.
+    // Manually extract ConnectInfo so we can fail fast if caller context is
+    // unavailable (for direct-router tests and unusual invocation paths).
     let connect_info = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .copied();
     let Some(connect) = connect_info else {
-        return (StatusCode::FORBIDDEN, "loopback connect info missing").into_response();
+        return html_response_unavailable();
     };
 
     let (mut parts, body) = request.into_parts();

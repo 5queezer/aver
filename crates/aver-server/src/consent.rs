@@ -1,10 +1,16 @@
-//! Browser consent flow for ADR-0020 (Profile A — loopback).
+//! Browser consent flow for ADR-0020.
 //!
 //! This module renders the HTML consent screen at `GET /oauth/authorize` and
-//! handles the form submission at `POST /oauth/authorize/decision`. It is
-//! intentionally narrow: only loopback (Profile A) is implemented here.
-//! Non-loopback callers are rejected by the dispatcher in `http.rs` with an
-//! HTML 403; Profile C (public deployments) is deferred to slices 4-5.
+//! handles the form submission at `POST /oauth/authorize/decision`.
+//!
+//! Profile A (loopback) is always supported. Profile C is partially enabled
+//! when `AVER_TRUSTED_AUTH_HEADER` is set: non-loopback requests may authenticate
+//! via that header for deployments that terminate auth upstream (e.g. IAP).
+//!
+//! The implementation is intentionally narrow for slice 4: if the trusted header
+//! is configured and present, we upsert a `UserKind::Header` user and continue
+//! with the same consent flow.
+//
 //!
 //! Anti-CSRF design:
 //! The anti-CSRF token is `HMAC-SHA256(server_secret, session_id || "|" ||
@@ -21,7 +27,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::{ConnectInfo, Form, Query, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use base64::Engine;
 use hmac::{Hmac, Mac};
@@ -46,33 +52,70 @@ pub const CSRF_SECRET_NAME: &str = "csrf_hmac";
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Returns `Some(local_user)` only when the request originates from a
-/// loopback IP. Upserts the fixed `local` user on the first call.
+/// Returns an authenticated user for the current request.
 ///
-/// `headers` is currently unused — kept in the signature to mirror the
-/// brief and to leave room for future profiles that read headers (e.g.
-/// trust headers or Authorization).
+/// - Loopback requests authenticate as the fixed local user.
+/// - Non-loopback requests may authenticate from the configured trusted header.
+/// - Returns `None` when authentication is not possible.
+///
+/// `headers` is read for Profile C trusted-header auth (e.g.
+/// `X-Forwarded-User`).
 pub fn authenticate_loopback(
     remote_addr: SocketAddr,
-    _headers: &HeaderMap,
+    headers: &HeaderMap,
     auth_db: &AuthDb,
+    trusted_auth_header: Option<&str>,
 ) -> Option<User> {
-    if !remote_addr.ip().is_loopback() {
+    authenticate_request(remote_addr, headers, auth_db, trusted_auth_header)
+}
+
+pub fn authenticate_request(
+    remote_addr: SocketAddr,
+    headers: &HeaderMap,
+    auth_db: &AuthDb,
+    trusted_auth_header: Option<&str>,
+) -> Option<User> {
+    if remote_addr.ip().is_loopback() {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let user = User {
+            id: LOCAL_USER_ID.to_string(),
+            kind: UserKind::Local,
+            external_id: None,
+            created_at: now,
+        };
+        if let Err(err) = auth_db.upsert_user(&user) {
+            tracing_unavailable_warn(&format!("upsert local user failed: {err}"));
+            return None;
+        }
+        return auth_db.get_user(LOCAL_USER_ID).ok().flatten();
+    }
+
+    let header_name = trusted_auth_header?.trim();
+    let header_name = match HeaderName::from_bytes(header_name.as_bytes()) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+    let raw = headers.get(header_name)?.to_str().ok()?.trim();
+    if raw.is_empty() {
         return None;
     }
+    let user_id = raw.split(',').next().unwrap_or("").trim();
+    if user_id.is_empty() {
+        return None;
+    }
+
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let user = User {
-        id: LOCAL_USER_ID.to_string(),
-        kind: UserKind::Local,
+        id: user_id.to_string(),
+        kind: UserKind::Header,
         external_id: None,
         created_at: now,
     };
     if let Err(err) = auth_db.upsert_user(&user) {
-        tracing_unavailable_warn(&format!("upsert local user failed: {err}"));
+        tracing_unavailable_warn(&format!("upsert header-auth user failed: {err}"));
         return None;
     }
-    // Re-read so we return the original `created_at` on subsequent calls.
-    auth_db.get_user(LOCAL_USER_ID).ok().flatten()
+    auth_db.get_user(&user.id).ok().flatten()
 }
 
 /// Logging stub: aver-server does not yet pull in `tracing`. Keeps the call
@@ -368,6 +411,7 @@ fn render_consent_page(
 pub struct ConsentDeps {
     pub auth_db: Arc<Mutex<AuthDb>>,
     pub base_url: String,
+    pub trusted_auth_header: Option<String>,
 }
 
 /// Looks up the registered client's `(client_name, redirect_uris, created_at)`
@@ -449,14 +493,18 @@ pub async fn handle_loopback_get_authorize(
     };
     let auth_db: &AuthDb = &auth_db_guard;
 
-    let user = match authenticate_loopback(remote_addr, &headers, auth_db) {
+    let user = match authenticate_loopback(
+        remote_addr,
+        &headers,
+        auth_db,
+        deps.trusted_auth_header.as_deref(),
+    ) {
         Some(u) => u,
         None => {
-            // Should not happen — caller already checked. Defensive HTML 403.
             return html_error(
                 StatusCode::FORBIDDEN,
-                "Loopback only",
-                "This endpoint requires a loopback connection.",
+                "Authorization unavailable",
+                "Authentication is unavailable for this request.",
             );
         }
     };
@@ -638,13 +686,33 @@ pub async fn handle_authorize_decision(
     headers: HeaderMap,
     Form(form): Form<DecisionForm>,
 ) -> Response {
-    if !remote_addr.ip().is_loopback() {
-        return html_error(
-            StatusCode::FORBIDDEN,
-            "Loopback only",
-            "This endpoint is only available on loopback connections.",
-        );
-    }
+    let auth_db_guard = match deps.auth_db.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            return html_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Server error",
+                "Auth database lock poisoned.",
+            );
+        }
+    };
+    let auth_db: &AuthDb = &auth_db_guard;
+
+    let authenticated_user = match authenticate_loopback(
+        remote_addr,
+        &headers,
+        auth_db,
+        deps.trusted_auth_header.as_deref(),
+    ) {
+        Some(u) => u,
+        None => {
+            return html_error(
+                StatusCode::FORBIDDEN,
+                "Authorization unavailable",
+                "Authentication is unavailable for this request.",
+            );
+        }
+    };
 
     let allowed = match parse_allowed_origins(&deps.base_url) {
         Ok(v) => v,
@@ -672,18 +740,6 @@ pub async fn handle_authorize_decision(
         );
     }
 
-    let auth_db_guard = match deps.auth_db.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            return html_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Server error",
-                "Auth database lock poisoned.",
-            );
-        }
-    };
-    let auth_db: &AuthDb = &auth_db_guard;
-
     let (session, user) = match current_session(&headers, auth_db) {
         Some(v) => v,
         None => {
@@ -694,11 +750,11 @@ pub async fn handle_authorize_decision(
             );
         }
     };
-    if user.id != LOCAL_USER_ID {
+    if user.id != authenticated_user.id {
         return html_error(
             StatusCode::FORBIDDEN,
             "Wrong user",
-            "Session is bound to a non-loopback user.",
+            "Session does not match authenticated user.",
         );
     }
 

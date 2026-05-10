@@ -12,6 +12,7 @@ const ENV_VARS: &[&str] = &[
     "AVER_AUTH_DB_PATH",
     "AVER_CORS_ORIGINS",
     "AVER_LOCAL_AUTHORIZATION_TOKEN",
+    "AVER_TRUSTED_AUTH_HEADER",
 ];
 
 fn clear_env() {
@@ -34,6 +35,7 @@ fn server_config_reads_aver_environment() {
         std::env::set_var("AVER_BASE_URL", "http://127.0.0.1:3317");
         std::env::set_var("AVER_MEMORY_DIR", "/tmp/aver-memory-test");
         std::env::set_var("AVER_AUTH_DB_PATH", "/tmp/aver-auth-test.db");
+        std::env::set_var("AVER_TRUSTED_AUTH_HEADER", "x-forwarded-user");
     }
 
     let config = ServerConfig::from_env().unwrap();
@@ -44,6 +46,10 @@ fn server_config_reads_aver_environment() {
     assert_eq!(config.memory_dir, "/tmp/aver-memory-test");
     assert_eq!(config.auth_db_path, "/tmp/aver-auth-test.db");
     assert!(config.cors_origins.is_empty());
+    assert_eq!(
+        config.trusted_auth_header,
+        Some("x-forwarded-user".to_string())
+    );
 
     clear_env();
 }

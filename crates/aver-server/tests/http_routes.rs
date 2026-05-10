@@ -20,6 +20,7 @@ async fn oauth_metadata_route_returns_discovery_document() {
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: dir.path().join("auth.db").to_string_lossy().to_string(),
         cors_origins: Vec::new(),
+        trusted_auth_header: None,
     };
     let app = build_router(config).unwrap();
 
@@ -65,6 +66,7 @@ async fn oauth_token_route_exchanges_authorization_code_with_pkce() {
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: auth_db_path.to_string_lossy().to_string(),
         cors_origins: Vec::new(),
+        trusted_auth_header: None,
     };
     let app = build_router(config).unwrap();
     let redirect = "http://localhost:8080/callback";
@@ -113,6 +115,7 @@ async fn protected_health_requires_bearer_token() {
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: auth_db_path.to_string_lossy().to_string(),
         cors_origins: Vec::new(),
+        trusted_auth_header: None,
     };
     let app = build_router(config).unwrap();
 
@@ -151,6 +154,7 @@ async fn oauth_register_route_creates_public_client() {
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: dir.path().join("auth.db").to_string_lossy().to_string(),
         cors_origins: Vec::new(),
+        trusted_auth_header: None,
     };
     let app = build_router(config).unwrap();
 
@@ -206,6 +210,7 @@ async fn oauth_authorize_route_rejects_non_loopback_with_html_403() {
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: auth_db_path.to_string_lossy().to_string(),
         cors_origins: Vec::new(),
+        trusted_auth_header: None,
     };
     let app = build_router(config).unwrap();
     let uri = format!(
@@ -258,6 +263,7 @@ async fn oauth_authorize_route_rejects_missing_connect_info() {
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: auth_db_path.to_string_lossy().to_string(),
         cors_origins: Vec::new(),
+        trusted_auth_header: None,
     };
     let app = build_router(config).unwrap();
     let uri = format!(
@@ -280,6 +286,7 @@ async fn mcp_route_requires_bearer_token() {
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: dir.path().join("auth.db").to_string_lossy().to_string(),
         cors_origins: Vec::new(),
+        trusted_auth_header: None,
     };
     let app = build_router(config).unwrap();
 

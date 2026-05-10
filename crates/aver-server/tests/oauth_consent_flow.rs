@@ -28,6 +28,23 @@ fn base_config(dir: &tempfile::TempDir, auth_db_path: &std::path::Path) -> Serve
         memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
         auth_db_path: auth_db_path.to_string_lossy().to_string(),
         cors_origins: Vec::new(),
+        trusted_auth_header: None,
+    }
+}
+
+fn base_config_with_trusted_header(
+    dir: &tempfile::TempDir,
+    auth_db_path: &std::path::Path,
+    header_name: &str,
+) -> ServerConfig {
+    ServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 3317,
+        base_url: "http://127.0.0.1:3317".to_string(),
+        memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
+        auth_db_path: auth_db_path.to_string_lossy().to_string(),
+        cors_origins: Vec::new(),
+        trusted_auth_header: Some(header_name.to_string()),
     }
 }
 
@@ -431,4 +448,87 @@ async fn decision_with_cross_site_origin_is_rejected() {
     req.extensions_mut().insert(ConnectInfo(loopback_addr()));
     let response = app.oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn non_loopback_get_authorize_with_trusted_header_is_allowed() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let _ = AuthDb::open(&auth_db_path).unwrap();
+    let redirect = "http://127.0.0.1:3917/callback";
+    let client_id = register_client(&auth_db_path, redirect);
+    let config = base_config_with_trusted_header(&dir, &auth_db_path, "x-forwarded-user");
+    let app = build_router(config).unwrap();
+    let challenge = pkce_s256_challenge("verifier-abc-1234567890");
+
+    let uri = format!(
+        "/oauth/authorize?response_type=code&client_id={cid}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={ch}&code_challenge_method=S256",
+        cid = client_id,
+        ch = challenge,
+    );
+    let mut req = Request::builder().uri(&uri).body(Body::empty()).unwrap();
+    req.extensions_mut().insert(ConnectInfo(routable_addr()));
+    req.headers_mut().append(
+        header::HeaderName::from_static("x-forwarded-user"),
+        "remote-admin".parse().unwrap(),
+    );
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(extract_session_cookie(response.headers()).is_some());
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(std::str::from_utf8(&body).unwrap().contains("csrf_token"));
+}
+
+#[tokio::test]
+async fn non_loopback_authorize_decision_requires_matching_trusted_user_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let _ = AuthDb::open(&auth_db_path).unwrap();
+    let redirect = "http://127.0.0.1:3917/callback";
+    let client_id = register_client(&auth_db_path, redirect);
+    let config = base_config_with_trusted_header(&dir, &auth_db_path, "x-forwarded-user");
+    let app = build_router(config).unwrap();
+    let challenge = pkce_s256_challenge("verifier-abc-1234567890");
+
+    let uri = format!(
+        "/oauth/authorize?response_type=code&client_id={cid}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={ch}&code_challenge_method=S256",
+        cid = client_id,
+        ch = challenge,
+    );
+    let mut req = Request::builder().uri(&uri).body(Body::empty()).unwrap();
+    req.extensions_mut().insert(ConnectInfo(routable_addr()));
+    req.headers_mut().append(
+        header::HeaderName::from_static("x-forwarded-user"),
+        "remote-admin".parse().unwrap(),
+    );
+    let response = app.clone().oneshot(req).await.unwrap();
+    let session_cookie =
+        extract_session_cookie(response.headers()).expect("cookie set on non-loopback header flow");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let csrf = extract_csrf_token(std::str::from_utf8(&body).unwrap());
+
+    let form = format!(
+        "client_id={cid}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={ch}&code_challenge_method=S256&csrf_token={csrf}&decision=approve",
+        cid = client_id,
+        ch = challenge,
+        csrf = csrf,
+    );
+    let mut req = Request::builder()
+        .method(Method::POST)
+        .uri("/oauth/authorize/decision")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, format!("aver_session={session_cookie}"))
+        .body(Body::from(form))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(routable_addr()));
+    req.headers_mut().append(
+        header::HeaderName::from_static("x-forwarded-user"),
+        "remote-admin".parse().unwrap(),
+    );
+    let response = app.oneshot(req).await.unwrap();
+    assert!(response.status().is_redirection() || response.status().is_success());
 }

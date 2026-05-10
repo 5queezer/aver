@@ -6,6 +6,12 @@ pub struct ServerConfig {
     pub memory_dir: String,
     pub auth_db_path: String,
     pub cors_origins: Vec<String>,
+    /// Optional reverse-proxy header name used for Profile C public deployments.
+    ///
+    /// If present, non-loopback OAuth authorize requests may be authenticated
+    /// by this header in `AVER_TRUSTED_AUTH_HEADER` (for example,
+    /// `X-Forwarded-User`).
+    pub trusted_auth_header: Option<String>,
 }
 
 impl ServerConfig {
@@ -26,6 +32,10 @@ impl ServerConfig {
             .filter(|origin| !origin.is_empty())
             .map(ToString::to_string)
             .collect();
+        let trusted_auth_header = std::env::var("AVER_TRUSTED_AUTH_HEADER")
+            .ok()
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty());
 
         Ok(Self {
             host,
@@ -34,6 +44,7 @@ impl ServerConfig {
             memory_dir,
             auth_db_path,
             cors_origins,
+            trusted_auth_header,
         })
     }
 }
