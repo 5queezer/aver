@@ -1,0 +1,28 @@
+[package]
+name = "aver-scope-shim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "aver-scope-shim"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum = "0.8"
+clap.workspace = true
+http = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "process"] }
+tower = "0.5"
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true

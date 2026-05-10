@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use aver_core::{
-    AgentKind, CandidateClaim, Claim, ContradictionRecord, EpisodicEvent, NewClaim, Observation,
-    ObservationCoverage, ObservationRecall, ObservationRelevance, Store,
+    AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, NewClaim,
+    Observation, ObservationCoverage, ObservationRecall, ObservationRelevance, PredicateWalk,
+    RecallFilters, ScopeWalk, Store,
 };
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +18,9 @@ pub struct RememberClaimParams {
     pub agent_id: Option<String>,
     #[serde(default)]
     pub agent_kind: Option<String>,
+    /// ADR-0021 hierarchical memory scope. Defaults to "global".
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -28,6 +32,33 @@ pub struct RecallParams {
     pub hops: Option<usize>,
     #[serde(default)]
     pub top_k: Option<usize>,
+    /// ADR-0021 scope filter. Defaults to "global".
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// ADR-0021 walk mode: "exact" | "ancestors" | "descendants" | "any".
+    /// Defaults to "any" when scope is omitted, "ancestors" otherwise.
+    #[serde(default)]
+    pub scope_walk: Option<String>,
+    /// ADR-0023 filter: only return claims written by this `agent_id`.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// ADR-0023 filter: only return claims whose `agent_kind` matches.
+    /// One of HUMAN, LLM, DETERMINISTIC_PARSER, EXTERNAL_TOOL.
+    #[serde(default)]
+    pub agent_kind: Option<String>,
+    /// ADR-0023 filter: predicate (exact unless `predicate_walk=descendants`).
+    #[serde(default)]
+    pub predicate: Option<String>,
+    /// ADR-0023 walk mode for `predicate`: "exact" | "descendants" (default exact).
+    #[serde(default)]
+    pub predicate_walk: Option<String>,
+    /// ADR-0023 filter: inclusive lower bound on claim confidence (0..=1).
+    #[serde(default)]
+    pub min_confidence: Option<f64>,
+    /// ADR-0023 filter: status. One of ACTIVE, SUPERSEDED, INVALIDATED, or
+    /// "any" to drop the implicit ACTIVE filter. Defaults to ACTIVE.
+    #[serde(default)]
+    pub status: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -37,6 +68,10 @@ pub struct ExpandParams {
     pub hops: Option<usize>,
     #[serde(default)]
     pub predicates: Option<Vec<String>>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub scope_walk: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -47,6 +82,8 @@ pub struct AddTripleParams {
     #[serde(default)]
     pub confidence: Option<f64>,
     pub source: String,
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -82,6 +119,8 @@ pub struct RecordEventParams {
     pub agent_id: Option<String>,
     #[serde(default)]
     pub agent_kind: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -96,6 +135,8 @@ pub struct ProposeCandidateClaimParams {
     pub subject: String,
     pub predicate: String,
     pub object: String,
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -144,6 +185,8 @@ pub struct RecordObservationParams {
     pub relevance: ObservationRelevanceParam,
     pub source_event_ids: Vec<i64>,
     pub derivation: String,
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -167,6 +210,18 @@ pub struct AddVectorChunkParams {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct RetireClaimParams {
+    pub claim_id: i64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RetireClaimView {
+    pub claim_id: i64,
+    pub status: String,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ClaimView {
     pub id: i64,
@@ -178,6 +233,7 @@ pub struct ClaimView {
     pub source_refs: Vec<String>,
     pub agent_id: String,
     pub agent_kind: String,
+    pub scope: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -190,6 +246,7 @@ pub struct EventView {
     pub agent_id: String,
     pub agent_kind: String,
     pub ts: i64,
+    pub scope: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -204,6 +261,7 @@ pub struct CandidateClaimView {
     pub status: String,
     pub promoted_claim_id: Option<i64>,
     pub rejection_reason: Option<String>,
+    pub scope: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -217,6 +275,7 @@ pub struct ObservationView {
     pub agent_kind: String,
     pub derivation: String,
     pub ts: i64,
+    pub scope: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -300,6 +359,7 @@ impl From<Claim> for ClaimView {
             source_refs: claim.source_refs,
             agent_id: claim.agent_id,
             agent_kind: claim.agent_kind.as_str().to_string(),
+            scope: claim.scope,
         }
     }
 }
@@ -315,6 +375,7 @@ impl From<EpisodicEvent> for EventView {
             agent_id: event.agent_id,
             agent_kind: event.agent_kind.as_str().to_string(),
             ts: event.ts,
+            scope: event.scope,
         }
     }
 }
@@ -332,6 +393,7 @@ impl From<CandidateClaim> for CandidateClaimView {
             status: candidate.status,
             promoted_claim_id: candidate.promoted_claim_id,
             rejection_reason: candidate.rejection_reason,
+            scope: candidate.scope,
         }
     }
 }
@@ -348,6 +410,7 @@ impl From<Observation> for ObservationView {
             agent_kind: observation.agent_kind.as_str().to_string(),
             derivation: observation.derivation,
             ts: observation.ts,
+            scope: observation.scope,
         }
     }
 }
@@ -413,20 +476,52 @@ impl AverTools {
             .as_deref()
             .unwrap_or("EXTERNAL_TOOL")
             .parse::<AgentKind>()?;
-        let id = self.store.add_claim_from_agent(
+        let scope = params.scope.as_deref().unwrap_or("global");
+        let id = self.store.add_claim_from_agent_with_scope(
             agent_id,
             agent_kind,
             &params.subject,
             &params.predicate,
             &params.object,
             source,
+            scope,
         )?;
         Ok(self.store.get_claim(id)?.into())
     }
 
     pub fn recall(&self, params: RecallParams) -> anyhow::Result<RecallView> {
         let top_k = validate_top_k(params.top_k.unwrap_or(5))?;
-        let mut claims = self.store.recall_text(&params.query)?;
+        let scope = params.scope.as_deref().unwrap_or("global");
+        let walk = parse_scope_walk(params.scope_walk.as_deref(), &params.scope)?;
+        // ADR-0023 typed filters.
+        let agent_kind = match params.agent_kind.as_deref() {
+            Some(s) => Some(s.parse::<AgentKind>()?),
+            None => None,
+        };
+        let predicate_walk = match params.predicate_walk.as_deref() {
+            Some(s) => s
+                .parse::<PredicateWalk>()
+                .map_err(|err| anyhow::anyhow!("invalid predicate_walk: {err}"))?,
+            None => PredicateWalk::Exact,
+        };
+        let status = match params.status.as_deref() {
+            Some("any") => None,
+            Some(s) => Some(s.parse::<ClaimStatus>()?),
+            None => Some(ClaimStatus::Active),
+        };
+        let filters = RecallFilters {
+            scope: scope.to_string(),
+            scope_walk: walk,
+            agent_id: params.agent_id.clone(),
+            agent_kind,
+            predicate: params.predicate.clone(),
+            predicate_walk,
+            min_confidence: params.min_confidence,
+            status,
+        };
+        let mut claims = self
+            .store
+            .recall_text_with_filters(&params.query, filters)?;
         claims.truncate(top_k);
         let _alpha = if let Some(alpha) = params.alpha {
             aver_core::retrieval::HybridWeights::try_new(alpha)
@@ -436,11 +531,15 @@ impl AverTools {
             aver_core::retrieval::HybridWeights::for_query(&params.query).alpha
         };
         let hops = validate_hops(params.hops.unwrap_or(2))?;
-        let mut subgraph = self.store.expand(&params.query, hops, None)?;
+        let mut subgraph = self
+            .store
+            .expand_with_scope(&params.query, hops, None, scope, walk)?;
         if subgraph.edges.is_empty()
             && let Some(first_claim) = claims.first()
         {
-            subgraph = self.store.expand(&first_claim.subject, hops, None)?;
+            subgraph =
+                self.store
+                    .expand_with_scope(&first_claim.subject, hops, None, scope, walk)?;
         }
         let confidence_floor = claims
             .iter()
@@ -465,9 +564,15 @@ impl AverTools {
             .predicates
             .as_ref()
             .map(|items| items.iter().map(String::as_str).collect::<Vec<_>>());
-        let graph = self
-            .store
-            .expand(&params.entity, hops, predicate_refs.as_deref())?;
+        let scope = params.scope.as_deref().unwrap_or("global");
+        let walk = parse_scope_walk(params.scope_walk.as_deref(), &params.scope)?;
+        let graph = self.store.expand_with_scope(
+            &params.entity,
+            hops,
+            predicate_refs.as_deref(),
+            scope,
+            walk,
+        )?;
         Ok(GraphView {
             nodes: graph.nodes,
             edges: graph.edges.into_iter().map(ClaimView::from).collect(),
@@ -489,12 +594,14 @@ impl AverTools {
         {
             anyhow::bail!("invalid confidence: must be between 0 and 1");
         }
-        let id = self.store.add_claim_with_confidence(
+        let scope = params.scope.as_deref().unwrap_or("global");
+        let id = self.store.add_claim_with_confidence_and_scope(
             &params.subject,
             &params.predicate,
             &params.object,
             &params.source,
             params.confidence.unwrap_or(0.95),
+            scope,
         )?;
         Ok(AddTripleView {
             triple_id: id,
@@ -543,13 +650,15 @@ impl AverTools {
             .as_deref()
             .unwrap_or("EXTERNAL_TOOL")
             .parse::<AgentKind>()?;
-        let id = self.store.record_event_from_agent(
+        let scope = params.scope.as_deref().unwrap_or("global");
+        let id = self.store.record_event_from_agent_with_scope(
             agent_id,
             agent_kind,
             &params.session_id,
             &params.kind,
             &params.payload,
             source,
+            scope,
         )?;
         Ok(self.store.get_event(id)?.into())
     }
@@ -572,11 +681,13 @@ impl AverTools {
         &self,
         params: ProposeCandidateClaimParams,
     ) -> anyhow::Result<CandidateClaimView> {
-        let id = self.store.propose_candidate_claim(
+        let scope = params.scope.as_deref().unwrap_or("global");
+        let id = self.store.propose_candidate_claim_with_scope(
             params.event_id,
             &params.subject,
             &params.predicate,
             &params.object,
+            scope,
         )?;
         Ok(self.store.get_candidate_claim(id)?.into())
     }
@@ -614,12 +725,14 @@ impl AverTools {
         &self,
         params: RecordObservationParams,
     ) -> anyhow::Result<ObservationView> {
-        let id = self.store.record_observation(
+        let scope = params.scope.as_deref().unwrap_or("global");
+        let id = self.store.record_observation_with_scope(
             &params.session_id,
             &params.content,
             params.relevance.into(),
             &params.source_event_ids,
             &params.derivation,
+            scope,
         )?;
         Ok(self.store.get_observation(&id)?.into())
     }
@@ -651,6 +764,17 @@ impl AverTools {
         })
     }
 
+    pub fn retire_claim(&self, params: RetireClaimParams) -> anyhow::Result<RetireClaimView> {
+        if params.reason.trim().is_empty() {
+            anyhow::bail!("invalid reason: must not be empty");
+        }
+        self.store.retire_claim(params.claim_id, &params.reason)?;
+        Ok(RetireClaimView {
+            claim_id: params.claim_id,
+            status: "INVALIDATED".to_string(),
+        })
+    }
+
     pub fn add_vector_chunk(
         &self,
         params: AddVectorChunkParams,
@@ -666,6 +790,25 @@ impl AverTools {
             claim_id: params.claim_id,
             text: params.text,
         })
+    }
+}
+
+/// Resolve `ScopeWalk` from optional MCP request strings.
+///
+/// Layer-1 default: when `scope_walk` is omitted, use `Any` if `scope` is also
+/// omitted (preserves today's behavior verbatim) and `Ancestors` if a scope
+/// was supplied (the user clearly wants scoped reads). Layer 2 will refine
+/// this further when connection-resolved scope lands.
+fn parse_scope_walk(walk: Option<&str>, scope: &Option<String>) -> anyhow::Result<ScopeWalk> {
+    match walk {
+        Some(s) => s
+            .parse::<ScopeWalk>()
+            .map_err(|err| anyhow::anyhow!("invalid scope_walk: {err}")),
+        None => Ok(if scope.is_some() {
+            ScopeWalk::Ancestors
+        } else {
+            ScopeWalk::Any
+        }),
     }
 }
 

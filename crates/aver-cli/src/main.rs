@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use aver_core::{AgentKind, ObservationRelevance, Store, replay, vacuum};
+use aver_core::{AgentKind, ObservationRelevance, ScopeWalk, Store, replay, vacuum};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -25,9 +25,20 @@ enum Command {
         object: String,
         #[arg(long)]
         source: String,
+        /// ADR-0021 memory scope. Defaults to "global".
+        #[arg(long)]
+        scope: Option<String>,
     },
     /// Search active claims by keyword.
-    Recall { query: String },
+    Recall {
+        query: String,
+        /// ADR-0021 memory scope filter. Defaults to "global" + walk=any.
+        #[arg(long)]
+        scope: Option<String>,
+        /// Walk mode: exact | ancestors | descendants | any.
+        #[arg(long)]
+        scope_walk: Option<String>,
+    },
 
     /// Record an episodic event from the agent.
     RecordEvent {
@@ -39,6 +50,8 @@ enum Command {
         payload: String,
         #[arg(long)]
         source: Option<String>,
+        #[arg(long)]
+        scope: Option<String>,
     },
 
     /// Check whether a session has enough events to trigger memory extraction.
@@ -56,6 +69,8 @@ enum Command {
         subject: String,
         predicate: String,
         object: String,
+        #[arg(long)]
+        scope: Option<String>,
     },
 
     /// List candidate claims, optionally filtered by session and/or status.
@@ -93,6 +108,8 @@ enum Command {
         source_event_ids: String,
         #[arg(long)]
         derivation: String,
+        #[arg(long)]
+        scope: Option<String>,
     },
 
     /// Recall an observation and its supporting events by observation ID.
@@ -127,6 +144,10 @@ enum Command {
         /// Comma-separated predicate names.
         #[arg(long)]
         predicates: Option<String>,
+        #[arg(long)]
+        scope: Option<String>,
+        #[arg(long)]
+        scope_walk: Option<String>,
     },
 
     /// Detect deterministic weighted graph communities.
@@ -141,6 +162,8 @@ enum Command {
         source: String,
         #[arg(long)]
         confidence: Option<f64>,
+        #[arg(long)]
+        scope: Option<String>,
     },
 
     /// Record a contradiction for an existing claim.
@@ -220,14 +243,38 @@ fn main() -> anyhow::Result<()> {
             predicate,
             object,
             source,
+            scope,
         } => {
-            let claim_id = store.add_claim(&subject, &predicate, &object, &source)?;
+            let claim_id = match scope.as_deref() {
+                None => store.add_claim(&subject, &predicate, &object, &source)?,
+                Some(scope) => {
+                    store.add_claim_with_scope(&subject, &predicate, &object, &source, scope)?
+                }
+            };
             println!("claim_id={claim_id}");
         }
 
-        Command::Recall { query } => {
-            for claim in store.recall_text(&query)? {
-                println!("{} {} {}", claim.subject, claim.predicate, claim.object);
+        Command::Recall {
+            query,
+            scope,
+            scope_walk,
+        } => {
+            let walk: ScopeWalk = match scope_walk.as_deref() {
+                None => {
+                    if scope.is_some() {
+                        ScopeWalk::Ancestors
+                    } else {
+                        ScopeWalk::Any
+                    }
+                }
+                Some(s) => s.parse()?,
+            };
+            let scope = scope.as_deref().unwrap_or("global");
+            for claim in store.recall_text_with_scope(&query, scope, walk)? {
+                println!(
+                    "[{}] {} {} {}",
+                    claim.scope, claim.subject, claim.predicate, claim.object
+                );
             }
         }
 
@@ -236,16 +283,28 @@ fn main() -> anyhow::Result<()> {
             kind,
             payload,
             source,
+            scope,
         } => {
             let source = source.as_deref().unwrap_or("cli");
-            let event_id = store.record_event_from_agent(
-                "cli",
-                AgentKind::Human,
-                &session_id,
-                &kind,
-                &payload,
-                source,
-            )?;
+            let event_id = match scope.as_deref() {
+                None => store.record_event_from_agent(
+                    "cli",
+                    AgentKind::Human,
+                    &session_id,
+                    &kind,
+                    &payload,
+                    source,
+                )?,
+                Some(scope) => store.record_event_from_agent_with_scope(
+                    "cli",
+                    AgentKind::Human,
+                    &session_id,
+                    &kind,
+                    &payload,
+                    source,
+                    scope,
+                )?,
+            };
             println!("event_id={event_id}");
         }
 
@@ -262,9 +321,14 @@ fn main() -> anyhow::Result<()> {
             subject,
             predicate,
             object,
+            scope,
         } => {
-            let candidate_id =
-                store.propose_candidate_claim(event_id, &subject, &predicate, &object)?;
+            let candidate_id = match scope.as_deref() {
+                None => store.propose_candidate_claim(event_id, &subject, &predicate, &object)?,
+                Some(scope) => store.propose_candidate_claim_with_scope(
+                    event_id, &subject, &predicate, &object, scope,
+                )?,
+            };
             println!("candidate_id={candidate_id}");
         }
 
@@ -302,6 +366,7 @@ fn main() -> anyhow::Result<()> {
             relevance,
             source_event_ids,
             derivation,
+            scope,
         } => {
             let relevance: ObservationRelevance = relevance.parse()?;
             let ids: Vec<i64> = source_event_ids
@@ -309,8 +374,19 @@ fn main() -> anyhow::Result<()> {
                 .map(|s| s.trim().parse::<i64>())
                 .collect::<Result<_, _>>()
                 .map_err(|err| anyhow::anyhow!("invalid event id: {err}"))?;
-            let id =
-                store.record_observation(&session_id, &content, relevance, &ids, &derivation)?;
+            let id = match scope.as_deref() {
+                None => {
+                    store.record_observation(&session_id, &content, relevance, &ids, &derivation)?
+                }
+                Some(scope) => store.record_observation_with_scope(
+                    &session_id,
+                    &content,
+                    relevance,
+                    &ids,
+                    &derivation,
+                    scope,
+                )?,
+            };
             println!("observation_id={id}");
         }
 
@@ -368,6 +444,8 @@ fn main() -> anyhow::Result<()> {
             entity,
             hops,
             predicates,
+            scope,
+            scope_walk,
         } => {
             let predicate_refs: Option<Vec<String>> = predicates
                 .as_ref()
@@ -375,10 +453,25 @@ fn main() -> anyhow::Result<()> {
             let pred_slice: Option<Vec<&str>> = predicate_refs
                 .as_ref()
                 .map(|v| v.iter().map(String::as_str).collect());
-            let graph = store.expand(&entity, hops, pred_slice.as_deref())?;
+            let walk: ScopeWalk = match scope_walk.as_deref() {
+                None => {
+                    if scope.is_some() {
+                        ScopeWalk::Ancestors
+                    } else {
+                        ScopeWalk::Any
+                    }
+                }
+                Some(s) => s.parse()?,
+            };
+            let scope = scope.as_deref().unwrap_or("global");
+            let graph =
+                store.expand_with_scope(&entity, hops, pred_slice.as_deref(), scope, walk)?;
             println!("nodes={}", graph.nodes.join(","));
             for edge in graph.edges {
-                println!("  {} {} {}", edge.subject, edge.predicate, edge.object);
+                println!(
+                    "  [{}] {} {} {}",
+                    edge.scope, edge.subject, edge.predicate, edge.object
+                );
             }
         }
 
@@ -400,14 +493,25 @@ fn main() -> anyhow::Result<()> {
             object,
             source,
             confidence,
+            scope,
         } => {
-            let id = store.add_claim_with_confidence(
-                &subject,
-                &predicate,
-                &object,
-                &source,
-                confidence.unwrap_or(0.95),
-            )?;
+            let id = match scope.as_deref() {
+                None => store.add_claim_with_confidence(
+                    &subject,
+                    &predicate,
+                    &object,
+                    &source,
+                    confidence.unwrap_or(0.95),
+                )?,
+                Some(scope) => store.add_claim_with_confidence_and_scope(
+                    &subject,
+                    &predicate,
+                    &object,
+                    &source,
+                    confidence.unwrap_or(0.95),
+                    scope,
+                )?,
+            };
             println!("triple_id={id}");
         }
 

@@ -141,9 +141,8 @@ pub fn serialize_scope_list(scopes: &[Scope]) -> String {
 pub fn required_scope_for_tool(tool: &str) -> Option<Scope> {
     Some(match tool {
         "recall" | "expand" => Scope::ClaimsRead,
-        "remember_claim" | "add_triple" | "contradict" | "consolidate" | "add_vector_chunk" => {
-            Scope::ClaimsWrite
-        }
+        "remember_claim" | "add_triple" | "contradict" | "consolidate" | "add_vector_chunk"
+        | "retire_claim" => Scope::ClaimsWrite,
         "record_event" | "should_extract_memories" => Scope::EventsWrite,
         "propose_candidate_claim"
         | "list_candidate_claims"
@@ -178,6 +177,7 @@ pub const ALL_TOOL_NAMES: &[&str] = &[
     "observation_coverage",
     "assemble_compaction_summary",
     "record_observation",
+    "retire_claim",
 ];
 
 #[cfg(test)]

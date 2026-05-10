@@ -13,6 +13,7 @@ fn add_vector_chunk_persists_and_is_retrievable() {
             object: "SQLite".to_string(),
             confidence: None,
             source: "test".to_string(),
+            scope: None,
         })
         .unwrap();
 
@@ -40,6 +41,7 @@ fn add_vector_chunk_rejects_empty_text() {
             object: "SQLite".to_string(),
             confidence: None,
             source: "test".to_string(),
+            scope: None,
         })
         .unwrap();
 

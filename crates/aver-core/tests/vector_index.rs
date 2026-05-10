@@ -107,7 +107,35 @@ fn migration_backfills_existing_vector_chunks_rows() {
              DROP TABLE IF EXISTS ontology_extension_log;
              ALTER TABLE entities DROP COLUMN requires_review;
              ALTER TABLE predicate_types DROP COLUMN created_via;
-             ALTER TABLE predicate_types DROP COLUMN created_at;",
+             ALTER TABLE predicate_types DROP COLUMN created_at;
+             -- ADR-0021 migration 0084 adds non-idempotent ALTER TABLE ADD COLUMN
+             -- statements + indexes + triggers that reference the new column.
+             -- Drop indexes and triggers first; SQLite refuses to drop a column
+             -- that is still referenced by an index.
+             DROP INDEX IF EXISTS claims_scope;
+             DROP INDEX IF EXISTS episodic_events_scope;
+             DROP INDEX IF EXISTS observations_scope;
+             DROP INDEX IF EXISTS candidate_claims_scope;
+             DROP TRIGGER IF EXISTS claims_scope_nonblank_insert;
+             DROP TRIGGER IF EXISTS claims_scope_nonblank_update;
+             DROP TRIGGER IF EXISTS claims_scope_charset_insert;
+             DROP TRIGGER IF EXISTS claims_scope_charset_update;
+             DROP TRIGGER IF EXISTS episodic_events_scope_nonblank_insert;
+             DROP TRIGGER IF EXISTS episodic_events_scope_nonblank_update;
+             DROP TRIGGER IF EXISTS episodic_events_scope_charset_insert;
+             DROP TRIGGER IF EXISTS episodic_events_scope_charset_update;
+             DROP TRIGGER IF EXISTS observations_scope_nonblank_insert;
+             DROP TRIGGER IF EXISTS observations_scope_nonblank_update;
+             DROP TRIGGER IF EXISTS observations_scope_charset_insert;
+             DROP TRIGGER IF EXISTS observations_scope_charset_update;
+             DROP TRIGGER IF EXISTS candidate_claims_scope_nonblank_insert;
+             DROP TRIGGER IF EXISTS candidate_claims_scope_nonblank_update;
+             DROP TRIGGER IF EXISTS candidate_claims_scope_charset_insert;
+             DROP TRIGGER IF EXISTS candidate_claims_scope_charset_update;
+             ALTER TABLE claims DROP COLUMN scope;
+             ALTER TABLE episodic_events DROP COLUMN scope;
+             ALTER TABLE observations DROP COLUMN scope;
+             ALTER TABLE candidate_claims DROP COLUMN scope;",
         )
         .unwrap();
         conn.pragma_update(None, "user_version", 9i64).unwrap();

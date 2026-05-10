@@ -23,6 +23,7 @@ use crate::{
     consent::{ConsentDeps, handle_authorize_decision, handle_loopback_get_authorize},
     mcp::AverMcpService,
     oauth::authorization_server_metadata,
+    scope_resolution::resolve_scope,
     scopes::parse_scope_list_lossy,
 };
 
@@ -82,6 +83,7 @@ pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
     };
     let protected_mcp = Router::new()
         .nest_service("/mcp", mcp_service)
+        .route_layer(axum::middleware::from_fn(resolve_request_scope))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             validate_bearer_token,
@@ -110,6 +112,47 @@ async fn oauth_metadata(
 
 async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// ADR-0022 middleware: read X-Aver-Scope and X-Aver-Scope-Default headers
+/// from the request, walk the precedence chain (header > default header >
+/// AVER_DEFAULT_SCOPE env > "global"), and insert the resolved scope as an
+/// Axum extension. The MCP handler reads it via http::request::Parts in
+/// the rmcp request context.
+///
+/// Malformed sources fail fast with HTTP 400 — silent fallback to "global"
+/// would re-introduce the cross-repo pollution this layer exists to fix.
+async fn resolve_request_scope(request: Request<Body>, next: Next) -> Response {
+    let header_scope = request
+        .headers()
+        .get("x-aver-scope")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let header_default = request
+        .headers()
+        .get("x-aver-scope-default")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let env_default = std::env::var("AVER_DEFAULT_SCOPE").ok();
+
+    let resolved = resolve_scope(
+        None,
+        header_scope.as_deref(),
+        header_default.as_deref(),
+        env_default.as_deref(),
+    );
+    match resolved {
+        Ok(resolved) => {
+            let mut request = request;
+            request.extensions_mut().insert(resolved);
+            next.run(request).await
+        }
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            format!("invalid scope header or env: {err}"),
+        )
+            .into_response(),
+    }
 }
 
 async fn validate_bearer_token(

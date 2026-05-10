@@ -113,11 +113,20 @@ A new binary in `crates/aver-scope-shim/` (sibling of `aver-cli`,
   ```text
   if `git rev-parse --show-toplevel` succeeds:
       slug = first 12 hex chars of sha256(`git config remote.origin.url`)
-             if origin exists, else basename(toplevel)
+             if origin exists,
+             else first 12 hex chars of sha256(absolute toplevel path)
       scope = "proj/{slug}"
   else:
       scope = AVER_DEFAULT_SCOPE env var, or "global"
   ```
+
+  The fallback hashes the *absolute toplevel path*, not the basename.
+  This closes the council-flagged collision risk (review 2026-05-10) where
+  two unrelated repositories with the same directory name (e.g. `~/a/mcp`
+  and `~/b/mcp`) would otherwise share a scope. The cost is that moving a
+  clone to a new parent directory changes its scope; that is acceptable
+  because the user can always pin the slug with `--scope` or by setting
+  an origin URL.
 
 - Forwards every request to `AVER_UPSTREAM_URL` (default
   `http://127.0.0.1:3317/mcp`) with `X-Aver-Scope` injected.
