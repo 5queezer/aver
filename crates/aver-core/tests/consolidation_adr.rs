@@ -12,7 +12,7 @@ fn inferred_temporal_decay_uses_exponential_delta_over_tau() {
     let store = Store::open(dir.path()).unwrap();
     let event = store.record_event("s", "tool", "payload", "test").unwrap();
     let candidate = store
-        .propose_candidate_claim(event, "auth", "likely_uses", "jwt")
+        .propose_candidate_claim(event, "auth", "uses", "jwt")
         .unwrap();
     let claim_id = store.promote_candidate_claim(candidate).unwrap();
     let original = store.get_claim(claim_id).unwrap();

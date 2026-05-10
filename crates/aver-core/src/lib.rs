@@ -79,6 +79,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0010_vector_index",
         include_str!("../../../migrations/0010_vector_index.sql"),
     ),
+    (
+        "0011_ontology_enforcement",
+        include_str!("../../../migrations/0011_ontology_enforcement.sql"),
+    ),
 ];
 
 /// Canonical embedding dimension for the `vec0` ANN index (ADR-0017
@@ -444,6 +448,10 @@ impl Store {
         let thing_id = self
             .entity_type_id("Thing")?
             .expect("ontology bootstrap should seed Thing");
+        // ADR-0018 §"Subject/object policy": when the inferred type falls
+        // back to `Thing` (no `prefix:` and no synonym match), surface the
+        // entity for consolidation review instead of silently coercing.
+        let requires_review = if type_id == thing_id { 1_i64 } else { 0_i64 };
         let current: Option<i64> = self
             .conn
             .query_row(
@@ -455,14 +463,17 @@ impl Store {
         match current {
             None => {
                 self.conn.execute(
-                    "INSERT INTO entities (name, type_id, created_at, last_seen_at)
-                     VALUES (?1, ?2, ?3, ?3)",
-                    params![entity, type_id, now],
+                    "INSERT INTO entities (name, type_id, requires_review, created_at, last_seen_at)
+                     VALUES (?1, ?2, ?3, ?4, ?4)",
+                    params![entity, type_id, requires_review, now],
                 )?;
             }
             Some(existing) if existing == thing_id && type_id != thing_id => {
+                // Promotion from Thing → real type clears the review flag.
                 self.conn.execute(
-                    "UPDATE entities SET type_id = ?2, last_seen_at = ?3 WHERE name = ?1",
+                    "UPDATE entities
+                        SET type_id = ?2, requires_review = 0, last_seen_at = ?3
+                      WHERE name = ?1",
                     params![entity, type_id, now],
                 )?;
             }
@@ -474,6 +485,75 @@ impl Store {
             }
         }
         Ok(())
+    }
+
+    /// ADR-0018: count of entities currently flagged `requires_review = 1`.
+    /// Surfaces the silent-`Thing`-fallback queue for consolidation.
+    pub fn requires_review_count(&self) -> Result<i64, Error> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM entities WHERE requires_review = 1",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// ADR-0018: resolve a predicate against `predicate_types.name` and the
+    /// `predicate_alias` table.
+    ///
+    /// Returns `Ok(true)` if the predicate is canonical or aliased; on miss
+    /// the policy diverges by provenance:
+    ///   * `USER_ASSERTED` — auto-extend `predicate_types` with parent
+    ///     `relates_to`, log to `ontology_extension_log`, return `Ok(true)`.
+    ///   * everything else — return `Err(Error::UnknownPredicate)`.
+    fn ontology_check(
+        &self,
+        predicate: &str,
+        provenance: Provenance,
+        agent_id: &str,
+        now: i64,
+    ) -> Result<(), Error> {
+        if self.predicate_type_id(predicate)?.is_some() {
+            return Ok(());
+        }
+        let alias_hit: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT predicate_id FROM predicate_alias WHERE alias = ?1",
+                [predicate],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if alias_hit.is_some() {
+            return Ok(());
+        }
+        match provenance {
+            Provenance::UserAsserted => {
+                let parent_id = self
+                    .predicate_type_id("relates_to")?
+                    .expect("ontology bootstrap should seed relates_to");
+                self.conn.execute(
+                    "INSERT INTO predicate_types (name, parent_id, created_via, created_at)
+                     VALUES (?1, ?2, 'user_assertion', ?3)",
+                    params![predicate, parent_id, now],
+                )?;
+                // Closure rebuild covers the new id incrementally; the
+                // rebuild is cheap (small ontology) and matches the
+                // pattern in `seed_ontology`.
+                seed::rebuild_closure(&self.conn, "predicate_types", "predicate_closure")?;
+                self.conn.execute(
+                    "INSERT INTO ontology_extension_log
+                       (predicate, parent, agent_id, created_at)
+                     VALUES (?1, 'relates_to', ?2, ?3)",
+                    params![predicate, agent_id, now],
+                )?;
+                Ok(())
+            }
+            Provenance::Extracted | Provenance::Inferred | Provenance::Ambiguous => {
+                Err(Error::UnknownPredicate {
+                    name: predicate.to_string(),
+                })
+            }
+        }
     }
 
     fn infer_entity_type_name(&self, entity: &str) -> Result<String, Error> {
@@ -596,6 +676,13 @@ impl Store {
         }
 
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
+
+        // ADR-0018: ontology check. USER_ASSERTED writes auto-extend the
+        // ontology with audit trail; EXTRACTED/INFERRED/AMBIGUOUS writes
+        // reject unknown predicates. Runs after the privacy filter so a
+        // secret-bearing predicate is quarantined first (see ADR-0018
+        // §"Telemetry").
+        self.ontology_check(write.predicate, write.provenance, write.agent_id, now)?;
 
         // Pre-allocate the claim id. Single-writer assumption: rusqlite's
         // Connection is !Sync, so within a process this is race-free; SQLite
@@ -2846,6 +2933,8 @@ pub enum Error {
     InvalidCandidateStatusFilter { status: String },
     #[error("missing entity: {entity}")]
     MissingEntity { entity: String },
+    #[error("unknown predicate: {name} (not in predicate_types or predicate_alias)")]
+    UnknownPredicate { name: String },
     #[error("missing claim: claim {claim_id} does not exist")]
     MissingClaim { claim_id: i64 },
     #[error("missing vector chunk: vector chunk {chunk_id} does not exist")]
@@ -3248,6 +3337,14 @@ fn apply_add_claim(
     ensure_entity_for_replay(conn, subject, ts)?;
     ensure_entity_for_replay(conn, object, ts)?;
 
+    // ADR-0018: replay must rebuild the same `predicate_types` rows the
+    // original write produced. USER_ASSERTED writes auto-extended the
+    // ontology; replay applies the same policy so the trigger does not
+    // fire on the subsequent INSERT. EXTRACTED/INFERRED rows in the log
+    // were already accepted under the original ontology — replay accepts
+    // them too (the log is the source of truth, ADR-0005).
+    ontology_check_for_replay(conn, predicate, provenance, agent_id, ts)?;
+
     let source_refs = serde_json::to_string(&[source])?;
     conn.execute(
         "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
@@ -3269,6 +3366,59 @@ fn apply_add_claim(
         ],
     )?;
     report.claims += 1;
+    Ok(())
+}
+
+/// Replay-side ontology check (ADR-0018). Mirrors `Store::ontology_check`
+/// but works on a bare `Connection` because replay does not own a `Store`.
+/// Replay must accept whatever the log says; for predicates absent from
+/// `predicate_types` and `predicate_alias` it auto-extends regardless of
+/// provenance, because the log records that the original write was
+/// accepted at the time. This is more permissive than the live writer,
+/// but it's the price of "log is source of truth" (ADR-0005).
+fn ontology_check_for_replay(
+    conn: &Connection,
+    predicate: &str,
+    _provenance: Provenance,
+    agent_id: &str,
+    ts: i64,
+) -> Result<(), Error> {
+    let known: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM predicate_types WHERE name = ?1",
+            [predicate],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if known.is_some() {
+        return Ok(());
+    }
+    let alias_hit: Option<i64> = conn
+        .query_row(
+            "SELECT predicate_id FROM predicate_alias WHERE alias = ?1",
+            [predicate],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if alias_hit.is_some() {
+        return Ok(());
+    }
+    let parent_id: i64 = conn.query_row(
+        "SELECT id FROM predicate_types WHERE name = 'relates_to'",
+        [],
+        |row| row.get(0),
+    )?;
+    conn.execute(
+        "INSERT INTO predicate_types (name, parent_id, created_via, created_at)
+         VALUES (?1, ?2, 'replay', ?3)",
+        params![predicate, parent_id, ts],
+    )?;
+    seed::rebuild_closure(conn, "predicate_types", "predicate_closure")?;
+    conn.execute(
+        "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
+         VALUES (?1, 'relates_to', ?2, ?3)",
+        params![predicate, agent_id, ts],
+    )?;
     Ok(())
 }
 

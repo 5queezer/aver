@@ -4,7 +4,7 @@ Date: 2026-05-10
 
 ## Status
 
-Proposed
+Accepted
 
 Extends ADR-0010 (type hierarchy and ontology discipline). Does not supersede it: ADR-0010 commits to *having* a typed ontology with closure tables; this ADR commits to *binding claim rows to it* on write. Companion to ADR-0009 (privacy filter), which already runs a pre-write rejection cascade in `insert_claim` — the same insertion path is the natural home for ontology checks.
 

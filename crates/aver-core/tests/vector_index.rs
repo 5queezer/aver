@@ -88,9 +88,26 @@ fn migration_backfills_existing_vector_chunks_rows() {
 
     // Pretend we are at schema version 9 (pre-0010): drop the index and
     // rewind user_version so the migration runner re-applies 0010.
+    // Note: migration 0011 uses non-idempotent `ALTER TABLE ADD COLUMN`,
+    // so we drop those columns/tables here to let the gated re-run
+    // recreate them cleanly.
     {
         let conn = Connection::open(&db_path).unwrap();
-        conn.execute_batch("DROP TABLE IF EXISTS vector_index;").unwrap();
+        // Drop everything migrations >=0010 created so the gated re-run
+        // recreates them cleanly. Migration 0011 uses non-idempotent
+        // `ALTER TABLE ADD COLUMN`, so the columns it added are dropped
+        // too (requires SQLite >= 3.35).
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS claims_predicate_in_ontology_insert;
+             DROP TRIGGER IF EXISTS claims_predicate_in_ontology_update;
+             DROP TABLE IF EXISTS vector_index;
+             DROP TABLE IF EXISTS predicate_alias;
+             DROP TABLE IF EXISTS ontology_extension_log;
+             ALTER TABLE entities DROP COLUMN requires_review;
+             ALTER TABLE predicate_types DROP COLUMN created_via;
+             ALTER TABLE predicate_types DROP COLUMN created_at;",
+        )
+        .unwrap();
         conn.pragma_update(None, "user_version", 9i64).unwrap();
         // Insert one matching-dim row and one off-dim row directly.
         let matching: Vec<f32> = {
@@ -102,7 +119,7 @@ fn migration_backfills_existing_vector_chunks_rows() {
         // Need a claim row first; use minimal direct insert.
         conn.execute(
             "INSERT INTO claims (subject, predicate, object, source_refs, agent_id, agent_kind, provenance, confidence, status, write_ts, created_at, last_seen_at)
-             VALUES ('S','p','O','[]','t','HUMAN','USER_ASSERTED',1.0,'ACTIVE',0,0,0)",
+             VALUES ('S','relates_to','O','[]','t','HUMAN','USER_ASSERTED',1.0,'ACTIVE',0,0,0)",
             [],
         )
         .unwrap();

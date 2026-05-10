@@ -14,7 +14,7 @@ fn remember_claim_tool_writes_claim_and_recall_returns_it() {
     let remembered = tools
         .remember_claim(RememberClaimParams {
             subject: "Aver".to_string(),
-            predicate: "exposes".to_string(),
+            predicate: "owns".to_string(),
             object: "MCP_tools".to_string(),
             source: Some("mcp-test".to_string()),
             agent_id: Some("claude".to_string()),
@@ -160,7 +160,7 @@ fn episodic_candidate_tools_cover_memory_pipeline() {
         .propose_candidate_claim(ProposeCandidateClaimParams {
             event_id: event.id,
             subject: "Aver".to_string(),
-            predicate: "stores".to_string(),
+            predicate: "owns".to_string(),
             object: "candidate_claims".to_string(),
         })
         .unwrap();

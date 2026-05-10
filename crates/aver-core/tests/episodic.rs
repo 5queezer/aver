@@ -67,14 +67,14 @@ fn propose_candidate_claim_requires_event_provenance() {
         .unwrap();
 
     let candidate_id = store
-        .propose_candidate_claim(event_id, "Aver", "should_batch", "memory_extraction")
+        .propose_candidate_claim(event_id, "Aver", "concerns", "memory_extraction")
         .unwrap();
 
     let candidate = store.get_candidate_claim(candidate_id).unwrap();
 
     assert_eq!(candidate.event_id, event_id);
     assert_eq!(candidate.subject, "Aver");
-    assert_eq!(candidate.predicate, "should_batch");
+    assert_eq!(candidate.predicate, "concerns");
     assert_eq!(candidate.object, "memory_extraction");
     assert_eq!(candidate.status, "PENDING");
     assert!(store.recall_text("memory_extraction").unwrap().is_empty());
@@ -102,7 +102,7 @@ fn promote_candidate_claim_creates_durable_claim_with_event_source() {
         )
         .unwrap();
     let candidate_id = store
-        .propose_candidate_claim(event_id, "Aver", "should_batch", "memory_extraction")
+        .propose_candidate_claim(event_id, "Aver", "concerns", "memory_extraction")
         .unwrap();
 
     let claim_id = store.promote_candidate_claim(candidate_id).unwrap();
@@ -110,7 +110,7 @@ fn promote_candidate_claim_creates_durable_claim_with_event_source() {
     let candidate = store.get_candidate_claim(candidate_id).unwrap();
 
     assert_eq!(claim.subject, "Aver");
-    assert_eq!(claim.predicate, "should_batch");
+    assert_eq!(claim.predicate, "concerns");
     assert_eq!(claim.object, "memory_extraction");
     assert_eq!(claim.provenance, aver_core::Provenance::Inferred);
     assert_eq!(claim.source_refs, vec![format!("event:{event_id}")]);

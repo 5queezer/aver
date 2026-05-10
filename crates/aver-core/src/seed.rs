@@ -50,6 +50,24 @@ const PREDICATE_ONTOLOGY: &[(&str, Option<&str>)] = &[
     ("fixes", Some("concerns")),
     ("tests", Some("concerns")),
     ("decides", Some("concerns")),
+    // ADR-0018 M3: seat the historical kebab-case predicates (renamed to
+    // snake_case) under sensible parents so the alias table resolves to a
+    // real ontology entry.
+    ("has_module", Some("owns")),
+    ("binary_name", Some("owns")),
+    ("impl_stays_in", Some("concerns")),
+    ("splits_by", Some("relates_to")),
+    ("uses", Some("depends_on")),
+    // ADR-0018: predicates already emitted by the deterministic chat
+    // extractor (`crates/aver-core/src/extractor.rs`). The extractor must
+    // classify against the seeded vocabulary or fail; per ADR §"Test plan"
+    // the test must extend the ontology in setup. Seating them here makes
+    // the extractor's emitted vocabulary part of the seed.
+    ("prefers", Some("concerns")),
+    ("is", Some("relates_to")),
+    ("has", Some("owns")),
+    ("defines", Some("owns")),
+    ("emits", Some("relates_to")),
 ];
 
 pub(crate) fn seed_ontology(conn: &Connection) -> Result<(), Error> {
