@@ -337,6 +337,34 @@ fn entity_name_must_not_be_blank() {
 }
 
 #[test]
+fn entity_created_at_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let type_id: i64 = conn
+        .query_row(
+            "SELECT id FROM entity_types WHERE name = 'Thing'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("seeded Thing entity type should exist");
+    let err = conn
+        .execute(
+            "INSERT INTO entities (name, type_id, created_at, last_seen_at)
+             VALUES ('Aver', ?1, 0, 1)",
+            [type_id],
+        )
+        .expect_err("entity created_at should be positive");
+    assert!(
+        err.to_string()
+            .contains("entities.created_at must be positive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_predicate_closure_table() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
