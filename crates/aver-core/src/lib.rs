@@ -127,6 +127,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0022_vector_embedding_nonempty_checks",
         include_str!("../../../migrations/0022_vector_embedding_nonempty_checks.sql"),
     ),
+    (
+        "0023_vector_chunk_text_nonblank_checks",
+        include_str!("../../../migrations/0023_vector_chunk_text_nonblank_checks.sql"),
+    ),
 ];
 
 /// Canonical embedding dimension for the `vec0` ANN index (ADR-0017
