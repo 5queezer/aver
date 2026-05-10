@@ -468,6 +468,38 @@ fn observations_agent_id_must_not_be_blank() {
 }
 
 #[test]
+fn observations_agent_id_allows_only_portable_identifier_chars() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.execute(
+        "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
+                                   agent_id, agent_kind, derivation, ts)
+         VALUES ('valid-agent', 'session-1', 'ok', 'high', '[1]',
+                 'agent_1-ok', 'LLM', 'test', 0)",
+        [],
+    )
+    .expect("portable observation agent ids should remain valid");
+
+    let err = conn
+        .execute(
+            "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
+                                       agent_id, agent_kind, derivation, ts)
+             VALUES ('bad-agent', 'session-1', 'bad', 'high', '[1]',
+                     'bad id!', 'LLM', 'test', 0)",
+            [],
+        )
+        .expect_err("observation agent ids with spaces/punctuation should be rejected");
+    assert!(
+        err.to_string()
+            .contains("observations.agent_id contains invalid characters"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn observations_source_event_ids_array_elements_must_be_integers() {
     let dir = tempfile::tempdir().unwrap();
     let _store = Store::open(dir.path()).expect("open should succeed");
