@@ -93,6 +93,30 @@ fn contradiction_reason_must_not_be_blank() {
 }
 
 #[test]
+fn contradiction_created_at_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let claim_id = store
+        .add_claim("Aver", "uses", "SQLite", "test")
+        .expect("claim insert should succeed");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO contradictions (claim_id, reason, created_at)
+             VALUES (?1, 'unsupported by source', 0)",
+            [claim_id],
+        )
+        .expect_err("contradiction timestamps must be positive");
+    assert!(
+        err.to_string()
+            .contains("contradictions.created_at must be positive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_observations_table() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
