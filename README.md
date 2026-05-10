@@ -142,18 +142,37 @@ Default configuration:
 | `AVER_MEMORY_DIR` | `.aver` | Memory store directory. |
 | `AVER_AUTH_DB_PATH` | `aver-auth.db` | SQLite auth database path. |
 | `AVER_CORS_ORIGINS` | *(allow any origin)* | Optional comma-separated allowed origins for protected MCP CORS responses. |
-| `AVER_LOCAL_AUTHORIZATION_TOKEN` | *(unset)* | Local approval token required by `/oauth/authorize`; requests must include `approval_token=<token>`. When unset, authorization-code minting returns `401` so public registration cannot self-authorize memory access. |
 
 Useful endpoints:
 
 - `GET /.well-known/oauth-authorization-server`
 - `POST /oauth/register`
-- `GET /oauth/authorize`
+- `GET /oauth/authorize` (browser consent screen, loopback only)
+- `POST /oauth/authorize/decision` (consent-screen form submission)
 - `POST /oauth/token` for authorization-code + PKCE token exchange and refresh-token grants
 - `GET /api/health` with `Authorization: Bearer <token>`
 - `/mcp` with `Authorization: Bearer <token>`
 
-`/oauth/authorize` is intentionally not self-service: after dynamic client registration, a local approval/provider boundary must supply `approval_token` matching `AVER_LOCAL_AUTHORIZATION_TOKEN` before Aver mints an authorization code. `/oauth/token` returns both `access_token` and `refresh_token`. Refresh grants issue a new access token while preserving the existing refresh token. Provider-backed login remains a boundary: external identity providers should only create local authorization codes after provider validation; they must not receive direct access to Aver's memory store or bypass the validated MCP/core write paths.
+`/oauth/authorize` drives a browser consent flow (ADR-0020). After a client dynamic-registers via `POST /oauth/register`, it redirects the user to `/oauth/authorize` with the standard PKCE parameters. Aver renders a consent screen showing the client name, redirect URI, and requested scopes; on **Approve** it stores a per-client consent row, mints an authorization code bound to those scopes, and redirects back to the client's `redirect_uri` with `code` and `state`. The client then exchanges the code at `/oauth/token` for an `access_token` plus `refresh_token`; refresh grants issue a new access token while preserving the existing refresh token, and access tokens carry only the scopes recorded on the consent row.
+
+Today the consent flow is restricted to loopback (`127.0.0.1` / `::1`) callers — this is "Profile A" in ADR-0020. Public-internet `/oauth/authorize` requests are rejected with an HTML 403; trust-header and login-UI surfaces for non-loopback deployments are deferred to ADR-0020 slices 4-5.
+
+### Connecting an MCP client
+
+For Visual Studio Code, drop a workspace-level `.vscode/mcp.json` similar to:
+
+```json
+{
+  "servers": {
+    "aver": {
+      "type": "http",
+      "url": "http://127.0.0.1:3317/mcp"
+    }
+  }
+}
+```
+
+Then run **MCP: Add Server** from the command palette and pick `aver`. VS Code dynamic-registers with `POST /oauth/register`, opens the consent screen in your browser, and — after you click **Approve** — receives the authorization code and exchanges it for an access token automatically. Other MCP clients that support the OAuth 2.1 + PKCE discovery profile (`/.well-known/oauth-authorization-server`) follow the same path.
 
 MCP tools currently include the ADR-0008 stable memory surface:
 
@@ -286,6 +305,7 @@ Implemented today:
 - Tree-sitter Rust extraction,
 - structured prose fact parsing,
 - MCP/OAuth server with ADR-0008 recall/expand/add-triple/contradict/consolidate tools, staged candidate-claim workflow, and observation recall/compaction-summary tools,
+- ADR-0020 browser consent flow for `/oauth/authorize` (loopback Profile A) replacing the legacy `approval_token` gate,
 - fixture and BEAM100K evaluation runners.
 
 Partial or planned:
