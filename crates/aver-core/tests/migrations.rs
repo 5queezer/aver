@@ -117,6 +117,30 @@ fn contradiction_created_at_must_be_positive() {
 }
 
 #[test]
+fn contradiction_new_claim_must_not_equal_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let claim_id = store
+        .add_claim("Aver", "uses", "SQLite", "test")
+        .expect("claim insert should succeed");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO contradictions (claim_id, reason, new_claim_id, created_at)
+             VALUES (?1, 'self-contradiction is not useful evidence', ?1, 1)",
+            [claim_id],
+        )
+        .expect_err("contradictions should not point new_claim_id at the same claim");
+    assert!(
+        err.to_string()
+            .contains("contradictions.new_claim_id must differ from claim_id"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_observations_table() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
