@@ -470,6 +470,33 @@ fn candidate_claim_object_must_not_be_blank() {
 }
 
 #[test]
+fn rejected_candidate_claims_must_have_nonblank_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let event_id = store
+        .record_event("session-1", "message", "payload", "test")
+        .expect("event insert should succeed");
+    let candidate_id = store
+        .propose_candidate_claim(event_id, "Aver", "uses", "SQLite")
+        .expect("candidate insert should succeed");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "UPDATE candidate_claims SET status = 'REJECTED', rejection_reason = '   ' WHERE id = ?1",
+            [candidate_id],
+        )
+        .expect_err("rejected candidate claims need a nonblank reason");
+    assert!(
+        err.to_string().contains(
+            "candidate_claims.rejection_reason must not be blank when status is REJECTED"
+        ),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn observations_source_event_ids_must_be_valid_json_array() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
