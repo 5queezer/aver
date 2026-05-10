@@ -445,6 +445,29 @@ fn observations_source_event_ids_must_be_valid_json_array() {
 }
 
 #[test]
+fn observations_agent_id_must_not_be_blank() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
+                                       agent_id, agent_kind, derivation, ts)
+             VALUES ('blank-agent', 'session-1', 'bad', 'high', '[1]',
+                     '   ', 'LLM', 'test', 0)",
+            [],
+        )
+        .expect_err("blank observation agent_id should be rejected");
+    assert!(
+        err.to_string()
+            .contains("observations.agent_id must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn observations_source_event_ids_array_elements_must_be_integers() {
     let dir = tempfile::tempdir().unwrap();
     let _store = Store::open(dir.path()).expect("open should succeed");
