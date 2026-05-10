@@ -75,7 +75,46 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0009_value_range_checks",
         include_str!("../../../migrations/0009_value_range_checks.sql"),
     ),
+    (
+        "0010_vector_index",
+        include_str!("../../../migrations/0010_vector_index.sql"),
+    ),
 ];
+
+/// Canonical embedding dimension for the `vec0` ANN index (ADR-0017
+/// §"Dimension binding"). Bound to `nomic-embed-text`, the default model
+/// returned by [`vector::VectorIndexConfig::default`]. Changing this value
+/// requires a re-index — see ADR-0017 §"Dimension binding".
+pub const VECTOR_INDEX_DIM: usize = 768;
+
+/// Register the statically-linked `sqlite-vec` extension as a SQLite
+/// auto-extension (ADR-0017). Called exactly once per process; subsequent
+/// calls are no-ops. The auto-extension fires on every new `Connection`,
+/// so all `Store::open` and `replay` paths get the `vec0` virtual-table
+/// module without extra plumbing.
+fn ensure_sqlite_vec_registered() {
+    use std::sync::Once;
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| {
+        // SAFETY: `sqlite3_vec_init` matches the SQLite auto-extension ABI.
+        // `sqlite3_auto_extension` is process-global; the `Once` guard
+        // prevents double-registration. The transmute is the idiom used by
+        // the `sqlite-vec` crate's own integration test.
+        unsafe {
+            type RawAutoExt = unsafe extern "C" fn(
+                *mut rusqlite::ffi::sqlite3,
+                *mut *mut std::os::raw::c_char,
+                *const rusqlite::ffi::sqlite3_api_routines,
+            ) -> std::os::raw::c_int;
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<
+                *const (),
+                RawAutoExt,
+            >(
+                sqlite_vec::sqlite3_vec_init as *const (),
+            )));
+        }
+    });
+}
 
 /// Local storage for Aver (ADR-0006).
 ///
@@ -94,9 +133,13 @@ pub struct Store {
 pub const LOG_ROTATE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 pub const LOG_ROTATE_MAX_LINES: u64 = 500_000;
 
-/// Runtime availability of the optional sqlite-vss extension (ADR-0006).
+/// Runtime availability of the bundled `sqlite-vec` extension (ADR-0017).
+/// Static linking via the `sqlite-vec` crate makes `Available` the expected
+/// state on every supported platform; the `Unavailable` variant exists so
+/// sandboxed builds that disable the auto-extension can degrade gracefully
+/// to the JSON full-scan recall path.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SqliteVssStatus {
+pub enum SqliteVecStatus {
     Available,
     Unavailable { reason: String },
 }
@@ -188,6 +231,11 @@ impl Store {
     /// Open or create a memory store rooted at `memory_dir`.
     /// The directory is created if it does not exist; migrations are applied.
     pub fn open(memory_dir: impl AsRef<Path>) -> Result<Self, Error> {
+        // ADR-0017: register the bundled sqlite-vec extension before any
+        // Connection is created so the `vec0` module is available to the
+        // 0010 migration and every subsequent statement.
+        ensure_sqlite_vec_registered();
+
         let memory_dir = memory_dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&memory_dir)?;
 
@@ -264,36 +312,38 @@ impl Store {
             .is_ok()
     }
 
-    /// Probe sqlite-vss capability without requiring a network or system service.
-    pub fn sqlite_vss_status(&self) -> Result<SqliteVssStatus, Error> {
+    /// Probe `sqlite-vec` capability. With the bundled crate this is
+    /// expected to return `Available` everywhere; the probe is retained
+    /// so callers can detect a sandboxed build where the auto-extension
+    /// failed to register and fall back to the JSON recall path
+    /// (ADR-0017 §"Retrieval rewrite").
+    pub fn sqlite_vec_status(&self) -> Result<SqliteVecStatus, Error> {
         let available = self
             .conn
-            .query_row("SELECT vss_version()", [], |_| Ok(()))
+            .query_row("SELECT vec_version()", [], |_| Ok(()))
             .is_ok();
         if available {
-            Ok(SqliteVssStatus::Available)
+            Ok(SqliteVecStatus::Available)
         } else {
-            Ok(SqliteVssStatus::Unavailable {
-                reason: "sqlite-vss extension is not loaded".to_string(),
+            Ok(SqliteVecStatus::Unavailable {
+                reason: "sqlite-vec extension is not loaded".to_string(),
             })
         }
     }
 
-    /// Prepare the optional sqlite-vss vector index when the extension exists.
-    pub fn prepare_sqlite_vss_index(&self, dimensions: usize) -> Result<SqliteVssStatus, Error> {
-        match self.sqlite_vss_status()? {
-            SqliteVssStatus::Available => {
-                self.conn.execute_batch(&format!(
-                    "CREATE VIRTUAL TABLE IF NOT EXISTS vector_index USING vss0(embedding({dimensions}))"
-                ))?;
-                Ok(SqliteVssStatus::Available)
-            }
-            unavailable => Ok(unavailable),
-        }
-    }
-
+    /// Whether the `vec0` virtual table created by migration 0010 exists.
+    /// True on every fresh `Store::open`; false only when migrations were
+    /// blocked (e.g. extension missing in a sandbox build).
     pub fn vector_index_table_exists(&self) -> Result<bool, Error> {
         Ok(self.has_table("vector_index"))
+    }
+
+    /// Number of rows currently in the `vec0` ANN index. Test/inspection
+    /// helper for ADR-0017's backfill correctness.
+    pub fn vector_index_row_count(&self) -> Result<i64, Error> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM vector_index", [], |r| r.get(0))?)
     }
 
     pub fn predicate_implies(&self, predicate: &str, ancestor: &str) -> Result<bool, Error> {
@@ -1523,8 +1573,11 @@ impl Store {
     }
 
     /// Insert vector chunk metadata with its embedding vector serialized for
-    /// deterministic local storage. The sqlite-vss virtual table can index
-    /// the same vector later; this row remains the durable join point.
+    /// deterministic local storage. When the embedding's dimension matches
+    /// the canonical [`VECTOR_INDEX_DIM`], the same vector is also written
+    /// to the `vec0` ANN index in the same transaction
+    /// (ADR-0017 §"Populate strategy"). Off-dimension rows stay only in
+    /// `vector_chunks`; recall covers them via the JSON full-scan fallback.
     pub fn add_vector_chunk_with_embedding(
         &self,
         claim_id: i64,
@@ -1538,12 +1591,24 @@ impl Store {
         validate_embedding_vector(embedding)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let embedding_json = serde_json::to_string(embedding)?;
-        self.conn.execute(
+
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![claim_id, text, embedding_model, embedding_json, now],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        let chunk_id = tx.last_insert_rowid();
+        if embedding.len() == VECTOR_INDEX_DIM
+            && self.has_table("vector_index")
+        {
+            tx.execute(
+                "INSERT INTO vector_index(chunk_id, embedding) VALUES (?1, ?2)",
+                params![chunk_id, embedding_json],
+            )?;
+        }
+        tx.commit()?;
+        Ok(chunk_id)
     }
 
     fn ensure_claim_exists(&self, claim_id: i64) -> Result<(), Error> {
@@ -1657,6 +1722,7 @@ impl Store {
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<Result<_, _>>()?;
         let mut count = 0;
+        let index_present = self.has_table("vector_index");
         for (id, text) in rows {
             let embedding = client.embed(&text)?;
             let embedding_json = serde_json::to_string(&embedding)?;
@@ -1664,6 +1730,15 @@ impl Store {
                 "UPDATE vector_chunks SET embedding_json = ?1 WHERE id = ?2",
                 params![embedding_json, id],
             )?;
+            // ADR-0017: keep `vector_index` in sync for matching-dim rows.
+            // `INSERT OR IGNORE` makes the call idempotent if the row was
+            // already backfilled by migration 0010.
+            if index_present && embedding.len() == VECTOR_INDEX_DIM {
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO vector_index(chunk_id, embedding) VALUES (?1, ?2)",
+                    params![id, embedding_json],
+                )?;
+            }
             count += 1;
         }
         Ok(count)
@@ -1852,28 +1927,65 @@ impl Store {
         validate_recall_query(query)?;
         let query_embedding = client.embed(query)?;
 
-        let mut vector_scores = HashMap::new();
-        let mut stmt = self.conn.prepare(
-            "SELECT claim_id, embedding_json
-               FROM vector_chunks
-              WHERE embedding_json IS NOT NULL
-              ORDER BY id",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
-        })?;
-        for row in rows {
-            let (claim_id, embedding_json) = row?;
-            if let Some(embedding) = parse_optional_embedding(embedding_json)?
-                && let Some(score) = vector::normalized_cosine_score(&query_embedding, &embedding)
-            {
+        // ADR-0017: vector half. When the query embedding matches the
+        // canonical dimension and the `vec0` index is present, run a single
+        // KNN MATCH instead of an O(N) scan + per-row cosine in Rust. The
+        // fanout (`top_k * 4`) gives the graph half room to re-rank without
+        // starving on vector-only candidates. Distance is L2 over (assumed)
+        // L2-normalised embeddings; we map to a similarity score in [0, 1]
+        // via `1 - distance / 2` then clamp, matching the cosine-derived
+        // range produced by `normalized_cosine_score`. Off-dimension queries
+        // and unindexed installs fall back to the JSON full-scan path.
+        let mut vector_scores: HashMap<i64, f64> = HashMap::new();
+        let use_vec_index =
+            query_embedding.len() == VECTOR_INDEX_DIM && self.has_table("vector_index");
+        if use_vec_index {
+            let fanout = top_k.saturating_mul(4).max(top_k);
+            let q_json = serde_json::to_string(&query_embedding)?;
+            let mut stmt = self.conn.prepare(
+                "SELECT vc.claim_id, vi.distance
+                   FROM vector_index vi
+                   JOIN vector_chunks vc ON vc.id = vi.chunk_id
+                  WHERE vi.embedding MATCH ?1
+                    AND k = ?2
+                  ORDER BY vi.distance",
+            )?;
+            let rows = stmt.query_map(params![q_json, fanout as i64], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
+            })?;
+            for row in rows {
+                let (claim_id, distance) = row?;
+                let similarity = (1.0 - distance / 2.0).clamp(0.0, 1.0);
                 vector_scores
                     .entry(claim_id)
-                    .and_modify(|current: &mut f64| *current = current.max(f64::from(score)))
-                    .or_insert(f64::from(score));
+                    .and_modify(|current| *current = current.max(similarity))
+                    .or_insert(similarity);
+            }
+        } else {
+            let mut stmt = self.conn.prepare(
+                "SELECT claim_id, embedding_json
+                   FROM vector_chunks
+                  WHERE embedding_json IS NOT NULL
+                  ORDER BY id",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+            })?;
+            for row in rows {
+                let (claim_id, embedding_json) = row?;
+                if let Some(embedding) = parse_optional_embedding(embedding_json)?
+                    && let Some(score) =
+                        vector::normalized_cosine_score(&query_embedding, &embedding)
+                {
+                    vector_scores
+                        .entry(claim_id)
+                        .and_modify(|current: &mut f64| {
+                            *current = current.max(f64::from(score))
+                        })
+                        .or_insert(f64::from(score));
+                }
             }
         }
-        drop(stmt);
 
         let text_claims = self.recall_text(query).unwrap_or_default();
         let mut candidate_ids: HashSet<i64> = text_claims.iter().map(|claim| claim.id).collect();
@@ -2773,6 +2885,11 @@ pub fn vacuum(
     into: Option<&Path>,
     analyze: bool,
 ) -> Result<VacuumReport, Error> {
+    // ADR-0017: VACUUM rewrites the whole database, including the `vec0`
+    // virtual table (whose shadow tables exist as ordinary SQLite tables).
+    // The extension must be loaded for SQLite to know about the module.
+    ensure_sqlite_vec_registered();
+
     let _lock = AverLock::acquire(memory_dir)?;
     let db_path = memory_dir.join("db.sqlite");
     let conn = Connection::open(&db_path)?;
@@ -2829,6 +2946,11 @@ pub struct ReplayReport {
 /// at write time (ADR-0019 §4).
 pub fn replay(memory_dir: &Path, force: bool) -> Result<ReplayReport, Error> {
     use std::io::BufRead;
+
+    // ADR-0017: replay creates a fresh DB and re-runs migrations, including
+    // the 0010 vec0 virtual table. The extension must be registered before
+    // the partial Connection is opened.
+    ensure_sqlite_vec_registered();
 
     std::fs::create_dir_all(memory_dir)?;
     let db_path = memory_dir.join("db.sqlite");

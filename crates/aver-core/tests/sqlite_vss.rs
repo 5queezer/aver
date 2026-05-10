@@ -1,27 +1,28 @@
-use aver_core::{SqliteVssStatus, Store};
+//! ADR-0017: the bundled `sqlite-vec` extension is the default vector
+//! index. The legacy `sqlite-vss` capability probe is retained under a
+//! renamed surface (`sqlite_vec_status`) and the `vec0` virtual table is
+//! created by migration 0010 on every fresh open.
+
+use aver_core::{SqliteVecStatus, Store};
 
 #[test]
-fn sqlite_vss_capability_probe_is_offline_and_non_fatal_when_extension_missing() {
+fn sqlite_vec_capability_is_available_with_bundled_extension() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
 
-    let status = store.sqlite_vss_status().unwrap();
+    let status = store.sqlite_vec_status().unwrap();
 
-    assert!(matches!(
-        status,
-        SqliteVssStatus::Available | SqliteVssStatus::Unavailable { .. }
-    ));
+    assert_eq!(status, SqliteVecStatus::Available);
 }
 
 #[test]
-fn preparing_sqlite_vss_index_noops_when_extension_is_unavailable() {
+fn vector_index_table_is_created_by_migration() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
 
-    let status = store.prepare_sqlite_vss_index(2).unwrap();
-
-    if let SqliteVssStatus::Available = status {
-        // Extension-capable developer machines may create the virtual table.
-        assert!(store.vector_index_table_exists().unwrap());
-    }
+    assert!(
+        store.vector_index_table_exists().unwrap(),
+        "migration 0010 should create the vec0 virtual table on fresh open"
+    );
+    assert_eq!(store.vector_index_row_count().unwrap(), 0);
 }

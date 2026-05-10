@@ -4,7 +4,7 @@ Date: 2026-05-10
 
 ## Status
 
-Proposed. Supersedes the vector-index portion of ADR-0006; the SQLite-as-relational-store and JSONL-log decisions in ADR-0006 stand.
+Accepted (2026-05-10). Supersedes the vector-index portion of ADR-0006; the SQLite-as-relational-store and JSONL-log decisions in ADR-0006 stand.
 
 ## Context
 

@@ -67,3 +67,5 @@ The triple shape is the same in all targets; only the storage adapter changes.
 - (−) No native graph traversal; deep queries via recursive CTE are slower and uglier than Cypher.
 - (−) Hard ceiling around ~10⁶ active edges before query latency becomes a problem.
 - (−) Migration to a real graph DB is a non-zero project (storage adapter + traversal rewrite), even if the data shape carries over.
+
+**Update (2026-05-10):** Superseded in part by ADR-0017, which replaces sqlite-vss with sqlite-vec for the vector index. The local-first SQLite commitment stands.
