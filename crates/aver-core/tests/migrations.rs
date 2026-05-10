@@ -126,6 +126,27 @@ fn predicate_alias_created_at_must_be_positive() {
 }
 
 #[test]
+fn ontology_extension_predicate_must_not_be_blank() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
+             VALUES ('   ', 'relates_to', 'agent', 1)",
+            [],
+        )
+        .expect_err("blank ontology extension predicates should be rejected");
+    assert!(
+        err.to_string()
+            .contains("ontology_extension_log.predicate must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_entity_type_closure_table() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
