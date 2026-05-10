@@ -319,6 +319,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0070_privacy_rejection_reason_nonblank_checks",
         include_str!("../../../migrations/0070_privacy_rejection_reason_nonblank_checks.sql"),
     ),
+    (
+        "0071_privacy_rejection_count_positive_checks",
+        include_str!("../../../migrations/0071_privacy_rejection_count_positive_checks.sql"),
+    ),
 ];
 
 /// Canonical embedding dimension for the `vec0` ANN index (ADR-0017

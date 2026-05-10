@@ -463,6 +463,26 @@ fn privacy_rejection_reason_must_not_be_blank() {
 }
 
 #[test]
+fn privacy_rejection_count_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO privacy_rejections (reason, count) VALUES ('entropy', 0)",
+            [],
+        )
+        .expect_err("privacy rejection counts should be positive");
+    assert!(
+        err.to_string()
+            .contains("privacy_rejections.count must be positive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn contradiction_reason_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
