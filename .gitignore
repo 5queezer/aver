@@ -3,3 +3,4 @@
 .worktrees/
 **/*.rs.bk
 Cargo.lock.bak
+.karta/
