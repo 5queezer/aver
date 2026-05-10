@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use aver_core::{AgentKind, ObservationRelevance, Store};
+use aver_core::{AgentKind, ObservationRelevance, Store, replay, vacuum};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -138,10 +138,57 @@ enum Command {
 
     /// Run the on-demand consolidation pass.
     Consolidate,
+
+    /// Compact the SQLite database (ADR-0019 §2).
+    Vacuum {
+        /// Run ANALYZE after vacuum to refresh planner stats.
+        #[arg(long)]
+        analyze: bool,
+        /// Vacuum into a copy at PATH instead of in-place.
+        #[arg(long)]
+        into: Option<PathBuf>,
+    },
+
+    /// Rebuild db.sqlite from the JSONL log (ADR-0019 §4).
+    Replay {
+        /// Allow overwriting an existing populated db.sqlite.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // Vacuum and replay are operational tools that must run without an open
+    // Store: vacuum needs the exclusive lock, replay rebuilds db.sqlite from
+    // logs. Dispatch them before opening the store.
+    match &cli.command {
+        Command::Vacuum { analyze, into } => {
+            let report = vacuum(&cli.memory_dir, into.as_deref(), *analyze)?;
+            println!(
+                "vacuum: pages {}->{}, freelist {}->{}",
+                report.pages_before,
+                report.pages_after,
+                report.freelist_before,
+                report.freelist_after
+            );
+            if let Some(path) = report.vacuumed_into {
+                println!("into: {}", path.display());
+            }
+            return Ok(());
+        }
+        Command::Replay { force } => {
+            let report = replay(&cli.memory_dir, *force)?;
+            println!(
+                "replay: claims={} events={} observations={} files={}",
+                report.claims, report.events, report.observations, report.files_walked
+            );
+            return Ok(());
+        }
+        _ => {}
+    }
+
     let store = Store::open(&cli.memory_dir)?;
 
     match cli.command {
@@ -308,7 +355,12 @@ fn main() -> anyhow::Result<()> {
                 report.merged, report.superseded, report.decayed
             );
         }
+
+        Command::Vacuum { .. } | Command::Replay { .. } => unreachable!(
+            "vacuum and replay are dispatched before opening the store"
+        ),
     }
 
+    store.close()?;
     Ok(())
 }

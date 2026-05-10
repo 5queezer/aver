@@ -149,6 +149,7 @@ name = "aver-core"
 version = "0.1.0"
 dependencies = [
  "directories",
+ "flate2",
  "rusqlite",
  "serde",
  "serde_json",

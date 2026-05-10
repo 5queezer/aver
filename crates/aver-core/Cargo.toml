@@ -14,6 +14,8 @@ ureq.workspace        = true
 thiserror.workspace   = true
 time.workspace        = true
 directories.workspace = true
+flate2                = "1"
 
 [dev-dependencies]
 tempfile.workspace = true
+flate2 = "1"

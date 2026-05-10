@@ -84,10 +84,15 @@ const MIGRATIONS: &[(&str, &str)] = &[
 ///   log.jsonl  — append-only audit log (ADR-0005, source of truth)
 pub struct Store {
     conn: Connection,
+    memory_dir: PathBuf,
     log_path: PathBuf,
     event_log_path: PathBuf,
     observation_log_path: PathBuf,
 }
+
+/// Log rotation thresholds (ADR-0019 §5).
+pub const LOG_ROTATE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+pub const LOG_ROTATE_MAX_LINES: u64 = 500_000;
 
 /// Runtime availability of the optional sqlite-vss extension (ADR-0006).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,29 +188,69 @@ impl Store {
     /// Open or create a memory store rooted at `memory_dir`.
     /// The directory is created if it does not exist; migrations are applied.
     pub fn open(memory_dir: impl AsRef<Path>) -> Result<Self, Error> {
-        let memory_dir = memory_dir.as_ref();
-        std::fs::create_dir_all(memory_dir)?;
+        let memory_dir = memory_dir.as_ref().to_path_buf();
+        std::fs::create_dir_all(&memory_dir)?;
 
         let db_path = memory_dir.join("db.sqlite");
         let log_path = memory_dir.join("log.jsonl");
         let event_log_path = memory_dir.join("events.jsonl");
         let observation_log_path = memory_dir.join("observations.jsonl");
 
+        // ADR-0019 §5: rotation only at session boundaries — check at open.
+        // Also recover any half-rotated `log.{N}.jsonl` left by a prior crash.
+        finalize_pending_rotations(&memory_dir)?;
+        maybe_rotate_log(&memory_dir, &log_path)?;
+
         let conn = Connection::open(&db_path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        // ADR-0019 §1: raise wal_autocheckpoint from 1000 to 4000 pages.
+        conn.pragma_update(None, "wal_autocheckpoint", 4_000)?;
 
-        for (_name, sql) in MIGRATIONS {
+        // ADR-0019 §6: gate migrations on PRAGMA user_version.
+        let current: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        let target = MIGRATIONS.len() as i64;
+        if current > target {
+            return Err(Error::SchemaTooNew {
+                found: current,
+                supported: target,
+            });
+        }
+        let start = current.max(0) as usize;
+        for (_name, sql) in &MIGRATIONS[start..] {
             conn.execute_batch(sql)?;
         }
+        conn.pragma_update(None, "user_version", target)?;
         seed_ontology(&conn)?;
 
         Ok(Self {
             conn,
+            memory_dir,
             log_path,
             event_log_path,
             observation_log_path,
         })
+    }
+
+    /// Memory directory rooted at the store. Used by CLI tools (vacuum, replay).
+    pub fn memory_dir(&self) -> &Path {
+        &self.memory_dir
+    }
+
+    /// Read the connection-local `wal_autocheckpoint` setting. Inspection helper
+    /// for ADR-0019 §1 — the pragma is per-connection and cannot be observed by
+    /// reopening a fresh `Connection`.
+    pub fn wal_autocheckpoint(&self) -> Result<i64, Error> {
+        Ok(self.conn.pragma_query_value(None, "wal_autocheckpoint", |r| r.get(0))?)
+    }
+
+    /// Explicit close: runs `PRAGMA wal_checkpoint(TRUNCATE)` to leave no WAL
+    /// behind on clean shutdown (ADR-0019 §1), then drops the connection.
+    pub fn close(self) -> Result<(), Error> {
+        self.conn
+            .pragma_update(None, "wal_checkpoint", "TRUNCATE")?;
+        drop(self.conn);
+        Ok(())
     }
 
     /// Whether a table with the given name exists. Test/inspection helper.
@@ -2411,6 +2456,222 @@ fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
     Ok(())
 }
 
+/// Acquire the advisory `.aver/.lock` PID file (ADR-0019 §2/§5).
+/// Returns a guard whose drop releases the lock by deleting the file.
+pub struct AverLock {
+    path: PathBuf,
+}
+
+impl AverLock {
+    /// Acquire `<memory_dir>/.lock`. Refuses if a live PID already holds it.
+    pub fn acquire(memory_dir: &Path) -> Result<Self, Error> {
+        std::fs::create_dir_all(memory_dir)?;
+        let path = memory_dir.join(".lock");
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                let pid = std::process::id();
+                writeln!(file, "{pid}")?;
+                file.sync_data()?;
+                Ok(Self { path })
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Stale-lock recovery: if the recorded PID is not alive, take it.
+                let contents = std::fs::read_to_string(&path).unwrap_or_default();
+                let pid: Option<u32> = contents.trim().parse().ok();
+                let alive = match pid {
+                    Some(p) => process_alive(p),
+                    None => false,
+                };
+                if alive {
+                    Err(Error::LockHeld {
+                        path: path.display().to_string(),
+                    })
+                } else {
+                    std::fs::remove_file(&path)?;
+                    Self::acquire(memory_dir)
+                }
+            }
+            Err(err) => Err(Error::Io(err)),
+        }
+    }
+}
+
+impl Drop for AverLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    // signal 0 is "check existence" semantics on POSIX.
+    unsafe { libc_kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn process_alive(_pid: u32) -> bool {
+    // Conservative fallback: assume the lock holder is alive.
+    true
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    #[link_name = "kill"]
+    fn libc_kill(pid: i32, sig: i32) -> i32;
+}
+
+/// Count newline-terminated lines in a file without loading it whole.
+fn count_lines(path: &Path) -> std::io::Result<u64> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut buf = [0u8; 64 * 1024];
+    let mut lines = 0u64;
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        for byte in &buf[..n] {
+            if *byte == b'\n' {
+                lines += 1;
+            }
+        }
+    }
+    Ok(lines)
+}
+
+/// Determine the next rotation index `N` for `log.{N}.jsonl[.gz]`.
+fn next_rotation_index(memory_dir: &Path) -> std::io::Result<u32> {
+    let mut max = 0u32;
+    let read_dir = match std::fs::read_dir(memory_dir) {
+        Ok(rd) => rd,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(1),
+        Err(err) => return Err(err),
+    };
+    for entry in read_dir {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        // Match log.{N}.jsonl or log.{N}.jsonl.gz
+        let rest = match name.strip_prefix("log.") {
+            Some(r) => r,
+            None => continue,
+        };
+        let rest = match rest.strip_suffix(".jsonl.gz") {
+            Some(r) => r,
+            None => match rest.strip_suffix(".jsonl") {
+                Some(r) => r,
+                None => continue,
+            },
+        };
+        if rest.is_empty() {
+            continue;
+        }
+        if let Ok(n) = rest.parse::<u32>()
+            && n > max
+        {
+            max = n;
+        }
+    }
+    Ok(max + 1)
+}
+
+/// Recover from a partial rotation: any `log.{N}.jsonl` without a matching
+/// `.gz` finishes gzipping. ADR-0019 §5.
+fn finalize_pending_rotations(memory_dir: &Path) -> Result<(), Error> {
+    let read_dir = match std::fs::read_dir(memory_dir) {
+        Ok(rd) => rd,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(Error::Io(err)),
+    };
+    let mut pending = Vec::new();
+    for entry in read_dir {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(rest) = name.strip_prefix("log.") else {
+            continue;
+        };
+        let Some(num) = rest.strip_suffix(".jsonl") else {
+            continue;
+        };
+        if num.is_empty() {
+            continue;
+        }
+        if num.parse::<u32>().is_ok() {
+            pending.push(entry.path());
+        }
+    }
+    for src in pending {
+        let dst = src.with_extension("jsonl.gz");
+        // If the gz already exists, prefer it and remove the orphan plain file.
+        if dst.exists() {
+            std::fs::remove_file(&src)?;
+            continue;
+        }
+        gzip_file(&src, &dst)?;
+        std::fs::remove_file(&src)?;
+    }
+    Ok(())
+}
+
+fn gzip_file(src: &Path, dst: &Path) -> Result<(), Error> {
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::{BufReader, Read};
+    let input = std::fs::File::open(src)?;
+    let mut input = BufReader::new(input);
+    let output = std::fs::File::create(dst)?;
+    let mut encoder = GzEncoder::new(output, Compression::default());
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = input.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        encoder.write_all(&buf[..n])?;
+    }
+    let output = encoder.finish()?;
+    output.sync_data()?;
+    Ok(())
+}
+
+/// Rotate `log.jsonl` if it exceeds either size or line threshold.
+/// Runs only at session boundaries (called from `Store::open`). ADR-0019 §5.
+fn maybe_rotate_log(memory_dir: &Path, log_path: &Path) -> Result<(), Error> {
+    let metadata = match std::fs::metadata(log_path) {
+        Ok(m) => m,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(Error::Io(err)),
+    };
+    let size_over = metadata.len() >= LOG_ROTATE_MAX_BYTES;
+    let line_over = if size_over {
+        true
+    } else {
+        count_lines(log_path)? >= LOG_ROTATE_MAX_LINES
+    };
+    if !(size_over || line_over) {
+        return Ok(());
+    }
+    let _lock = AverLock::acquire(memory_dir)?;
+    let n = next_rotation_index(memory_dir)?;
+    let intermediate = memory_dir.join(format!("log.{n}.jsonl"));
+    std::fs::rename(log_path, &intermediate)?;
+    let target = memory_dir.join(format!("log.{n}.jsonl.gz"));
+    gzip_file(&intermediate, &target)?;
+    std::fs::remove_file(&intermediate)?;
+    // Touch a fresh empty active log.
+    let _ = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)?;
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("sqlite: {0}")]
@@ -2477,4 +2738,558 @@ pub enum Error {
     MissingClaim { claim_id: i64 },
     #[error("missing vector chunk: vector chunk {chunk_id} does not exist")]
     MissingVectorChunk { chunk_id: i64 },
+    #[error(
+        "schema too new: db user_version is {found}, this binary supports {supported}; refusing to open"
+    )]
+    SchemaTooNew { found: i64, supported: i64 },
+    #[error("replay: duplicate id with conflicting content: {detail}")]
+    ReplayDuplicateId { detail: String },
+    #[error("replay: unknown record kind: {kind}")]
+    ReplayUnknownKind { kind: String },
+    #[error("replay: malformed log record at {path}:{line}: {detail}")]
+    ReplayMalformed {
+        path: String,
+        line: usize,
+        detail: String,
+    },
+    #[error("advisory lock held: {path}")]
+    LockHeld { path: String },
+}
+
+/// Stats reported by `aver vacuum`. ADR-0019 §2.
+#[derive(Debug, Clone)]
+pub struct VacuumReport {
+    pub pages_before: i64,
+    pub freelist_before: i64,
+    pub pages_after: i64,
+    pub freelist_after: i64,
+    pub vacuumed_into: Option<PathBuf>,
+}
+
+/// Run `VACUUM` (or `VACUUM INTO`) plus optional `ANALYZE` against an Aver
+/// memory directory. Acquires the advisory lock for the duration. ADR-0019 §2.
+pub fn vacuum(
+    memory_dir: &Path,
+    into: Option<&Path>,
+    analyze: bool,
+) -> Result<VacuumReport, Error> {
+    let _lock = AverLock::acquire(memory_dir)?;
+    let db_path = memory_dir.join("db.sqlite");
+    let conn = Connection::open(&db_path)?;
+    let pages_before: i64 =
+        conn.pragma_query_value(None, "page_count", |r| r.get(0))?;
+    let freelist_before: i64 =
+        conn.pragma_query_value(None, "freelist_count", |r| r.get(0))?;
+
+    let vacuumed_into = if let Some(path) = into {
+        // VACUUM INTO 'path' — does not block readers on origin.
+        let path_str = path.to_string_lossy().replace('\'', "''");
+        conn.execute_batch(&format!("VACUUM INTO '{path_str}'"))?;
+        Some(path.to_path_buf())
+    } else {
+        conn.execute_batch("VACUUM")?;
+        conn.execute_batch("PRAGMA optimize")?;
+        None
+    };
+    if analyze {
+        conn.execute_batch("ANALYZE")?;
+    }
+
+    let pages_after: i64 =
+        conn.pragma_query_value(None, "page_count", |r| r.get(0))?;
+    let freelist_after: i64 =
+        conn.pragma_query_value(None, "freelist_count", |r| r.get(0))?;
+
+    Ok(VacuumReport {
+        pages_before,
+        freelist_before,
+        pages_after,
+        freelist_after,
+        vacuumed_into,
+    })
+}
+
+/// Stats reported by `aver replay`. ADR-0019 §4.
+#[derive(Debug, Clone, Default)]
+pub struct ReplayReport {
+    pub claims: u64,
+    pub events: u64,
+    pub observations: u64,
+    pub files_walked: u64,
+}
+
+/// Replay logs in the deterministic order specified by ADR-0019 §4:
+/// rotated `log.{N}.jsonl.gz` (numeric ascending) → `log.jsonl` →
+/// `events.jsonl` → `observations.jsonl` → `agents/<id>/log.jsonl`
+/// (lexicographic by agent id). Per-agent log records duplicate the global
+/// log; replay treats matching content as idempotent and only errors on
+/// genuine id-with-different-content collisions.
+///
+/// Replay BYPASSES the privacy filter — the log is presumed already filtered
+/// at write time (ADR-0019 §4).
+pub fn replay(memory_dir: &Path, force: bool) -> Result<ReplayReport, Error> {
+    use std::io::BufRead;
+
+    std::fs::create_dir_all(memory_dir)?;
+    let db_path = memory_dir.join("db.sqlite");
+    let partial_path = memory_dir.join("db.sqlite.partial");
+
+    if db_path.exists() && !force {
+        // Refuse if claims is non-empty (per ADR contract).
+        let existing = Connection::open(&db_path)?;
+        let claim_count: i64 = existing
+            .query_row("SELECT COUNT(*) FROM claims", [], |r| r.get(0))
+            .unwrap_or(0);
+        if claim_count > 0 {
+            return Err(Error::ReplayDuplicateId {
+                detail: format!(
+                    "db.sqlite at {} already has {} claims; pass --force to overwrite",
+                    db_path.display(),
+                    claim_count
+                ),
+            });
+        }
+    }
+
+    // Build the partial db from scratch.
+    let _ = std::fs::remove_file(&partial_path);
+    let result = (|| -> Result<ReplayReport, Error> {
+        let conn = Connection::open(&partial_path)?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.pragma_update(None, "wal_autocheckpoint", 4_000)?;
+        for (_name, sql) in MIGRATIONS {
+            conn.execute_batch(sql)?;
+        }
+        conn.pragma_update(None, "user_version", MIGRATIONS.len() as i64)?;
+        seed_ontology(&conn)?;
+
+        let mut report = ReplayReport::default();
+        let inputs = collect_replay_inputs(memory_dir)?;
+        for input in inputs {
+            report.files_walked += 1;
+            let reader: Box<dyn BufRead> = open_log_reader(&input)?;
+            for (lineno, line) in reader.lines().enumerate() {
+                let line = line?;
+                if line.trim().is_empty() {
+                    continue;
+                }
+                apply_log_line(
+                    &conn,
+                    &line,
+                    &input.to_string_lossy(),
+                    lineno + 1,
+                    &mut report,
+                )?;
+            }
+        }
+
+        conn.execute_batch("PRAGMA optimize")?;
+        conn.pragma_update(None, "wal_checkpoint", "TRUNCATE")?;
+        Ok(report)
+    })();
+
+    match result {
+        Ok(report) => {
+            // Atomic swap: only overwrite db.sqtilte after success.
+            let _ = std::fs::remove_file(&db_path);
+            let _ = std::fs::remove_file(memory_dir.join("db.sqlite-wal"));
+            let _ = std::fs::remove_file(memory_dir.join("db.sqlite-shm"));
+            std::fs::rename(&partial_path, &db_path)?;
+            Ok(report)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn collect_replay_inputs(memory_dir: &Path) -> Result<Vec<PathBuf>, Error> {
+    let mut rotated: Vec<(u32, PathBuf)> = Vec::new();
+    let read_dir = match std::fs::read_dir(memory_dir) {
+        Ok(rd) => rd,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Vec::new());
+        }
+        Err(err) => return Err(Error::Io(err)),
+    };
+    for entry in read_dir {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(rest) = name.strip_prefix("log.") else {
+            continue;
+        };
+        let Some(num) = rest.strip_suffix(".jsonl.gz") else {
+            continue;
+        };
+        if let Ok(n) = num.parse::<u32>() {
+            rotated.push((n, entry.path()));
+        }
+    }
+    rotated.sort_by_key(|(n, _)| *n);
+
+    let mut inputs: Vec<PathBuf> = rotated.into_iter().map(|(_, p)| p).collect();
+    let active = memory_dir.join("log.jsonl");
+    if active.exists() {
+        inputs.push(active);
+    }
+    let events = memory_dir.join("events.jsonl");
+    if events.exists() {
+        inputs.push(events);
+    }
+    let observations = memory_dir.join("observations.jsonl");
+    if observations.exists() {
+        inputs.push(observations);
+    }
+    let agents_dir = memory_dir.join("agents");
+    if agents_dir.exists() {
+        let mut agent_dirs: Vec<PathBuf> = std::fs::read_dir(&agents_dir)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_dir())
+            .collect();
+        agent_dirs.sort();
+        for agent_dir in agent_dirs {
+            let log = agent_dir.join("log.jsonl");
+            if log.exists() {
+                inputs.push(log);
+            }
+        }
+    }
+    Ok(inputs)
+}
+
+fn open_log_reader(path: &Path) -> Result<Box<dyn std::io::BufRead>, Error> {
+    use std::io::BufReader;
+    let file = std::fs::File::open(path)?;
+    if path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.ends_with(".gz"))
+    {
+        let decoder = flate2::read::GzDecoder::new(file);
+        Ok(Box::new(BufReader::new(decoder)))
+    } else {
+        Ok(Box::new(BufReader::new(file)))
+    }
+}
+
+fn apply_log_line(
+    conn: &Connection,
+    line: &str,
+    path: &str,
+    lineno: usize,
+    report: &mut ReplayReport,
+) -> Result<(), Error> {
+    let value: serde_json::Value =
+        serde_json::from_str(line).map_err(|err| Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: err.to_string(),
+        })?;
+    let kind = value
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: "missing 'kind'".to_string(),
+        })?
+        .to_string();
+
+    match kind.as_str() {
+        "add_claim" => apply_add_claim(conn, &value, path, lineno, report),
+        "record_event" => apply_record_event(conn, &value, path, lineno, report),
+        "record_observation" => apply_record_observation(conn, &value, path, lineno, report),
+        other => Err(Error::ReplayUnknownKind {
+            kind: other.to_string(),
+        }),
+    }
+}
+
+fn replay_field<'a>(
+    value: &'a serde_json::Value,
+    field: &str,
+    path: &str,
+    lineno: usize,
+) -> Result<&'a serde_json::Value, Error> {
+    value.get(field).ok_or_else(|| Error::ReplayMalformed {
+        path: path.to_string(),
+        line: lineno,
+        detail: format!("missing '{field}'"),
+    })
+}
+
+fn replay_str<'a>(
+    value: &'a serde_json::Value,
+    field: &str,
+    path: &str,
+    lineno: usize,
+) -> Result<&'a str, Error> {
+    replay_field(value, field, path, lineno)?
+        .as_str()
+        .ok_or_else(|| Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("'{field}' is not a string"),
+        })
+}
+
+fn replay_i64(
+    value: &serde_json::Value,
+    field: &str,
+    path: &str,
+    lineno: usize,
+) -> Result<i64, Error> {
+    replay_field(value, field, path, lineno)?
+        .as_i64()
+        .ok_or_else(|| Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("'{field}' is not an integer"),
+        })
+}
+
+fn replay_f64(
+    value: &serde_json::Value,
+    field: &str,
+    path: &str,
+    lineno: usize,
+) -> Result<f64, Error> {
+    replay_field(value, field, path, lineno)?
+        .as_f64()
+        .ok_or_else(|| Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("'{field}' is not a number"),
+        })
+}
+
+fn apply_add_claim(
+    conn: &Connection,
+    value: &serde_json::Value,
+    path: &str,
+    lineno: usize,
+    report: &mut ReplayReport,
+) -> Result<(), Error> {
+    let claim_id = replay_i64(value, "claim_id", path, lineno)?;
+    let ts = replay_i64(value, "ts", path, lineno)?;
+    let subject = replay_str(value, "subject", path, lineno)?;
+    let predicate = replay_str(value, "predicate", path, lineno)?;
+    let object = replay_str(value, "object", path, lineno)?;
+    let source = replay_str(value, "source", path, lineno)?;
+    let agent_id = replay_str(value, "agent_id", path, lineno)?;
+    let agent_kind_str = replay_str(value, "agent_kind", path, lineno)?;
+    let confidence = replay_f64(value, "confidence", path, lineno)?;
+    let agent_kind: AgentKind = agent_kind_str.parse()?;
+    // Provenance is not in the log; derive from agent_kind. This is correct
+    // for `insert_claim` writes; for promoted candidates it can diverge from
+    // the original (candidate.provenance defaulted to INFERRED).
+    let provenance = provenance_for_agent_kind(agent_kind);
+
+    // Idempotency: if claim already exists, accept identical content,
+    // otherwise fail loudly with E_REPLAY_DUPLICATE_ID.
+    let existing: Option<(String, String, String, String, f64, String, String)> = conn
+        .query_row(
+            "SELECT subject, predicate, object, provenance, confidence, agent_id, agent_kind
+               FROM claims WHERE id = ?1",
+            [claim_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()?;
+    if let Some(existing) = existing {
+        let matches = existing.0 == subject
+            && existing.1 == predicate
+            && existing.2 == object
+            && existing.3 == provenance.as_str()
+            && (existing.4 - confidence).abs() < 1e-9
+            && existing.5 == agent_id
+            && existing.6 == agent_kind.as_str();
+        if !matches {
+            return Err(Error::ReplayDuplicateId {
+                detail: format!("claim_id={claim_id} content mismatch at {path}:{lineno}"),
+            });
+        }
+        return Ok(());
+    }
+
+    // Ensure entities exist (mirrors insert_claim's behavior). Use a tiny
+    // inline ensure: insert if missing with the only-known type "Thing".
+    ensure_entity_for_replay(conn, subject, ts)?;
+    ensure_entity_for_replay(conn, object, ts)?;
+
+    let source_refs = serde_json::to_string(&[source])?;
+    conn.execute(
+        "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
+                             status, source_refs, agent_id, agent_kind, write_ts,
+                             created_at, last_seen_at, last_verified_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7,
+                 ?8, ?9, ?10, ?10, ?10, ?10)",
+        params![
+            claim_id,
+            subject,
+            predicate,
+            object,
+            provenance.as_str(),
+            confidence,
+            source_refs,
+            agent_id,
+            agent_kind.as_str(),
+            ts
+        ],
+    )?;
+    report.claims += 1;
+    Ok(())
+}
+
+fn ensure_entity_for_replay(conn: &Connection, name: &str, ts: i64) -> Result<(), Error> {
+    // Look up the default "Thing" type; entities table requires type_id.
+    let type_id: i64 = conn
+        .query_row(
+            "SELECT id FROM entity_types WHERE name = 'Thing'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(1);
+    conn.execute(
+        "INSERT OR IGNORE INTO entities (name, type_id, created_at, last_seen_at)
+         VALUES (?1, ?2, ?3, ?3)",
+        params![name, type_id, ts],
+    )?;
+    Ok(())
+}
+
+fn apply_record_event(
+    conn: &Connection,
+    value: &serde_json::Value,
+    path: &str,
+    lineno: usize,
+    report: &mut ReplayReport,
+) -> Result<(), Error> {
+    let event_id = replay_i64(value, "event_id", path, lineno)?;
+    let ts = replay_i64(value, "ts", path, lineno)?;
+    let session_id = replay_str(value, "session_id", path, lineno)?;
+    let event_kind = replay_str(value, "event_kind", path, lineno)?;
+    let payload = replay_str(value, "payload", path, lineno)?;
+    let source = replay_str(value, "source", path, lineno)?;
+    let agent_id = replay_str(value, "agent_id", path, lineno)?;
+    let agent_kind = replay_str(value, "agent_kind", path, lineno)?;
+
+    let existing: Option<(String, String, String, String, String, String)> = conn
+        .query_row(
+            "SELECT session_id, kind, payload, source, agent_id, agent_kind
+               FROM episodic_events WHERE id = ?1",
+            [event_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    if let Some(existing) = existing {
+        let matches = existing.0 == session_id
+            && existing.1 == event_kind
+            && existing.2 == payload
+            && existing.3 == source
+            && existing.4 == agent_id
+            && existing.5 == agent_kind;
+        if !matches {
+            return Err(Error::ReplayDuplicateId {
+                detail: format!("event_id={event_id} content mismatch at {path}:{lineno}"),
+            });
+        }
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO episodic_events (id, session_id, kind, payload, source, agent_id, agent_kind, ts)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            event_id,
+            session_id,
+            event_kind,
+            payload,
+            source,
+            agent_id,
+            agent_kind,
+            ts
+        ],
+    )?;
+    report.events += 1;
+    Ok(())
+}
+
+fn apply_record_observation(
+    conn: &Connection,
+    value: &serde_json::Value,
+    path: &str,
+    lineno: usize,
+    report: &mut ReplayReport,
+) -> Result<(), Error> {
+    let id = replay_str(value, "observation_id", path, lineno)?;
+    let ts = replay_i64(value, "ts", path, lineno)?;
+    let session_id = replay_str(value, "session_id", path, lineno)?;
+    let content = replay_str(value, "content", path, lineno)?;
+    let relevance = replay_str(value, "relevance", path, lineno)?;
+    let source_event_ids = replay_field(value, "source_event_ids", path, lineno)?;
+    let source_event_ids_json = source_event_ids.to_string();
+    let agent_id = replay_str(value, "agent_id", path, lineno)?;
+    let agent_kind = replay_str(value, "agent_kind", path, lineno)?;
+    let derivation = replay_str(value, "derivation", path, lineno)?;
+
+    let existing: Option<(String, String, String, String, String, String, String)> = conn
+        .query_row(
+            "SELECT session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation
+               FROM observations WHERE id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+        )
+        .optional()?;
+    if let Some(existing) = existing {
+        let matches = existing.0 == session_id
+            && existing.1 == content
+            && existing.2 == relevance
+            && existing.3 == source_event_ids_json
+            && existing.4 == agent_id
+            && existing.5 == agent_kind
+            && existing.6 == derivation;
+        if !matches {
+            return Err(Error::ReplayDuplicateId {
+                detail: format!("observation_id={id} content mismatch at {path}:{lineno}"),
+            });
+        }
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO observations
+         (id, session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation, ts)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            id,
+            session_id,
+            content,
+            relevance,
+            source_event_ids_json,
+            agent_id,
+            agent_kind,
+            derivation,
+            ts
+        ],
+    )?;
+    report.observations += 1;
+    Ok(())
 }
