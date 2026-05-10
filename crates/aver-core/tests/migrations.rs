@@ -1010,6 +1010,25 @@ fn claims_last_seen_at_must_not_precede_created_at() {
 }
 
 #[test]
+fn claims_write_ts_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let valid_id = store
+        .add_claim("Aver", "uses", "SQLite", "test")
+        .expect("valid claim should insert");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute("UPDATE claims SET write_ts = 0 WHERE id = ?1", [valid_id])
+        .expect_err("non-positive claim write_ts should be rejected");
+    assert!(
+        err.to_string().contains("claims.write_ts must be positive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn claims_agent_id_allows_only_portable_identifier_chars() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
