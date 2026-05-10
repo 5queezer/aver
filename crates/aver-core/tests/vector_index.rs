@@ -121,7 +121,7 @@ fn migration_backfills_existing_vector_chunks_rows() {
         // Need a claim row first; use minimal direct insert.
         conn.execute(
             "INSERT INTO claims (subject, predicate, object, source_refs, agent_id, agent_kind, provenance, confidence, status, write_ts, created_at, last_seen_at)
-             VALUES ('S','relates_to','O','[\"t\"]','t','HUMAN','USER_ASSERTED',1.0,'ACTIVE',0,0,0)",
+             VALUES ('S','relates_to','O','[\"t\"]','t','HUMAN','USER_ASSERTED',1.0,'ACTIVE',1,1,1)",
             [],
         )
         .unwrap();

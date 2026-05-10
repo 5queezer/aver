@@ -135,7 +135,7 @@ fn trigger_rejects_raw_sql_with_unknown_predicate() {
         "INSERT INTO claims (id, subject, predicate, object, provenance, confidence, status,
                              source_refs, agent_id, agent_kind, write_ts, created_at, last_seen_at)
          VALUES (9999, 'S', 'totally_made_up', 'O', 'USER_ASSERTED', 1.0, 'ACTIVE',
-                 '[\"test\"]', 'local', 'HUMAN', 0, 0, 0)",
+                 '[\"test\"]', 'local', 'HUMAN', 1, 1, 1)",
         [],
     );
 

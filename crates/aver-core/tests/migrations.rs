@@ -775,7 +775,7 @@ fn claims_source_refs_must_be_valid_json_array() {
             "INSERT INTO claims (subject, predicate, object, provenance, confidence, status,
                                  source_refs, agent_id, agent_kind, write_ts, created_at, last_seen_at)
              VALUES ('S', 'uses', 'O', 'USER_ASSERTED', 1.0, 'ACTIVE',
-                     'not-json', 'local', 'HUMAN', 0, 0, 0)",
+                     'not-json', 'local', 'HUMAN', 1, 1, 1)",
             [],
         )
         .expect_err("invalid JSON source_refs should be rejected");
@@ -933,6 +933,26 @@ fn claims_object_must_not_be_blank() {
         .expect_err("blank claim object should be rejected");
     assert!(
         err.to_string().contains("claims.object must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn claims_created_at_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let valid_id = store
+        .add_claim("Aver", "uses", "SQLite", "test")
+        .expect("valid claim should insert");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute("UPDATE claims SET created_at = 0 WHERE id = ?1", [valid_id])
+        .expect_err("non-positive claim created_at should be rejected");
+    assert!(
+        err.to_string()
+            .contains("claims.created_at must be positive"),
         "unexpected error: {err}"
     );
 }

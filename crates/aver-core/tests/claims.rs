@@ -1019,7 +1019,7 @@ fn migration_0009_rejects_out_of_range_confidence_and_invalid_status() {
     let err = conn
         .execute(
             "INSERT INTO claims (subject, predicate, object, source_refs, provenance, confidence, status, created_at, last_seen_at) \
-             VALUES ('a', 'rel', 'b', '[\"test_session\"]', 'USER_ASSERTED', 1.5, 'ACTIVE', 0, 0)",
+             VALUES ('a', 'rel', 'b', '[\"test_session\"]', 'USER_ASSERTED', 1.5, 'ACTIVE', 1, 1)",
             [],
         )
         .expect_err("confidence 1.5 should be rejected by trigger");
@@ -1028,7 +1028,7 @@ fn migration_0009_rejects_out_of_range_confidence_and_invalid_status() {
     let err = conn
         .execute(
             "INSERT INTO claims (subject, predicate, object, source_refs, provenance, confidence, status, created_at, last_seen_at) \
-             VALUES ('a', 'rel', 'b', '[\"test_session\"]', 'USER_ASSERTED', -0.1, 'ACTIVE', 0, 0)",
+             VALUES ('a', 'rel', 'b', '[\"test_session\"]', 'USER_ASSERTED', -0.1, 'ACTIVE', 1, 1)",
             [],
         )
         .expect_err("confidence -0.1 should be rejected by trigger");
