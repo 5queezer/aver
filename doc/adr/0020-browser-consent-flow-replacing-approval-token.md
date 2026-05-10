@@ -4,7 +4,7 @@ Date: 2026-05-10
 
 ## Status
 
-Proposed
+Accepted (slices 1-3, 6 shipped 2026-05-10; slices 4-5 deferred to a follow-up ADR for public deployment)
 
 ## Context
 
