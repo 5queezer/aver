@@ -25,6 +25,7 @@ schemars = "1.0"
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", rev = "a64be231527f923e9f84d4dd7bf3c3bd695ee53e", features = ["server", "macros", "transport-streamable-http-server"] }
 uuid = { version = "1", features = ["v4"] }
 axum = { version = "0.8", features = ["macros"] }
+http = "1"
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors"] }

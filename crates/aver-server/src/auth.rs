@@ -133,9 +133,10 @@ impl AuthDb {
         let conn = Connection::open(path)?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS access_tokens (
-                token_hash TEXT PRIMARY KEY,
-                user_id    TEXT NOT NULL,
-                created_at INTEGER NOT NULL
+                token_hash     TEXT PRIMARY KEY,
+                user_id        TEXT NOT NULL,
+                created_at     INTEGER NOT NULL,
+                granted_scopes TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS authorization_codes (
@@ -146,7 +147,8 @@ impl AuthDb {
                 redirect_uri   TEXT NOT NULL DEFAULT '',
                 used_at        INTEGER,
                 expires_at     INTEGER NOT NULL DEFAULT 0,
-                created_at     INTEGER NOT NULL
+                created_at     INTEGER NOT NULL,
+                granted_scopes TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS oauth_clients (
@@ -157,9 +159,10 @@ impl AuthDb {
             );
 
             CREATE TABLE IF NOT EXISTS refresh_tokens (
-                token_hash TEXT PRIMARY KEY,
-                user_id    TEXT NOT NULL,
-                created_at INTEGER NOT NULL
+                token_hash     TEXT PRIMARY KEY,
+                user_id        TEXT NOT NULL,
+                created_at     INTEGER NOT NULL,
+                granted_scopes TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS users (
@@ -200,6 +203,16 @@ impl AuthDb {
         );
         let _ = conn.execute_batch(
             "ALTER TABLE authorization_codes ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0;",
+        );
+        // ADR-0020 slice 3: per-token scope persistence.
+        let _ = conn.execute_batch(
+            "ALTER TABLE authorization_codes ADD COLUMN granted_scopes TEXT NOT NULL DEFAULT '';",
+        );
+        let _ = conn.execute_batch(
+            "ALTER TABLE access_tokens ADD COLUMN granted_scopes TEXT NOT NULL DEFAULT '';",
+        );
+        let _ = conn.execute_batch(
+            "ALTER TABLE refresh_tokens ADD COLUMN granted_scopes TEXT NOT NULL DEFAULT '';",
         );
         Ok(Self { conn })
     }
@@ -281,30 +294,44 @@ impl AuthDb {
             .is_some_and(|client| client.redirect_uris.iter().any(|uri| uri == redirect_uri)))
     }
 
-    pub fn store_access_token_hash(&self, token_hash: &str, user_id: &str) -> anyhow::Result<()> {
+    /// Persists an access-token hash with its granted scope list.
+    ///
+    /// `granted_scopes` is encoded as a single space-separated string per the
+    /// OAuth scope-list convention. Pass an empty slice for "no scopes".
+    pub fn store_access_token_hash(
+        &self,
+        token_hash: &str,
+        user_id: &str,
+        granted_scopes: &[String],
+    ) -> anyhow::Result<()> {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let scopes = encode_scopes(granted_scopes);
         self.conn.execute(
-            "INSERT OR REPLACE INTO access_tokens (token_hash, user_id, created_at)
-             VALUES (?1, ?2, ?3)",
-            params![token_hash, user_id, now],
+            "INSERT OR REPLACE INTO access_tokens (token_hash, user_id, created_at, granted_scopes)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![token_hash, user_id, now, scopes],
         )?;
         Ok(())
     }
 
+    /// Stores an authorization code carrying the consent's granted scopes.
+    /// The scopes propagate to the access/refresh tokens minted on exchange.
     pub fn store_authorization_code(
         &self,
         client_id: &str,
         user_id: &str,
         code_challenge: &str,
         redirect_uri: &str,
+        granted_scopes: &[String],
     ) -> anyhow::Result<String> {
         let code = uuid::Uuid::new_v4().to_string();
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let expires_at = now + 600; // 10 minutes
+        let scopes = encode_scopes(granted_scopes);
         self.conn.execute(
             "INSERT INTO authorization_codes
-             (code, client_id, user_id, code_challenge, redirect_uri, expires_at, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             (code, client_id, user_id, code_challenge, redirect_uri, expires_at, created_at, granted_scopes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 code,
                 client_id,
@@ -312,7 +339,8 @@ impl AuthDb {
                 code_challenge,
                 redirect_uri,
                 expires_at,
-                now
+                now,
+                scopes,
             ],
         )?;
         Ok(code)
@@ -337,15 +365,24 @@ impl AuthDb {
         code_verifier: &str,
         redirect_uri: &str,
     ) -> anyhow::Result<TokenPair> {
-        let (stored_client_id, user_id, code_challenge, stored_redirect_uri, used_at, expires_at): (
+        let (
+            stored_client_id,
+            user_id,
+            code_challenge,
+            stored_redirect_uri,
+            used_at,
+            expires_at,
+            granted_scopes,
+        ): (
             String,
             String,
             String,
             String,
             Option<i64>,
             i64,
+            String,
         ) = self.conn.query_row(
-            "SELECT client_id, user_id, code_challenge, redirect_uri, used_at, expires_at
+            "SELECT client_id, user_id, code_challenge, redirect_uri, used_at, expires_at, granted_scopes
                FROM authorization_codes
               WHERE code = ?1",
             [code],
@@ -357,6 +394,7 @@ impl AuthDb {
                     row.get(3)?,
                     row.get(4)?,
                     row.get(5)?,
+                    row.get(6)?,
                 ))
             },
         )?;
@@ -375,23 +413,26 @@ impl AuthDb {
             "UPDATE authorization_codes SET used_at = ?1 WHERE code = ?2",
             params![now, code],
         )?;
-        self.issue_token_pair(&user_id, None)
+        let scopes = decode_scopes(&granted_scopes);
+        self.issue_token_pair(&user_id, None, &scopes)
     }
 
     fn issue_token_pair(
         &self,
         user_id: &str,
         existing_refresh_token: Option<String>,
+        granted_scopes: &[String],
     ) -> anyhow::Result<TokenPair> {
         let access_token = uuid::Uuid::new_v4().to_string();
-        self.store_access_token_hash(&hash_token(&access_token), user_id)?;
+        self.store_access_token_hash(&hash_token(&access_token), user_id, granted_scopes)?;
         let refresh_token =
             existing_refresh_token.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let scopes = encode_scopes(granted_scopes);
         self.conn.execute(
-            "INSERT OR REPLACE INTO refresh_tokens (token_hash, user_id, created_at)
-             VALUES (?1, ?2, ?3)",
-            params![hash_token(&refresh_token), user_id, now],
+            "INSERT OR REPLACE INTO refresh_tokens (token_hash, user_id, created_at, granted_scopes)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![hash_token(&refresh_token), user_id, now, scopes],
         )?;
         Ok(TokenPair {
             access_token,
@@ -401,21 +442,30 @@ impl AuthDb {
 
     pub fn refresh_access_token(&self, refresh_token: &str) -> anyhow::Result<TokenPair> {
         let token_hash = hash_token(refresh_token);
-        let user_id: String = self.conn.query_row(
-            "SELECT user_id FROM refresh_tokens WHERE token_hash = ?1",
+        let (user_id, granted_scopes): (String, String) = self.conn.query_row(
+            "SELECT user_id, granted_scopes FROM refresh_tokens WHERE token_hash = ?1",
             [token_hash],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        self.issue_token_pair(&user_id, Some(refresh_token.to_string()))
+        let scopes = decode_scopes(&granted_scopes);
+        self.issue_token_pair(&user_id, Some(refresh_token.to_string()), &scopes)
     }
 
-    pub fn validate_access_token(&self, token_hash: &str) -> anyhow::Result<Option<String>> {
+    /// Returns the access-token row's `(user_id, granted_scopes_raw)` if the
+    /// hash matches a live token. The raw granted-scopes string is the
+    /// space-separated form persisted in the row; callers parse it via
+    /// [`crate::scopes::parse_scope_list_lossy`] to tolerate stale tokens
+    /// minted by older versions.
+    pub fn validate_access_token(
+        &self,
+        token_hash: &str,
+    ) -> anyhow::Result<Option<(String, String)>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT user_id FROM access_tokens WHERE token_hash = ?1")?;
+            .prepare("SELECT user_id, granted_scopes FROM access_tokens WHERE token_hash = ?1")?;
         let mut rows = stmt.query([token_hash])?;
         Ok(match rows.next()? {
-            Some(row) => Some(row.get(0)?),
+            Some(row) => Some((row.get(0)?, row.get(1)?)),
             None => None,
         })
     }

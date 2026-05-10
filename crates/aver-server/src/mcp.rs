@@ -4,11 +4,14 @@ use std::{
 };
 
 use rmcp::{
-    ErrorData as McpError, ServerHandler, handler::server::router::tool::ToolRouter,
-    handler::server::wrapper::Parameters, model::*, schemars, tool, tool_handler, tool_router,
+    ErrorData as McpError, RoleServer, ServerHandler, handler::server::router::tool::ToolRouter,
+    handler::server::wrapper::Parameters, model::*, schemars, service::RequestContext, tool,
+    tool_handler, tool_router,
 };
 use serde::Deserialize;
 
+use crate::http::GrantedScopes;
+use crate::scopes::{Scope, required_scope_for_tool};
 use crate::tools::{
     AddTripleParams, AddVectorChunkParams, AssembleCompactionSummaryParams, AverTools,
     ConsolidateParams, ContradictParams, ExpandParams, ListCandidateClaimsParams,
@@ -17,6 +20,51 @@ use crate::tools::{
     RejectCandidateClaimParams, RememberClaimParams as CoreRememberClaimParams,
     ShouldExtractMemoriesParams,
 };
+
+/// Looks up the scope required for `tool_name` and verifies the request's
+/// granted scopes (carried via `http::request::Parts` in `ctx.extensions`)
+/// include it. Returns an `INVALID_PARAMS`-coded `insufficient_scope` error
+/// per the ADR-0015 unsupported-scope contract when the check fails.
+///
+/// If the tool is not in the catalog, fails closed with `INTERNAL_ERROR` —
+/// reaching that branch indicates a programming bug (every implemented tool
+/// should be mapped).
+fn require_scope(ctx: &RequestContext<RoleServer>, tool_name: &str) -> Result<(), McpError> {
+    let granted: Vec<Scope> = ctx
+        .extensions
+        .get::<http::request::Parts>()
+        .and_then(|parts| parts.extensions.get::<GrantedScopes>())
+        .map(|g| g.0.clone())
+        .unwrap_or_default();
+    check_scope(tool_name, &granted)
+}
+
+/// Pure scope-check used by [`require_scope`] and exercised in unit tests.
+/// Returns `Ok` iff `granted` includes the scope mapped to `tool_name`.
+pub(crate) fn check_scope(tool_name: &str, granted: &[Scope]) -> Result<(), McpError> {
+    let required = match required_scope_for_tool(tool_name) {
+        Some(s) => s,
+        None => {
+            return Err(McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("tool {tool_name:?} has no scope mapping"),
+                None,
+            ));
+        }
+    };
+    if granted.contains(&required) {
+        Ok(())
+    } else {
+        Err(McpError::new(
+            ErrorCode::INVALID_PARAMS,
+            format!(
+                "insufficient_scope: tool {tool_name:?} requires scope {}",
+                required.as_str()
+            ),
+            None,
+        ))
+    }
+}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RememberClaimParams {
@@ -67,7 +115,9 @@ impl AverMcpService {
     async fn remember_claim(
         &self,
         Parameters(params): Parameters<RememberClaimParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "remember_claim")?;
         let result = self
             .tools
             .lock()
@@ -102,7 +152,9 @@ impl AverMcpService {
     async fn add_triple(
         &self,
         Parameters(params): Parameters<AddTripleParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "add_triple")?;
         let result = self
             .tools
             .lock()
@@ -121,7 +173,9 @@ impl AverMcpService {
     async fn expand(
         &self,
         Parameters(params): Parameters<ExpandParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "expand")?;
         let result = self
             .tools
             .lock()
@@ -140,7 +194,9 @@ impl AverMcpService {
     async fn contradict(
         &self,
         Parameters(params): Parameters<ContradictParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "contradict")?;
         let result = self
             .tools
             .lock()
@@ -159,7 +215,9 @@ impl AverMcpService {
     async fn consolidate(
         &self,
         Parameters(params): Parameters<ConsolidateParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "consolidate")?;
         let result = self
             .tools
             .lock()
@@ -178,7 +236,9 @@ impl AverMcpService {
     async fn record_event(
         &self,
         Parameters(params): Parameters<RecordEventParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "record_event")?;
         let result = self
             .tools
             .lock()
@@ -197,7 +257,9 @@ impl AverMcpService {
     async fn should_extract_memories(
         &self,
         Parameters(params): Parameters<ShouldExtractMemoriesParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "should_extract_memories")?;
         let result = self
             .tools
             .lock()
@@ -216,7 +278,9 @@ impl AverMcpService {
     async fn propose_candidate_claim(
         &self,
         Parameters(params): Parameters<ProposeCandidateClaimParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "propose_candidate_claim")?;
         let result = self
             .tools
             .lock()
@@ -237,7 +301,9 @@ impl AverMcpService {
     async fn list_candidate_claims(
         &self,
         Parameters(params): Parameters<ListCandidateClaimsParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "list_candidate_claims")?;
         let result = self
             .tools
             .lock()
@@ -256,7 +322,9 @@ impl AverMcpService {
     async fn promote_candidate_claim(
         &self,
         Parameters(params): Parameters<PromoteCandidateClaimParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "promote_candidate_claim")?;
         let result = self
             .tools
             .lock()
@@ -275,7 +343,9 @@ impl AverMcpService {
     async fn reject_candidate_claim(
         &self,
         Parameters(params): Parameters<RejectCandidateClaimParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "reject_candidate_claim")?;
         let result = self
             .tools
             .lock()
@@ -294,7 +364,9 @@ impl AverMcpService {
     async fn record_observation(
         &self,
         Parameters(params): Parameters<RecordObservationParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "record_observation")?;
         let result = self
             .tools
             .lock()
@@ -315,7 +387,9 @@ impl AverMcpService {
     async fn recall_observation(
         &self,
         Parameters(params): Parameters<RecallObservationParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "recall_observation")?;
         let result = self
             .tools
             .lock()
@@ -334,7 +408,9 @@ impl AverMcpService {
     async fn assemble_compaction_summary(
         &self,
         Parameters(params): Parameters<AssembleCompactionSummaryParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "assemble_compaction_summary")?;
         let result = self
             .tools
             .lock()
@@ -353,7 +429,9 @@ impl AverMcpService {
     async fn add_vector_chunk(
         &self,
         Parameters(params): Parameters<AddVectorChunkParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "add_vector_chunk")?;
         let result = self
             .tools
             .lock()
@@ -372,7 +450,9 @@ impl AverMcpService {
     async fn recall(
         &self,
         Parameters(params): Parameters<RecallParams>,
+        ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "recall")?;
         let result = self
             .tools
             .lock()

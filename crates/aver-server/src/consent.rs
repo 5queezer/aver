@@ -518,6 +518,7 @@ pub async fn handle_loopback_get_authorize(
             &user.id,
             &query.code_challenge,
             &query.redirect_uri,
+            &consent.granted_scopes,
         ) {
             Ok(c) => c,
             Err(_) => {
@@ -763,6 +764,7 @@ pub async fn handle_authorize_decision(
                 &user.id,
                 &form.code_challenge,
                 &form.redirect_uri,
+                &scopes,
             ) {
                 Ok(c) => c,
                 Err(_) => {

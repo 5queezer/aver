@@ -23,7 +23,14 @@ use crate::{
     consent::{ConsentDeps, handle_authorize_decision, handle_loopback_get_authorize},
     mcp::AverMcpService,
     oauth::authorization_server_metadata,
+    scopes::{SUPPORTED, parse_scope_list_lossy},
 };
+
+/// Per-request bag of OAuth scopes granted by the bearer token. Inserted as
+/// an Axum extension by [`validate_bearer_token`] and read inside the MCP
+/// service via the `http::request::Parts` extension forwarded by rmcp.
+#[derive(Debug, Clone, Default)]
+pub struct GrantedScopes(pub Vec<crate::scopes::Scope>);
 
 #[derive(Clone)]
 struct HttpState {
@@ -106,7 +113,7 @@ async fn health() -> Json<serde_json::Value> {
 
 async fn validate_bearer_token(
     axum::extract::State(state): axum::extract::State<HttpState>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> impl IntoResponse {
     let token = request
@@ -117,21 +124,21 @@ async fn validate_bearer_token(
     let Some(token) = token else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    let token_is_valid = {
+    let granted_raw = {
         let Ok(db) = state.auth_db.lock() else {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         };
         match db.validate_access_token(&hash_token(token)) {
-            Ok(Some(_)) => true,
+            Ok(Some((_, scopes_raw))) => scopes_raw,
             Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
             Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     };
-    if token_is_valid {
-        next.run(request).await.into_response()
-    } else {
-        StatusCode::UNAUTHORIZED.into_response()
-    }
+    // Parse leniently: an unknown token in the persisted column is treated
+    // as "no implicit access" — valid scopes still apply.
+    let granted = parse_scope_list_lossy(&granted_raw);
+    request.extensions_mut().insert(GrantedScopes(granted));
+    next.run(request).await.into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -258,11 +265,15 @@ async fn legacy_oauth_authorize(state: HttpState, request: Request<Body>) -> Res
     if !allows {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    // Legacy approval_token path: grant all six canonical scopes so existing
+    // setups keep working until slice 6 retires this branch.
+    let legacy_scopes: Vec<String> = SUPPORTED.iter().map(|s| s.to_string()).collect();
     let code = match db.store_authorization_code(
         &query.client_id,
         "local",
         &query.code_challenge,
         &query.redirect_uri,
+        &legacy_scopes,
     ) {
         Ok(c) => c,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),

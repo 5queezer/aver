@@ -6,11 +6,12 @@ fn auth_db_validates_stored_access_token_hash() {
     let db = AuthDb::open(dir.path().join("auth.db")).unwrap();
     let token_hash = hash_token("secret-token");
 
-    db.store_access_token_hash(&token_hash, "user-1").unwrap();
+    db.store_access_token_hash(&token_hash, "user-1", &[])
+        .unwrap();
 
     assert_eq!(
         db.validate_access_token(&token_hash).unwrap(),
-        Some("user-1".to_string())
+        Some(("user-1".to_string(), String::new())),
     );
     assert_eq!(
         db.validate_access_token(&hash_token("wrong-token"))
