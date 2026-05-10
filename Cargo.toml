@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members  = ["crates/aver-core", "crates/aver-cli", "crates/aver-extractor", "crates/aver-server", "crates/aver-eval"]
+members  = ["crates/aver-core", "crates/aver-cli", "crates/aver-extractor", "crates/aver-server", "crates/aver-eval", "crates/aver-scope-shim"]
 
 [workspace.package]
 version      = "0.1.0"
@@ -15,7 +15,7 @@ sqlite-vec  = "0.1"
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
 ureq        = { version = "2", features = ["json"] }
-clap        = { version = "4", features = ["derive"] }
+clap        = { version = "4", features = ["derive", "env"] }
 anyhow      = "1"
 thiserror   = "1"
 time        = { version = "0.3", features = ["serde", "macros"] }

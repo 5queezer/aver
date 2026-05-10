@@ -10,6 +10,7 @@ fn make_event(id: i64, payload: &str) -> EpisodicEvent {
         agent_id: "human".to_string(),
         agent_kind: AgentKind::Human,
         ts: 0,
+        scope: "global".to_string(),
     }
 }
 

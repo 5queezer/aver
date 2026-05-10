@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use crate::Error;
 
-/// A claim row as exposed to consumers (ADR-0003).
+/// A claim row as exposed to consumers (ADR-0003, ADR-0021).
 #[derive(Debug, Clone)]
 pub struct Claim {
     pub id: i64,
@@ -18,6 +18,9 @@ pub struct Claim {
     pub agent_kind: AgentKind,
     pub write_ts: i64,
     pub last_verified_at: Option<i64>,
+    /// ADR-0021 hierarchical memory scope (e.g. "global", "proj/aver",
+    /// "proj/aver/branch/feat_x"). Defaults to "global" when unspecified.
+    pub scope: String,
 }
 
 impl Claim {
@@ -44,6 +47,8 @@ pub struct EpisodicEvent {
     pub agent_id: String,
     pub agent_kind: AgentKind,
     pub ts: i64,
+    /// ADR-0021 memory scope. Defaults to "global".
+    pub scope: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,6 +63,8 @@ pub struct CandidateClaim {
     pub status: String,
     pub promoted_claim_id: Option<i64>,
     pub rejection_reason: Option<String>,
+    /// ADR-0021 memory scope. Inherits to the promoted claim. Defaults to "global".
+    pub scope: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +130,8 @@ pub struct Observation {
     pub agent_kind: AgentKind,
     pub derivation: String,
     pub ts: i64,
+    /// ADR-0021 memory scope. Defaults to "global".
+    pub scope: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +191,115 @@ pub struct Community {
 pub enum StorageMode {
     Local,
     Shared,
+}
+
+/// ADR-0023 §"recall and expand": how a predicate filter expands through the
+/// `predicate_closure` (ADR-0010).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PredicateWalk {
+    /// Match only rows whose `predicate` equals the input.
+    #[default]
+    Exact,
+    /// Match input plus every predicate that has the input as an ancestor.
+    Descendants,
+}
+
+impl PredicateWalk {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Descendants => "descendants",
+        }
+    }
+}
+
+impl FromStr for PredicateWalk {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self, Error> {
+        match s {
+            "exact" => Ok(Self::Exact),
+            "descendants" => Ok(Self::Descendants),
+            other => Err(Error::EnumParse {
+                kind: "PredicateWalk",
+                value: other.to_string(),
+            }),
+        }
+    }
+}
+
+/// ADR-0023 — typed filter set for `recall_text_with_filters` and
+/// `expand_with_filters`. Constructed via `Default::default()` and then
+/// updated by the caller; this preserves the pre-Layer-3 behavior of
+/// `recall_text` (scope="global", walk=any, status=ACTIVE) when defaults
+/// are accepted.
+#[derive(Debug, Clone)]
+pub struct RecallFilters {
+    pub scope: String,
+    pub scope_walk: ScopeWalk,
+    pub agent_id: Option<String>,
+    pub agent_kind: Option<AgentKind>,
+    pub predicate: Option<String>,
+    pub predicate_walk: PredicateWalk,
+    pub min_confidence: Option<f64>,
+    /// `Some(status)` matches that status exactly. `None` means "any status"
+    /// (drops the implicit `WHERE status='ACTIVE'` clause).
+    pub status: Option<ClaimStatus>,
+}
+
+impl Default for RecallFilters {
+    fn default() -> Self {
+        Self {
+            scope: "global".to_string(),
+            scope_walk: ScopeWalk::Any,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: PredicateWalk::Exact,
+            min_confidence: None,
+            status: Some(ClaimStatus::Active),
+        }
+    }
+}
+
+/// ADR-0021 §"Read-path semantics": how a scope filter walks the path tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScopeWalk {
+    /// Only rows whose scope equals the input.
+    Exact,
+    /// Input scope plus every path prefix up to "global". Default per ADR-0021.
+    #[default]
+    Ancestors,
+    /// Input scope plus every path beginning with `input/`.
+    Descendants,
+    /// No scope filter applied.
+    Any,
+}
+
+impl ScopeWalk {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Ancestors => "ancestors",
+            Self::Descendants => "descendants",
+            Self::Any => "any",
+        }
+    }
+}
+
+impl FromStr for ScopeWalk {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self, Error> {
+        match s {
+            "exact" => Ok(Self::Exact),
+            "ancestors" => Ok(Self::Ancestors),
+            "descendants" => Ok(Self::Descendants),
+            "any" => Ok(Self::Any),
+            other => Err(Error::EnumParse {
+                kind: "ScopeWalk",
+                value: other.to_string(),
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

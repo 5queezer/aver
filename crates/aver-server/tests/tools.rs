@@ -19,6 +19,7 @@ fn remember_claim_tool_writes_claim_and_recall_returns_it() {
             source: Some("mcp-test".to_string()),
             agent_id: Some("claude".to_string()),
             agent_kind: Some("LLM".to_string()),
+            scope: None,
         })
         .unwrap();
 
@@ -28,6 +29,14 @@ fn remember_claim_tool_writes_claim_and_recall_returns_it() {
             alpha: None,
             hops: None,
             top_k: Some(5),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
         })
         .unwrap();
 
@@ -49,6 +58,7 @@ fn adr0008_five_tool_surface_covers_claim_graph_lifecycle() {
             object: "StripeSDK".to_string(),
             confidence: None,
             source: "agent-test".to_string(),
+            scope: None,
         })
         .unwrap();
     tools
@@ -58,6 +68,7 @@ fn adr0008_five_tool_surface_covers_claim_graph_lifecycle() {
             object: "BillingTeam".to_string(),
             confidence: None,
             source: "agent-test".to_string(),
+            scope: None,
         })
         .unwrap();
 
@@ -67,6 +78,14 @@ fn adr0008_five_tool_surface_covers_claim_graph_lifecycle() {
             alpha: None,
             hops: Some(2),
             top_k: Some(5),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
         })
         .unwrap();
     assert!(
@@ -82,6 +101,8 @@ fn adr0008_five_tool_surface_covers_claim_graph_lifecycle() {
             entity: "PaymentGateway".to_string(),
             hops: Some(2),
             predicates: None,
+            scope: None,
+            scope_walk: None,
         })
         .unwrap();
     assert!(expanded.nodes.contains(&"BillingTeam".to_string()));
@@ -114,6 +135,7 @@ fn episodic_candidate_tools_cover_memory_pipeline() {
             source: Some("mcp-test".to_string()),
             agent_id: Some("claude".to_string()),
             agent_kind: Some("LLM".to_string()),
+            scope: None,
         })
         .unwrap();
 
@@ -131,6 +153,7 @@ fn episodic_candidate_tools_cover_memory_pipeline() {
             subject: "Aver".to_string(),
             predicate: "prefers".to_string(),
             object: "triggered_memory_extraction".to_string(),
+            scope: None,
         })
         .unwrap();
 
@@ -162,6 +185,7 @@ fn episodic_candidate_tools_cover_memory_pipeline() {
             subject: "Aver".to_string(),
             predicate: "owns".to_string(),
             object: "candidate_claims".to_string(),
+            scope: None,
         })
         .unwrap();
     let promoted = tools
@@ -186,6 +210,7 @@ fn observation_projection_tools_expose_recall_and_compaction_summary() {
             source: Some("cargo test".to_string()),
             agent_id: Some("claude".to_string()),
             agent_kind: Some("LLM".to_string()),
+            scope: None,
         })
         .unwrap();
 
@@ -196,6 +221,7 @@ fn observation_projection_tools_expose_recall_and_compaction_summary() {
             relevance: ObservationRelevanceParam::High,
             source_event_ids: vec![event.id],
             derivation: "mock-observer".to_string(),
+            scope: None,
         })
         .unwrap();
 
@@ -230,6 +256,14 @@ fn recall_tool_rejects_alpha_outside_unit_interval() {
             alpha: Some(1.5),
             hops: None,
             top_k: Some(5),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
         })
         .expect_err("invalid alpha should be rejected");
 
@@ -248,6 +282,7 @@ fn add_triple_rejects_confidence_outside_unit_interval() {
             object: "StripeSDK".to_string(),
             confidence: Some(-0.1),
             source: "agent-test".to_string(),
+            scope: None,
         })
         .expect_err("invalid confidence should be rejected");
 
@@ -266,6 +301,7 @@ fn add_triple_persists_valid_confidence_override() {
             object: "StripeSDK".to_string(),
             confidence: Some(0.4),
             source: "agent-test".to_string(),
+            scope: None,
         })
         .unwrap();
 
@@ -275,6 +311,14 @@ fn add_triple_persists_valid_confidence_override() {
             alpha: None,
             hops: None,
             top_k: Some(5),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
         })
         .unwrap();
 
@@ -296,6 +340,8 @@ fn expand_tool_rejects_zero_hops() {
             entity: "PaymentGateway".to_string(),
             hops: Some(0),
             predicates: None,
+            scope: None,
+            scope_walk: None,
         })
         .expect_err("zero hops should be rejected");
 
@@ -313,6 +359,14 @@ fn recall_tool_rejects_zero_hops() {
             alpha: None,
             hops: Some(0),
             top_k: Some(5),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
         })
         .expect_err("zero hops should be rejected");
 
@@ -330,6 +384,14 @@ fn recall_tool_rejects_zero_top_k() {
             alpha: None,
             hops: None,
             top_k: Some(0),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
         })
         .expect_err("zero top_k should be rejected");
 
@@ -348,6 +410,7 @@ fn recall_tool_returns_graph_context_for_entity_query() {
             object: "StripeSDK".to_string(),
             confidence: None,
             source: "test".to_string(),
+            scope: None,
         })
         .unwrap();
 
@@ -357,6 +420,14 @@ fn recall_tool_returns_graph_context_for_entity_query() {
             alpha: None,
             hops: Some(1),
             top_k: Some(5),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
         })
         .unwrap();
 
@@ -383,6 +454,7 @@ fn recall_tool_expands_graph_from_recalled_claim_subject_when_query_is_phrase() 
             object: "StripeSDK".to_string(),
             confidence: None,
             source: "test".to_string(),
+            scope: None,
         })
         .unwrap();
 
@@ -392,6 +464,14 @@ fn recall_tool_expands_graph_from_recalled_claim_subject_when_query_is_phrase() 
             alpha: None,
             hops: Some(1),
             top_k: Some(5),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
         })
         .unwrap();
 
@@ -418,6 +498,7 @@ fn recall_tool_reports_confidence_floor_for_returned_triples() {
             object: "current".to_string(),
             confidence: Some(0.4),
             source: "test".to_string(),
+            scope: None,
         })
         .unwrap();
 
@@ -427,6 +508,14 @@ fn recall_tool_reports_confidence_floor_for_returned_triples() {
             alpha: None,
             hops: Some(1),
             top_k: Some(5),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
         })
         .unwrap();
 
@@ -446,6 +535,7 @@ fn recall_tool_confidence_floor_includes_subgraph_edges() {
             object: "current".to_string(),
             confidence: Some(0.95),
             source: "test".to_string(),
+            scope: None,
         })
         .unwrap();
     tools
@@ -455,6 +545,7 @@ fn recall_tool_confidence_floor_includes_subgraph_edges() {
             object: "StripeSDK".to_string(),
             confidence: Some(0.4),
             source: "test".to_string(),
+            scope: None,
         })
         .unwrap();
 
@@ -464,6 +555,14 @@ fn recall_tool_confidence_floor_includes_subgraph_edges() {
             alpha: None,
             hops: Some(1),
             top_k: Some(1),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
         })
         .unwrap();
 
@@ -514,6 +613,7 @@ fn record_event_tool_rejects_empty_session_id() {
             source: None,
             agent_id: None,
             agent_kind: None,
+            scope: None,
         })
         .expect_err("empty session ids should be rejected");
 
@@ -533,6 +633,7 @@ fn record_event_tool_rejects_empty_kind() {
             source: None,
             agent_id: None,
             agent_kind: None,
+            scope: None,
         })
         .expect_err("empty event kinds should be rejected");
 
@@ -551,6 +652,7 @@ fn add_triple_rejects_empty_subject() {
             object: "StripeSDK".to_string(),
             confidence: None,
             source: "test".to_string(),
+            scope: None,
         })
         .expect_err("empty subjects should be rejected");
 
@@ -569,6 +671,7 @@ fn add_triple_rejects_empty_predicate() {
             object: "StripeSDK".to_string(),
             confidence: None,
             source: "test".to_string(),
+            scope: None,
         })
         .expect_err("empty predicates should be rejected");
 
@@ -587,6 +690,7 @@ fn add_triple_rejects_empty_object() {
             object: " ".to_string(),
             confidence: None,
             source: "test".to_string(),
+            scope: None,
         })
         .expect_err("empty objects should be rejected");
 
@@ -606,6 +710,7 @@ fn remember_claim_rejects_empty_subject() {
             source: None,
             agent_id: None,
             agent_kind: None,
+            scope: None,
         })
         .expect_err("empty subjects should be rejected");
 
@@ -625,6 +730,7 @@ fn remember_claim_rejects_empty_predicate() {
             source: None,
             agent_id: None,
             agent_kind: None,
+            scope: None,
         })
         .expect_err("empty predicates should be rejected");
 
@@ -644,6 +750,7 @@ fn remember_claim_rejects_empty_object() {
             source: None,
             agent_id: None,
             agent_kind: None,
+            scope: None,
         })
         .expect_err("empty objects should be rejected");
 

@@ -11,6 +11,7 @@ use rmcp::{
 use serde::Deserialize;
 
 use crate::http::GrantedScopes;
+use crate::scope_resolution::ResolvedScope;
 use crate::scopes::{Scope, required_scope_for_tool};
 use crate::tools::{
     AddTripleParams, AddVectorChunkParams, AssembleCompactionSummaryParams, AverTools,
@@ -18,7 +19,7 @@ use crate::tools::{
     ObservationCoverageParams, PromoteCandidateClaimParams, ProposeCandidateClaimParams,
     RecallObservationParams, RecallParams as CoreRecallParams, RecordEventParams,
     RecordObservationParams, RejectCandidateClaimParams,
-    RememberClaimParams as CoreRememberClaimParams, ShouldExtractMemoriesParams,
+    RememberClaimParams as CoreRememberClaimParams, RetireClaimParams, ShouldExtractMemoriesParams,
 };
 
 /// Looks up the scope required for `tool_name` and verifies the request's
@@ -77,6 +78,10 @@ pub struct RememberClaimParams {
     pub agent_id: Option<String>,
     #[serde(default)]
     pub agent_kind: Option<String>,
+    /// ADR-0021 hierarchical memory scope. Per-call override; if omitted, the
+    /// request's resolved scope (ADR-0022) applies.
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -88,10 +93,31 @@ pub struct RecallParams {
     pub hops: Option<usize>,
     #[serde(default = "default_top_k")]
     pub top_k: usize,
+    /// ADR-0021 scope filter. Per-call override.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// ADR-0021 walk mode: "exact" | "ancestors" | "descendants" | "any".
+    #[serde(default)]
+    pub scope_walk: Option<String>,
 }
 
 fn default_top_k() -> usize {
     5
+}
+
+/// ADR-0022: read the request's resolved scope from the rmcp request
+/// extensions. Precedence is: per-call param, header, default header, env,
+/// then `global`. Falls back to global resolution if no middleware ran (e.g.
+/// unit tests that bypass HTTP).
+fn request_scope(ctx: &RequestContext<RoleServer>) -> ResolvedScope {
+    ctx.extensions
+        .get::<http::request::Parts>()
+        .and_then(|parts| parts.extensions.get::<ResolvedScope>())
+        .cloned()
+        .unwrap_or(ResolvedScope {
+            scope: "global".to_string(),
+            default_walk: aver_core::ScopeWalk::Any,
+        })
 }
 
 pub struct AverMcpService {
@@ -135,6 +161,7 @@ impl AverMcpService {
                 source: params.source,
                 agent_id: params.agent_id,
                 agent_kind: params.agent_kind,
+                scope: params.scope.or_else(|| Some(request_scope(&ctx).scope)),
             });
         match result {
             Ok(claim) => Ok(CallToolResult::success(vec![Content::text(
@@ -151,10 +178,13 @@ impl AverMcpService {
     #[tool(description = "Append a structured memory triple per ADR-0008.")]
     async fn add_triple(
         &self,
-        Parameters(params): Parameters<AddTripleParams>,
+        Parameters(mut params): Parameters<AddTripleParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "add_triple")?;
+        if params.scope.is_none() {
+            params.scope = Some(request_scope(&ctx).scope);
+        }
         let result = self
             .tools
             .lock()
@@ -172,10 +202,17 @@ impl AverMcpService {
     #[tool(description = "Expand a known entity into its local claim-graph neighborhood.")]
     async fn expand(
         &self,
-        Parameters(params): Parameters<ExpandParams>,
+        Parameters(mut params): Parameters<ExpandParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "expand")?;
+        let resolved = request_scope(&ctx);
+        if params.scope_walk.is_none() && params.scope.is_none() {
+            params.scope_walk = Some(resolved.default_walk.as_str().to_string());
+        }
+        if params.scope.is_none() {
+            params.scope = Some(resolved.scope);
+        }
         let result = self
             .tools
             .lock()
@@ -235,10 +272,13 @@ impl AverMcpService {
     #[tool(description = "Record an append-only episodic event for later memory extraction.")]
     async fn record_event(
         &self,
-        Parameters(params): Parameters<RecordEventParams>,
+        Parameters(mut params): Parameters<RecordEventParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "record_event")?;
+        if params.scope.is_none() {
+            params.scope = Some(request_scope(&ctx).scope);
+        }
         let result = self
             .tools
             .lock()
@@ -277,10 +317,13 @@ impl AverMcpService {
     #[tool(description = "Stage a candidate claim from episodic event provenance.")]
     async fn propose_candidate_claim(
         &self,
-        Parameters(params): Parameters<ProposeCandidateClaimParams>,
+        Parameters(mut params): Parameters<ProposeCandidateClaimParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "propose_candidate_claim")?;
+        if params.scope.is_none() {
+            params.scope = Some(request_scope(&ctx).scope);
+        }
         let result = self
             .tools
             .lock()
@@ -363,10 +406,13 @@ impl AverMcpService {
     #[tool(description = "Record a source-backed episodic observation projection.")]
     async fn record_observation(
         &self,
-        Parameters(params): Parameters<RecordObservationParams>,
+        Parameters(mut params): Parameters<RecordObservationParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "record_observation")?;
+        if params.scope.is_none() {
+            params.scope = Some(request_scope(&ctx).scope);
+        }
         let result = self
             .tools
             .lock()
@@ -467,6 +513,31 @@ impl AverMcpService {
         json_tool_result(result, "add_vector_chunk")
     }
 
+    #[tool(
+        description = "Mark a claim as INVALIDATED so default `recall` queries no longer surface it. \
+        For evidentiary contradictions that should remain in active reads pending consolidation, \
+        use `contradict` instead — it does NOT change the claim's status."
+    )]
+    async fn retire_claim(
+        &self,
+        Parameters(params): Parameters<RetireClaimParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "retire_claim")?;
+        let result = self
+            .tools
+            .lock()
+            .map_err(|err| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("memory tool lock poisoned: {err}"),
+                    None,
+                )
+            })?
+            .retire_claim(params);
+        json_tool_result(result, "retire_claim")
+    }
+
     #[tool(description = "Recall durable Aver claims by text query.")]
     async fn recall(
         &self,
@@ -484,11 +555,29 @@ impl AverMcpService {
                     None,
                 )
             })?
-            .recall(CoreRecallParams {
-                query: params.query,
-                alpha: params.alpha,
-                hops: params.hops,
-                top_k: Some(params.top_k),
+            .recall({
+                let resolved = request_scope(&ctx);
+                let walk = params.scope_walk.clone().or_else(|| {
+                    if params.scope.is_none() {
+                        Some(resolved.default_walk.as_str().to_string())
+                    } else {
+                        None
+                    }
+                });
+                CoreRecallParams {
+                    query: params.query,
+                    alpha: params.alpha,
+                    hops: params.hops,
+                    top_k: Some(params.top_k),
+                    scope: params.scope.or(Some(resolved.scope)),
+                    scope_walk: walk,
+                    agent_id: None,
+                    agent_kind: None,
+                    predicate: None,
+                    predicate_walk: None,
+                    min_confidence: None,
+                    status: None,
+                }
             });
         match result {
             Ok(claims) => Ok(CallToolResult::success(vec![Content::text(

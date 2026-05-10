@@ -102,3 +102,23 @@ pub(crate) fn validate_agent_id(agent_id: &str) -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// ADR-0021 scope validation: non-blank, charset `[A-Za-z0-9_/-]`. Mirrors the
+/// SQL trigger contract but rejects in Rust before we hit sqlite, giving a
+/// typed error and avoiding a wasted privacy-filter pass.
+pub(crate) fn validate_scope(scope: &str) -> Result<(), Error> {
+    if scope.trim().is_empty() {
+        return Err(Error::InvalidScope {
+            value: scope.to_string(),
+        });
+    }
+    let charset_ok = scope
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-' || byte == b'/');
+    if !charset_ok {
+        return Err(Error::InvalidScope {
+            value: scope.to_string(),
+        });
+    }
+    Ok(())
+}

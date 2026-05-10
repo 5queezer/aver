@@ -15,8 +15,8 @@ pub use types::{
     AgentKind, CandidateClaim, CandidateClaimDraft, Claim, ClaimStatus, Community,
     ConsolidationReport, ContradictionRecord, EpisodicEvent, ExtractionDecision,
     ExtractionTriggerReason, GraphDriftSnapshot, GraphExpansion, NewClaim, Observation,
-    ObservationCoverage, ObservationDraft, ObservationRecall, ObservationRelevance, Provenance,
-    StorageMode, VectorChunk,
+    ObservationCoverage, ObservationDraft, ObservationRecall, ObservationRelevance, PredicateWalk,
+    Provenance, RecallFilters, ScopeWalk, StorageMode, VectorChunk,
 };
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -33,7 +33,7 @@ use validation::{
     validate_agent_id, validate_candidate_status_filter, validate_claim_field,
     validate_contradiction_reason, validate_embedding_model, validate_embedding_vector,
     validate_event_field, validate_observation_field, validate_recall_query,
-    validate_rejection_reason, validate_top_k, validate_vector_chunk_text,
+    validate_rejection_reason, validate_scope, validate_top_k, validate_vector_chunk_text,
 };
 
 // Embedded migrations applied in order on every `Store::open`.
@@ -117,7 +117,31 @@ type ClaimRow = (
     String,
     i64,
     Option<i64>,
+    String, // scope (ADR-0021)
 );
+
+/// ADR-0021 §"Read-path semantics": build a SQL fragment + bound params
+/// for the `scope` column under a given walk mode.
+///
+/// Returns `(WHERE-clause-fragment, params)`. Caller appends `AND <fragment>`
+/// to its query and binds `params` in order.
+fn scope_filter_sql(scope: &str, walk: ScopeWalk) -> (String, Vec<String>) {
+    match walk {
+        ScopeWalk::Any => ("1=1".to_string(), Vec::new()),
+        ScopeWalk::Exact => ("scope = ?".to_string(), vec![scope.to_string()]),
+        ScopeWalk::Descendants => (
+            "(scope = ? OR scope LIKE ? || '/%')".to_string(),
+            vec![scope.to_string(), scope.to_string()],
+        ),
+        ScopeWalk::Ancestors => (
+            // Match: row.scope is "global" (implicit root), row.scope equals
+            // the input, OR the input path begins with row.scope + "/" (i.e.
+            // row.scope is a strict path-prefix ancestor of the input).
+            "(scope = 'global' OR scope = ? OR ? LIKE scope || '/%')".to_string(),
+            vec![scope.to_string(), scope.to_string()],
+        ),
+    }
+}
 
 struct ClaimWrite<'a> {
     agent_id: &'a str,
@@ -128,6 +152,9 @@ struct ClaimWrite<'a> {
     object: &'a str,
     source: &'a str,
     confidence: f64,
+    /// ADR-0021 memory scope. `"global"` is the safe default that reproduces
+    /// pre-scope behavior verbatim.
+    scope: &'a str,
 }
 
 pub trait Observer {
@@ -579,6 +606,7 @@ impl Store {
             object,
             source,
             confidence,
+            scope: "global",
         })
     }
 
@@ -601,6 +629,83 @@ impl Store {
             object,
             source,
             confidence: provenance.policy_confidence(),
+            scope: "global",
+        })
+    }
+
+    /// ADR-0021: variant of `add_claim` that records under an explicit scope.
+    pub fn add_claim_with_scope(
+        &self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        source: &str,
+        scope: &str,
+    ) -> Result<i64, Error> {
+        validate_scope(scope)?;
+        self.insert_claim(ClaimWrite {
+            agent_id: "local",
+            agent_kind: AgentKind::Human,
+            provenance: Provenance::UserAsserted,
+            subject,
+            predicate,
+            object,
+            source,
+            confidence: 0.95,
+            scope,
+        })
+    }
+
+    /// ADR-0021: variant of `add_claim_with_confidence` that records under an
+    /// explicit scope.
+    pub fn add_claim_with_confidence_and_scope(
+        &self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        source: &str,
+        confidence: f64,
+        scope: &str,
+    ) -> Result<i64, Error> {
+        validate_scope(scope)?;
+        self.insert_claim(ClaimWrite {
+            agent_id: "local",
+            agent_kind: AgentKind::Human,
+            provenance: Provenance::UserAsserted,
+            subject,
+            predicate,
+            object,
+            source,
+            confidence,
+            scope,
+        })
+    }
+
+    /// ADR-0021: variant of `add_claim_from_agent` that records under an
+    /// explicit scope.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_claim_from_agent_with_scope(
+        &self,
+        agent_id: &str,
+        agent_kind: AgentKind,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        source: &str,
+        scope: &str,
+    ) -> Result<i64, Error> {
+        validate_scope(scope)?;
+        let provenance = provenance_for_agent_kind(agent_kind);
+        self.insert_claim(ClaimWrite {
+            agent_id,
+            agent_kind,
+            provenance,
+            subject,
+            predicate,
+            object,
+            source,
+            confidence: provenance.policy_confidence(),
+            scope,
         })
     }
 
@@ -671,9 +776,9 @@ impl Store {
         self.conn.execute(
             "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
                                  status, source_refs, agent_id, agent_kind, write_ts,
-                                 created_at, last_seen_at, last_verified_at)
+                                 created_at, last_seen_at, last_verified_at, scope)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7,
-                     ?8, ?9, ?10, ?10, ?10, ?10)",
+                     ?8, ?9, ?10, ?10, ?10, ?10, ?11)",
             params![
                 claim_id,
                 write.subject,
@@ -684,7 +789,8 @@ impl Store {
                 source_refs,
                 write.agent_id,
                 write.agent_kind.as_str(),
-                now
+                now,
+                write.scope,
             ],
         )?;
         Ok(claim_id)
@@ -745,7 +851,15 @@ impl Store {
         payload: &str,
         source: &str,
     ) -> Result<i64, Error> {
-        self.record_event_from_agent("local", AgentKind::Human, session_id, kind, payload, source)
+        self.record_event_inner(
+            "local",
+            AgentKind::Human,
+            session_id,
+            kind,
+            payload,
+            source,
+            "global",
+        )
     }
 
     pub fn record_event_from_agent(
@@ -756,6 +870,62 @@ impl Store {
         kind: &str,
         payload: &str,
         source: &str,
+    ) -> Result<i64, Error> {
+        self.record_event_inner(
+            agent_id, agent_kind, session_id, kind, payload, source, "global",
+        )
+    }
+
+    /// ADR-0021: variant of `record_event` that records under an explicit scope.
+    pub fn record_event_with_scope(
+        &self,
+        session_id: &str,
+        kind: &str,
+        payload: &str,
+        source: &str,
+        scope: &str,
+    ) -> Result<i64, Error> {
+        validate_scope(scope)?;
+        self.record_event_inner(
+            "local",
+            AgentKind::Human,
+            session_id,
+            kind,
+            payload,
+            source,
+            scope,
+        )
+    }
+
+    /// ADR-0021: variant of `record_event_from_agent` that records under an
+    /// explicit scope.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_event_from_agent_with_scope(
+        &self,
+        agent_id: &str,
+        agent_kind: AgentKind,
+        session_id: &str,
+        kind: &str,
+        payload: &str,
+        source: &str,
+        scope: &str,
+    ) -> Result<i64, Error> {
+        validate_scope(scope)?;
+        self.record_event_inner(
+            agent_id, agent_kind, session_id, kind, payload, source, scope,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_event_inner(
+        &self,
+        agent_id: &str,
+        agent_kind: AgentKind,
+        session_id: &str,
+        kind: &str,
+        payload: &str,
+        source: &str,
+        scope: &str,
     ) -> Result<i64, Error> {
         validate_event_field("session_id", session_id)?;
         validate_event_field("kind", kind)?;
@@ -785,8 +955,8 @@ impl Store {
         };
         append_jsonl(&self.event_log_path, &entry)?;
         self.conn.execute(
-            "INSERT INTO episodic_events (id, session_id, kind, payload, source, agent_id, agent_kind, ts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO episodic_events (id, session_id, kind, payload, source, agent_id, agent_kind, ts, scope)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 event_id,
                 session_id,
@@ -795,14 +965,15 @@ impl Store {
                 source,
                 agent_id,
                 agent_kind.as_str(),
-                now
+                now,
+                scope,
             ],
         )?;
         Ok(event_id)
     }
 
     pub fn get_event(&self, id: i64) -> Result<EpisodicEvent, Error> {
-        let (id, session_id, kind, payload, source, agent_id, agent_kind, ts): (
+        let (id, session_id, kind, payload, source, agent_id, agent_kind, ts, scope): (
             i64,
             String,
             String,
@@ -811,10 +982,11 @@ impl Store {
             String,
             String,
             i64,
+            String,
         ) = self
             .conn
             .query_row(
-                "SELECT id, session_id, kind, payload, source, agent_id, agent_kind, ts
+                "SELECT id, session_id, kind, payload, source, agent_id, agent_kind, ts, scope
                FROM episodic_events WHERE id = ?1",
                 [id],
                 |row| {
@@ -827,6 +999,7 @@ impl Store {
                         row.get(5)?,
                         row.get(6)?,
                         row.get(7)?,
+                        row.get(8)?,
                     ))
                 },
             )
@@ -844,6 +1017,7 @@ impl Store {
             agent_id,
             agent_kind: agent_kind.parse()?,
             ts,
+            scope,
         })
     }
 
@@ -887,6 +1061,47 @@ impl Store {
         source_event_ids: &[i64],
         derivation: &str,
     ) -> Result<String, Error> {
+        self.record_observation_inner(
+            session_id,
+            content,
+            relevance,
+            source_event_ids,
+            derivation,
+            "global",
+        )
+    }
+
+    /// ADR-0021: variant of `record_observation` that records under an explicit scope.
+    pub fn record_observation_with_scope(
+        &self,
+        session_id: &str,
+        content: &str,
+        relevance: ObservationRelevance,
+        source_event_ids: &[i64],
+        derivation: &str,
+        scope: &str,
+    ) -> Result<String, Error> {
+        validate_scope(scope)?;
+        self.record_observation_inner(
+            session_id,
+            content,
+            relevance,
+            source_event_ids,
+            derivation,
+            scope,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_observation_inner(
+        &self,
+        session_id: &str,
+        content: &str,
+        relevance: ObservationRelevance,
+        source_event_ids: &[i64],
+        derivation: &str,
+        scope: &str,
+    ) -> Result<String, Error> {
         validate_event_field("session_id", session_id)?;
         validate_observation_field("content", content)?;
         validate_observation_field("derivation", derivation)?;
@@ -927,8 +1142,8 @@ impl Store {
         append_jsonl(&self.observation_log_path, &entry)?;
         self.conn.execute(
             "INSERT OR REPLACE INTO observations
-             (id, session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation, ts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             (id, session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation, ts, scope)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 id,
                 session_id,
@@ -938,7 +1153,8 @@ impl Store {
                 first_event.agent_id,
                 first_event.agent_kind.as_str(),
                 derivation,
-                now
+                now,
+                scope,
             ],
         )?;
         Ok(id)
@@ -984,7 +1200,7 @@ impl Store {
         validate_observation_field("id", id)?;
         self.conn
             .query_row(
-                "SELECT id, session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation, ts
+                "SELECT id, session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation, ts, scope
                    FROM observations WHERE id = ?1",
                 [id],
                 |row| {
@@ -1010,6 +1226,7 @@ impl Store {
                         agent_kind,
                         derivation: row.get(7)?,
                         ts: row.get(8)?,
+                        scope: row.get(9)?,
                     })
                 },
             )
@@ -1401,6 +1618,32 @@ impl Store {
         predicate: &str,
         object: &str,
     ) -> Result<i64, Error> {
+        self.propose_candidate_claim_inner(event_id, subject, predicate, object, "global")
+    }
+
+    /// ADR-0021: variant of `propose_candidate_claim` that stages a candidate
+    /// under an explicit scope. The scope rides through `promote_candidate_claim`
+    /// onto the durable claim — there is no scope override at promotion time.
+    pub fn propose_candidate_claim_with_scope(
+        &self,
+        event_id: i64,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        scope: &str,
+    ) -> Result<i64, Error> {
+        validate_scope(scope)?;
+        self.propose_candidate_claim_inner(event_id, subject, predicate, object, scope)
+    }
+
+    fn propose_candidate_claim_inner(
+        &self,
+        event_id: i64,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        scope: &str,
+    ) -> Result<i64, Error> {
         if !self.event_exists(event_id)? {
             return Err(Error::MissingEventProvenance { event_id });
         }
@@ -1413,9 +1656,9 @@ impl Store {
         }
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         self.conn.execute(
-            "INSERT INTO candidate_claims (event_id, subject, predicate, object, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![event_id, subject, predicate, object, now],
+            "INSERT INTO candidate_claims (event_id, subject, predicate, object, created_at, scope)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![event_id, subject, predicate, object, now, scope],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -1472,8 +1715,8 @@ impl Store {
         self.conn.execute(
             "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
                                  status, source_refs, agent_id, agent_kind, write_ts,
-                                 created_at, last_seen_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7, ?8, ?9, ?10, ?10, ?10)",
+                                 created_at, last_seen_at, scope)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7, ?8, ?9, ?10, ?10, ?10, ?11)",
             params![
                 claim_id,
                 candidate.subject,
@@ -1484,7 +1727,8 @@ impl Store {
                 source_refs,
                 event.agent_id,
                 event.agent_kind.as_str(),
-                now
+                now,
+                candidate.scope,
             ],
         )?;
         self.conn.execute(
@@ -1538,7 +1782,8 @@ impl Store {
         const CANDIDATE_COLUMNS: &str = "candidate_claims.id, candidate_claims.event_id,
             candidate_claims.subject, candidate_claims.predicate, candidate_claims.object,
             candidate_claims.provenance, candidate_claims.confidence, candidate_claims.status,
-            candidate_claims.promoted_claim_id, candidate_claims.rejection_reason";
+            candidate_claims.promoted_claim_id, candidate_claims.rejection_reason,
+            candidate_claims.scope";
         let (sql, bind_status, bind_session): (String, Option<&str>, Option<&str>) = match (
             status, session_id,
         ) {
@@ -1594,6 +1839,7 @@ impl Store {
                 status: row.get(7)?,
                 promoted_claim_id: row.get(8)?,
                 rejection_reason: row.get(9)?,
+                scope: row.get(10)?,
             })
         };
         let rows = match (bind_status, bind_session) {
@@ -1622,7 +1868,7 @@ impl Store {
             return Err(Error::MissingEventProvenance { event_id });
         }
         let mut stmt = self.conn.prepare(
-            "SELECT id, event_id, subject, predicate, object, provenance, confidence, status, promoted_claim_id, rejection_reason
+            "SELECT id, event_id, subject, predicate, object, provenance, confidence, status, promoted_claim_id, rejection_reason, scope
              FROM candidate_claims WHERE event_id = ?1",
         )?;
         let rows = stmt.query_map([event_id], |row| {
@@ -1641,6 +1887,7 @@ impl Store {
                 status: row.get(7)?,
                 promoted_claim_id: row.get(8)?,
                 rejection_reason: row.get(9)?,
+                scope: row.get(10)?,
             })
         })?;
         let mut candidates = Vec::new();
@@ -1668,7 +1915,7 @@ impl Store {
         self.conn
             .query_row(
                 "SELECT id, event_id, subject, predicate, object, provenance, confidence, status,
-                    promoted_claim_id, rejection_reason
+                    promoted_claim_id, rejection_reason, scope
                FROM candidate_claims WHERE id = ?1",
                 [id],
                 |row| {
@@ -1687,6 +1934,7 @@ impl Store {
                         status: row.get(7)?,
                         promoted_claim_id: row.get(8)?,
                         rejection_reason: row.get(9)?,
+                        scope: row.get(10)?,
                     })
                 },
             )
@@ -1713,11 +1961,12 @@ impl Store {
             agent_kind,
             write_ts,
             last_verified_at,
+            scope,
         ): ClaimRow = self
             .conn
             .query_row(
                 "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs,
-                    agent_id, agent_kind, write_ts, last_verified_at
+                    agent_id, agent_kind, write_ts, last_verified_at, scope
                FROM claims WHERE id = ?1",
                 [id],
                 |row| {
@@ -1734,6 +1983,7 @@ impl Store {
                         row.get(9)?,
                         row.get(10)?,
                         row.get(11)?,
+                        row.get(12)?,
                     ))
                 },
             )
@@ -1755,6 +2005,7 @@ impl Store {
             agent_kind: agent_kind.parse()?,
             write_ts,
             last_verified_at,
+            scope,
         })
     }
 
@@ -2222,6 +2473,30 @@ impl Store {
         hops: usize,
         predicates: Option<&[&str]>,
     ) -> Result<GraphExpansion, Error> {
+        self.expand_inner(entity, hops, predicates, "global", ScopeWalk::Any)
+    }
+
+    /// ADR-0021: variant of `expand` that filters the graph by scope per walk.
+    pub fn expand_with_scope(
+        &self,
+        entity: &str,
+        hops: usize,
+        predicates: Option<&[&str]>,
+        scope: &str,
+        walk: ScopeWalk,
+    ) -> Result<GraphExpansion, Error> {
+        validate_scope(scope)?;
+        self.expand_inner(entity, hops, predicates, scope, walk)
+    }
+
+    fn expand_inner(
+        &self,
+        entity: &str,
+        hops: usize,
+        predicates: Option<&[&str]>,
+        scope: &str,
+        walk: ScopeWalk,
+    ) -> Result<GraphExpansion, Error> {
         if entity.trim().is_empty() {
             return Err(Error::InvalidGraphEntity);
         }
@@ -2247,7 +2522,7 @@ impl Store {
             if depth == hops {
                 continue;
             }
-            for claim in self.active_claim_edges_for_entity(&current)? {
+            for claim in self.active_claim_edges_for_entity(&current, scope, walk)? {
                 if predicate_filter
                     .as_ref()
                     .is_some_and(|allowed| !allowed.contains(claim.predicate.as_str()))
@@ -2269,16 +2544,30 @@ impl Store {
         Ok(GraphExpansion { nodes, edges })
     }
 
-    fn active_claim_edges_for_entity(&self, entity: &str) -> Result<Vec<Claim>, Error> {
-        let mut stmt = self.conn.prepare(
+    fn active_claim_edges_for_entity(
+        &self,
+        entity: &str,
+        scope: &str,
+        walk: ScopeWalk,
+    ) -> Result<Vec<Claim>, Error> {
+        let (scope_clause, scope_params) = scope_filter_sql(scope, walk);
+        let sql = format!(
             "SELECT id
                FROM claims
               WHERE status = 'ACTIVE'
                 AND (subject = ?1 OR object = ?1)
-              ORDER BY id",
-        )?;
+                AND {scope_clause}
+              ORDER BY id"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&entity];
+        for s in &scope_params {
+            params.push(s);
+        }
         let ids = stmt
-            .query_map([entity], |row| row.get::<_, i64>(0))?
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                row.get::<_, i64>(0)
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         ids.into_iter().map(|id| self.get_claim(id)).collect()
     }
@@ -2564,35 +2853,150 @@ impl Store {
     }
 
     pub fn recall_text(&self, query: &str) -> Result<Vec<Claim>, Error> {
+        self.recall_text_inner(query, "global", ScopeWalk::Any)
+    }
+
+    /// ADR-0021: variant of `recall_text` that filters by `scope` per `walk`.
+    /// `scope_walk = Any` ignores the scope argument and reproduces today's
+    /// global-search behavior.
+    pub fn recall_text_with_scope(
+        &self,
+        query: &str,
+        scope: &str,
+        walk: ScopeWalk,
+    ) -> Result<Vec<Claim>, Error> {
+        validate_scope(scope)?;
+        self.recall_text_inner(query, scope, walk)
+    }
+
+    fn recall_text_inner(
+        &self,
+        query: &str,
+        scope: &str,
+        walk: ScopeWalk,
+    ) -> Result<Vec<Claim>, Error> {
+        let filters = RecallFilters {
+            scope: scope.to_string(),
+            scope_walk: walk,
+            ..RecallFilters::default()
+        };
+        self.recall_text_with_filters(query, filters)
+    }
+
+    /// ADR-0023: typed-filter recall. Combines scope (ADR-0021) with
+    /// agent_id, agent_kind, predicate (with closure walk), min_confidence,
+    /// and status filters. `RecallFilters::default()` reproduces today's
+    /// behavior verbatim.
+    pub fn recall_text_with_filters(
+        &self,
+        query: &str,
+        filters: RecallFilters,
+    ) -> Result<Vec<Claim>, Error> {
+        validate_scope(&filters.scope)?;
+        if let Some(min) = filters.min_confidence
+            && !(0.0..=1.0).contains(&min)
+        {
+            return Err(Error::InvalidConfidence { value: min });
+        }
         let query_tokens = query_tokens_for_recall(query);
         if query_tokens.is_empty() {
             return Err(Error::InvalidRecallQuery);
         }
 
-        let mut stmt = self.conn.prepare(
-            "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs,
-                    agent_id, agent_kind, write_ts, last_verified_at
-               FROM claims
-              WHERE status = 'ACTIVE'
-              ORDER BY id",
-        )?;
+        let mut where_parts: Vec<String> = Vec::new();
+        let mut bind: Vec<String> = Vec::new();
+        let mut bind_f: Vec<f64> = Vec::new();
 
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, f64>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, String>(8)?,
-                row.get::<_, String>(9)?,
-                row.get::<_, i64>(10)?,
-                row.get::<_, Option<i64>>(11)?,
-            ))
-        })?;
+        // Status filter (default ACTIVE; None = any).
+        if let Some(status) = filters.status {
+            where_parts.push("status = ?".to_string());
+            bind.push(status.as_str().to_string());
+        }
+        // Scope filter via the same helper as scope-only recall.
+        let (scope_clause, scope_params) = scope_filter_sql(&filters.scope, filters.scope_walk);
+        where_parts.push(scope_clause);
+        bind.extend(scope_params);
+        // Agent filters.
+        if let Some(agent_id) = &filters.agent_id {
+            where_parts.push("agent_id = ?".to_string());
+            bind.push(agent_id.clone());
+        }
+        if let Some(agent_kind) = filters.agent_kind {
+            where_parts.push("agent_kind = ?".to_string());
+            bind.push(agent_kind.as_str().to_string());
+        }
+        // Predicate filter, optionally walking ADR-0010's closure.
+        if let Some(predicate) = &filters.predicate {
+            match filters.predicate_walk {
+                PredicateWalk::Exact => {
+                    where_parts.push("predicate = ?".to_string());
+                    bind.push(predicate.clone());
+                }
+                PredicateWalk::Descendants => {
+                    let allowed = self.expand_predicate_filter(&[predicate.as_str()])?;
+                    if allowed.is_empty() {
+                        return Ok(Vec::new());
+                    }
+                    let placeholders = std::iter::repeat_n("?", allowed.len())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    where_parts.push(format!("predicate IN ({placeholders})"));
+                    let mut allowed: Vec<String> = allowed.into_iter().collect();
+                    allowed.sort();
+                    bind.extend(allowed);
+                }
+            }
+        }
+        // Min confidence (separate from string binds because rusqlite types).
+        let confidence_clause = filters
+            .min_confidence
+            .map(|_| "confidence >= ?".to_string());
+        if let Some(c) = filters.min_confidence {
+            bind_f.push(c);
+        }
+        let mut where_sql = where_parts.join(" AND ");
+        if let Some(c) = confidence_clause {
+            where_sql.push_str(" AND ");
+            where_sql.push_str(&c);
+        }
+
+        let sql = format!(
+            "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs,
+                    agent_id, agent_kind, write_ts, last_verified_at, scope
+               FROM claims
+              WHERE {where_sql}
+              ORDER BY id"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        // Build a mixed-type param list. rusqlite::params_from_iter requires
+        // a uniform type, so we collect into Box<dyn ToSql> values.
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        for s in bind {
+            params.push(Box::new(s));
+        }
+        for f in bind_f {
+            params.push(Box::new(f));
+        }
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, f64>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, String>(12)?,
+                ))
+            },
+        )?;
 
         let mut scored_claims = Vec::new();
         for row in rows {
@@ -2609,6 +3013,7 @@ impl Store {
                 agent_kind,
                 write_ts,
                 last_verified_at,
+                scope,
             ) = row?;
             let claim = Claim {
                 id,
@@ -2623,6 +3028,7 @@ impl Store {
                 agent_kind: agent_kind.parse()?,
                 write_ts,
                 last_verified_at,
+                scope,
             };
             let score = recall_token_score(&query_tokens, &claim);
             if score > 0 {
@@ -2668,6 +3074,43 @@ impl Store {
                 .then_with(|| a_claim.id.cmp(&b_claim.id))
         });
         Ok(scored_claims.into_iter().map(|(_, claim)| claim).collect())
+    }
+
+    /// ADR-0023: retire a claim by flipping its status to INVALIDATED.
+    /// Refuses if the claim does not exist or is already retired. The
+    /// reason is appended to `source_refs` as `"retired:<reason>"` so the
+    /// JSONL log + sqlite both retain provenance.
+    pub fn retire_claim(&self, claim_id: i64, reason: &str) -> Result<(), Error> {
+        if reason.trim().is_empty() {
+            return Err(Error::InvalidContradictionReason);
+        }
+        let (status, source_refs_json): (String, String) = self
+            .conn
+            .query_row(
+                "SELECT status, source_refs FROM claims WHERE id = ?1",
+                [claim_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|err| match err {
+                rusqlite::Error::QueryReturnedNoRows => Error::MissingClaim { claim_id },
+                other => Error::Sqlite(other),
+            })?;
+        if status == "INVALIDATED" {
+            return Err(Error::AlreadyRetired { claim_id });
+        }
+        let mut refs: Vec<String> = serde_json::from_str(&source_refs_json)?;
+        refs.push(format!("retired:{reason}"));
+        let new_refs = serde_json::to_string(&refs)?;
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.conn.execute(
+            "UPDATE claims
+                SET status = 'INVALIDATED',
+                    source_refs = ?1,
+                    last_seen_at = ?2
+              WHERE id = ?3",
+            params![new_refs, now, claim_id],
+        )?;
+        Ok(())
     }
 }
 
@@ -3033,6 +3476,10 @@ pub enum Error {
     EnumParse { kind: &'static str, value: String },
     #[error("invalid agent_id for partitioned log path: {value:?}")]
     InvalidAgentId { value: String },
+    #[error("invalid scope: {value:?}; must be non-blank and match [A-Za-z0-9_/-]")]
+    InvalidScope { value: String },
+    #[error("claim {claim_id} is already INVALIDATED")]
+    AlreadyRetired { claim_id: i64 },
     #[error("invalid vector chunk text: must not be empty")]
     InvalidVectorChunkText,
     #[error("invalid embedding model: must not be empty")]
