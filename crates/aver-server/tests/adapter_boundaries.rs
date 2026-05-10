@@ -11,7 +11,7 @@ fn _assert_deserializable<T: for<'de> serde::Deserialize<'de> + serde::Serialize
 
 #[test]
 fn adapter_runtime_registry_covers_required_integration_points() {
-    let mut expected = BTreeSet::from([
+    let expected = BTreeSet::from([
         AdapterRuntime::Pi,
         AdapterRuntime::ClaudeCode,
         AdapterRuntime::CodexOpenAi,

@@ -8,6 +8,8 @@ FROM_SOURCE=0
 REPO="${AVER_REPO:-}"
 BASE_URL="${AVER_RELEASE_BASE_URL:-}"
 VERIFY_KEY="${AVER_GPG_KEYRING:-}"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+SOURCE_DIR=""
 
 usage() {
   cat <<'USAGE'
@@ -49,6 +51,36 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+is_aver_source_dir() {
+  dir="$1"
+  [ -f "$dir/Cargo.toml" ] \
+    && [ -f "$dir/crates/aver-cli/Cargo.toml" ] \
+    && grep -q 'crates/aver-cli' "$dir/Cargo.toml"
+}
+
+source_checkout_root() {
+  for dir in "$PWD" "$SCRIPT_DIR"; do
+    if command -v git >/dev/null 2>&1 && git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      root="$(git -C "$dir" rev-parse --show-toplevel)"
+      if is_aver_source_dir "$root"; then
+        printf '%s\n' "$root"
+        return 0
+      fi
+    elif [ -d "$dir/.git" ] && is_aver_source_dir "$dir"; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if [ "$FROM_SOURCE" -eq 0 ] && [ -z "$REPO" ] && [ -z "$BASE_URL" ]; then
+  if SOURCE_DIR="$(source_checkout_root)"; then
+    FROM_SOURCE=1
+    echo "Detected Aver source checkout; installing from source."
+  fi
+fi
+
 need() {
   command -v "$1" >/dev/null 2>&1 || { echo "missing required command: $1" >&2; exit 1; }
 }
@@ -66,13 +98,18 @@ ensure_path_hint() {
 
 install_from_source() {
   need cargo
+  if [ -z "$SOURCE_DIR" ]; then
+    if ! SOURCE_DIR="$(source_checkout_root)"; then
+      SOURCE_DIR="$PWD"
+    fi
+  fi
   mkdir -p "$INSTALL_DIR"
   if [ "$INSTALL_DIR" = "$HOME/.cargo/bin" ]; then
-    cargo install --path crates/aver-cli --locked --force
+    cargo install --path "$SOURCE_DIR/crates/aver-cli" --locked --force
   else
     tmp_root="$(mktemp -d)"
     trap 'rm -rf "$tmp_root"' EXIT
-    cargo install --path crates/aver-cli --locked --force --root "$tmp_root"
+    cargo install --path "$SOURCE_DIR/crates/aver-cli" --locked --force --root "$tmp_root"
     install -m 0755 "$tmp_root/bin/$BIN" "$INSTALL_DIR/$BIN"
   fi
 }

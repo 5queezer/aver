@@ -44,12 +44,14 @@ Prerequisites:
 - `cargo`
 
 ```bash
+./install.sh
+# equivalent when run from the Aver git checkout:
 ./install.sh --from-source
 # or, if you use just:
 just install
 ```
 
-This installs the `aver` CLI to `~/.cargo/bin` by default.
+When run from the Aver git repository, `install.sh` detects the checkout and installs from source. This installs the `aver` CLI to `~/.cargo/bin` by default.
 
 ### Store and recall a claim
 

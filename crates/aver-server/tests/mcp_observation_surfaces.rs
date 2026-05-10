@@ -193,7 +193,7 @@ async fn mcp_observation_coverage_requires_observations_read_scope() {
             session_id,
             "event 1 and 3 were summarized",
             ObservationRelevance::High,
-            &vec![first, third],
+            &[first, third],
             "spec test",
         )
         .unwrap();
