@@ -428,3 +428,27 @@ fn vector_chunk_embedding_json_array_elements_must_be_numeric() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn vector_chunk_embedding_json_must_not_be_empty_array() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let claim_id = store
+        .add_claim("Aver", "uses", "SQLite", "test")
+        .expect("claim insert should succeed");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
+             VALUES (?1, 'bad', 'nomic-embed-text', '[]', 0)",
+            [claim_id],
+        )
+        .expect_err("empty embedding_json arrays should be rejected");
+    assert!(
+        err.to_string()
+            .contains("vector_chunks.embedding_json must not be empty"),
+        "unexpected error: {err}"
+    );
+}
