@@ -14,9 +14,11 @@ pub use privacy::{PrivacyRejection, privacy_filter, privacy_filter_path};
 pub use types::{
     AgentKind, CandidateClaim, CandidateClaimDraft, Claim, ClaimStatus, Community,
     ConsolidationReport, ContradictionRecord, EpisodicEvent, ExtractionDecision,
-    ExtractionTriggerReason, GraphDriftSnapshot, GraphExpansion, NewClaim, Observation,
-    ObservationCoverage, ObservationDraft, ObservationRecall, ObservationRelevance, Provenance,
-    StorageMode, VectorChunk,
+    ExtractionTriggerReason, ExtractorFact, GraphDriftSnapshot, GraphExpansion, GraphPath,
+    GraphPathMode, GraphPathQuery, GraphPathStep, Hyperedge, HyperedgeInput, HyperedgeParticipant,
+    HyperedgeParticipantInput, NewClaim, Observation, ObservationCoverage, ObservationDraft,
+    ObservationRecall, ObservationRelevance, Provenance, RelationshipKind, StorageMode,
+    VectorChunk,
 };
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -128,6 +130,15 @@ struct ClaimWrite<'a> {
     object: &'a str,
     source: &'a str,
     confidence: f64,
+}
+
+#[derive(Clone)]
+struct EdgeCandidate {
+    traverse_from: String,
+    traverse_to: String,
+    source_id: i64,
+    kind_order: u8,
+    step: GraphPathStep,
 }
 
 pub trait Observer {
@@ -604,7 +615,45 @@ impl Store {
         })
     }
 
-    fn insert_claim(&self, write: ClaimWrite<'_>) -> Result<i64, Error> {
+    pub fn ingest_extractor_facts(
+        &self,
+        agent_id: &str,
+        agent_kind: AgentKind,
+        source: &str,
+        facts: &[ExtractorFact],
+    ) -> Result<Vec<i64>, Error> {
+        let writes = facts
+            .iter()
+            .map(|fact| {
+                let provenance = fact
+                    .provenance
+                    .unwrap_or_else(|| provenance_for_agent_kind(agent_kind));
+                ClaimWrite {
+                    agent_id,
+                    agent_kind,
+                    provenance,
+                    subject: &fact.subject,
+                    predicate: &fact.predicate,
+                    object: &fact.object,
+                    source,
+                    confidence: provenance.policy_confidence(),
+                }
+            })
+            .collect::<Vec<_>>();
+        for write in &writes {
+            self.validate_claim_write(write)?;
+        }
+
+        let mut ids = Vec::with_capacity(writes.len());
+        for write in writes {
+            let id = self.insert_claim(write)?;
+            ids.push(id);
+        }
+        self.consolidate_report()?;
+        Ok(ids)
+    }
+
+    fn validate_claim_write(&self, write: &ClaimWrite<'_>) -> Result<(), Error> {
         validate_claim_field("subject", write.subject)?;
         validate_claim_field("predicate", write.predicate)?;
         validate_claim_field("object", write.object)?;
@@ -638,7 +687,12 @@ impl Store {
         // reject unknown predicates. Runs after the privacy filter so a
         // secret-bearing predicate is quarantined first (see ADR-0018
         // §"Telemetry").
-        self.ontology_check(write.predicate, write.provenance, write.agent_id, now)?;
+        self.ontology_check(write.predicate, write.provenance, write.agent_id, now)
+    }
+
+    fn insert_claim(&self, write: ClaimWrite<'_>) -> Result<i64, Error> {
+        self.validate_claim_write(&write)?;
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
         // Pre-allocate the claim id. Single-writer assumption: rusqlite's
         // Connection is !Sync, so within a process this is race-free; SQLite
@@ -688,6 +742,209 @@ impl Store {
             ],
         )?;
         Ok(claim_id)
+    }
+
+    pub fn add_hyperedge(&self, input: HyperedgeInput) -> Result<i64, Error> {
+        validate_hyperedge_field("predicate", &input.predicate)?;
+        if input.source_refs.is_empty() {
+            return Err(Error::InvalidHyperedgeField {
+                field: "source_refs",
+            });
+        }
+        for source_ref in &input.source_refs {
+            validate_hyperedge_field("source_refs", source_ref)?;
+        }
+        if input.participants.is_empty() {
+            return Err(Error::InvalidHyperedgeParticipant { field: "role" });
+        }
+        for participant in &input.participants {
+            validate_hyperedge_participant_field("role", &participant.role)?;
+            validate_hyperedge_participant_field("entity", &participant.entity)?;
+        }
+        if !(0.0..=1.0).contains(&input.confidence) {
+            return Err(Error::InvalidConfidence {
+                value: input.confidence,
+            });
+        }
+
+        let mut privacy_content = format!(
+            "{} {} {}",
+            input.predicate,
+            input.provenance.as_str(),
+            input.confidence
+        );
+        for source_ref in &input.source_refs {
+            privacy_content.push(' ');
+            privacy_content.push_str(source_ref);
+        }
+        for participant in &input.participants {
+            privacy_content.push(' ');
+            privacy_content.push_str(&participant.role);
+            privacy_content.push(' ');
+            privacy_content.push_str(&participant.entity);
+        }
+        if let Err(rejection) = privacy_filter(&privacy_content) {
+            self.record_privacy_rejection(rejection)?;
+            return Err(Error::Privacy(rejection));
+        }
+        for source_ref in &input.source_refs {
+            self.privacy_filter_path_recording(source_ref)?;
+        }
+        for participant in &input.participants {
+            self.privacy_filter_path_recording(&participant.entity)?;
+        }
+
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.ontology_check(&input.predicate, input.provenance, "local", now)?;
+
+        let hyperedge_id: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(id), 0) + 1 FROM hyperedges",
+            [],
+            |row| row.get(0),
+        )?;
+
+        let entry = HyperedgeLogEntry {
+            kind: "add_hyperedge",
+            ts: now,
+            hyperedge_id,
+            predicate: &input.predicate,
+            provenance: input.provenance.as_str(),
+            confidence: input.confidence,
+            source_refs: &input.source_refs,
+            participants: &input.participants,
+        };
+        append_jsonl(&self.log_path, &entry)?;
+
+        let source_refs_json = serde_json::to_string(&input.source_refs)?;
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let projection = (|| -> Result<(), Error> {
+            self.conn.execute(
+                "INSERT INTO hyperedges (id, predicate, provenance, confidence, source_refs, status, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'ACTIVE', ?6, ?6)",
+                params![
+                    hyperedge_id,
+                    input.predicate,
+                    input.provenance.as_str(),
+                    input.confidence,
+                    source_refs_json,
+                    now,
+                ],
+            )?;
+            for participant in &input.participants {
+                self.ensure_entity(&participant.entity, now)?;
+                self.conn.execute(
+                    "INSERT INTO hyperedge_participants (hyperedge_id, role, entity)
+                     VALUES (?1, ?2, ?3)",
+                    params![hyperedge_id, participant.role, participant.entity],
+                )?;
+            }
+            Ok(())
+        })();
+        if let Err(err) = projection {
+            let _ = self.conn.execute_batch("ROLLBACK");
+            return Err(err);
+        }
+        self.conn.execute_batch("COMMIT")?;
+        Ok(hyperedge_id)
+    }
+
+    pub fn get_hyperedge(&self, id: i64) -> Result<Hyperedge, Error> {
+        let (id, predicate, provenance, confidence, source_refs, status, created_at, updated_at): (
+            i64,
+            String,
+            String,
+            f64,
+            String,
+            String,
+            i64,
+            i64,
+        ) = self.conn.query_row(
+            "SELECT id, predicate, provenance, confidence, source_refs, status, created_at, updated_at
+               FROM hyperedges
+              WHERE id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)),
+        )?;
+        Ok(Hyperedge {
+            id,
+            predicate,
+            provenance: provenance.parse()?,
+            confidence,
+            source_refs: serde_json::from_str(&source_refs)?,
+            status: status.parse()?,
+            created_at,
+            updated_at,
+            participants: self.hyperedge_participants(id)?,
+        })
+    }
+
+    pub fn list_active_hyperedges(&self) -> Result<Vec<Hyperedge>, Error> {
+        self.active_hyperedges_matching(None)
+    }
+
+    pub fn recall_hyperedges(&self, query: &str) -> Result<Vec<Hyperedge>, Error> {
+        validate_recall_query(query)?;
+        self.active_hyperedges_matching(Some(query))
+    }
+
+    pub fn traverse_hyperedges(&self, entity: &str) -> Result<Vec<Hyperedge>, Error> {
+        validate_hyperedge_participant_field("entity", entity)?;
+        self.active_hyperedges_matching(Some(entity))
+    }
+
+    fn active_hyperedges_matching(&self, query: Option<&str>) -> Result<Vec<Hyperedge>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id
+               FROM hyperedges
+              WHERE status = 'ACTIVE'
+              ORDER BY id",
+        )?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let needle = query.map(|q| q.to_ascii_lowercase());
+        let mut edges = Vec::new();
+        for id in ids {
+            let edge = self.get_hyperedge(id)?;
+            let matches = needle.as_ref().is_none_or(|needle| {
+                edge.predicate.to_ascii_lowercase().contains(needle)
+                    || edge
+                        .source_refs
+                        .iter()
+                        .any(|source| source.to_ascii_lowercase().contains(needle))
+                    || edge.participants.iter().any(|participant| {
+                        participant.role.to_ascii_lowercase().contains(needle)
+                            || participant.entity.to_ascii_lowercase().contains(needle)
+                    })
+            });
+            if matches {
+                edges.push(edge);
+            }
+        }
+        Ok(edges)
+    }
+
+    fn hyperedge_participants(
+        &self,
+        hyperedge_id: i64,
+    ) -> Result<Vec<HyperedgeParticipant>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, hyperedge_id, role, entity
+               FROM hyperedge_participants
+              WHERE hyperedge_id = ?1
+              ORDER BY id",
+        )?;
+        let participants = stmt
+            .query_map([hyperedge_id], |row| {
+                Ok(HyperedgeParticipant {
+                    id: row.get(0)?,
+                    hyperedge_id: row.get(1)?,
+                    role: row.get(2)?,
+                    entity: row.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(participants)
     }
 
     fn record_privacy_rejection(&self, rejection: PrivacyRejection) -> Result<(), Error> {
@@ -1758,9 +2015,9 @@ impl Store {
         })
     }
 
-    /// Insert vector chunk metadata for a claim. The actual sqlite-vss index
-    /// is wired separately; this table is the durable join point between
-    /// claims and embeddings.
+    /// Insert vector chunk metadata for a claim. The `sqlite-vec`/`vec0` ANN
+    /// table is maintained separately; this table is the durable join point
+    /// between claims and embeddings.
     pub fn add_vector_chunk(
         &self,
         claim_id: i64,
@@ -2213,6 +2470,209 @@ impl Store {
         Ok(candidates.into_iter().map(|(_, claim)| claim).collect())
     }
 
+    /// Find the shortest path between two entities over active claims and
+    /// active hyperedges. Directed mode preserves claim direction; explicit
+    /// bidirectional mode may traverse claims in reverse. Among shortest paths,
+    /// the path with the highest minimum edge confidence is returned.
+    pub fn graph_path(&self, query: GraphPathQuery) -> Result<Option<GraphPath>, Error> {
+        if query.source.trim().is_empty() || query.target.trim().is_empty() {
+            return Err(Error::InvalidGraphEntity);
+        }
+        if !(0.0..=1.0).contains(&query.min_confidence) {
+            return Err(Error::InvalidConfidence {
+                value: query.min_confidence,
+            });
+        }
+        if query.source == query.target {
+            return Ok(Some(GraphPath::new(
+                query.source.clone(),
+                query.target.clone(),
+                Vec::new(),
+                1.0,
+                vec![query.source],
+            )));
+        }
+        if query.max_hops == 0 {
+            return Ok(None);
+        }
+
+        let predicate_filter = if let Some(predicates) = &query.predicates {
+            if predicates.is_empty() || predicates.iter().any(|item| item.trim().is_empty()) {
+                return Err(Error::InvalidPredicateFilter);
+            }
+            let borrowed = predicates.iter().map(String::as_str).collect::<Vec<_>>();
+            Some(self.expand_predicate_filter(&borrowed)?)
+        } else {
+            None
+        };
+
+        let mut candidates = self.graph_path_candidates(&query, predicate_filter.as_ref())?;
+        candidates.sort_by(|left, right| {
+            left.source_id
+                .cmp(&right.source_id)
+                .then_with(|| left.kind_order.cmp(&right.kind_order))
+                .then_with(|| left.traverse_from.cmp(&right.traverse_from))
+                .then_with(|| left.traverse_to.cmp(&right.traverse_to))
+        });
+
+        let mut best: Option<(Vec<GraphPathStep>, Vec<String>, f64)> = None;
+        let mut queue = VecDeque::from([(
+            query.source.clone(),
+            vec![query.source.clone()],
+            Vec::<GraphPathStep>::new(),
+            1.0_f64,
+        )]);
+        let mut shortest_depth: Option<usize> = None;
+
+        while let Some((entity, entity_path, steps, path_confidence)) = queue.pop_front() {
+            if shortest_depth.is_some_and(|depth| steps.len() >= depth) {
+                continue;
+            }
+            if steps.len() == query.max_hops {
+                continue;
+            }
+
+            for candidate in candidates
+                .iter()
+                .filter(|candidate| candidate.traverse_from == entity)
+            {
+                if entity_path.contains(&candidate.traverse_to) {
+                    continue;
+                }
+                let mut next_entities = entity_path.clone();
+                next_entities.push(candidate.traverse_to.clone());
+                let mut next_steps = steps.clone();
+                next_steps.push(candidate.step.clone());
+                let next_confidence = path_confidence * candidate.step.confidence;
+
+                if candidate.traverse_to == query.target {
+                    let depth = next_steps.len();
+                    shortest_depth = Some(depth);
+                    let replace =
+                        best.as_ref()
+                            .is_none_or(|(best_steps, best_entities, best_confidence)| {
+                                next_confidence.total_cmp(best_confidence).is_gt()
+                                    || (next_confidence == *best_confidence
+                                        && (next_entities.as_slice(), next_steps.len())
+                                            < (best_entities.as_slice(), best_steps.len()))
+                            });
+                    if replace {
+                        best = Some((next_steps, next_entities, next_confidence));
+                    }
+                } else {
+                    queue.push_back((
+                        candidate.traverse_to.clone(),
+                        next_entities,
+                        next_steps,
+                        next_confidence,
+                    ));
+                }
+            }
+        }
+
+        Ok(best.map(|(steps, entity_path, confidence)| {
+            GraphPath::new(
+                query.source.clone(),
+                query.target.clone(),
+                steps,
+                confidence,
+                entity_path,
+            )
+        }))
+    }
+
+    fn graph_path_candidates(
+        &self,
+        query: &GraphPathQuery,
+        predicate_filter: Option<&HashSet<String>>,
+    ) -> Result<Vec<EdgeCandidate>, Error> {
+        let provenance_allowed = |provenance: Provenance| {
+            query
+                .allowed_provenance
+                .as_ref()
+                .is_none_or(|allowed| allowed.contains(&provenance))
+        };
+        let predicate_allowed =
+            |predicate: &str| predicate_filter.is_none_or(|allowed| allowed.contains(predicate));
+        let mut candidates = Vec::new();
+
+        let mut claim_stmt = self.conn.prepare(
+            "SELECT id
+               FROM claims
+              WHERE status = 'ACTIVE'
+                AND confidence >= ?1
+              ORDER BY id",
+        )?;
+        let claim_ids = claim_stmt
+            .query_map([query.min_confidence], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(claim_stmt);
+        for id in claim_ids {
+            let claim = self.get_claim(id)?;
+            if !provenance_allowed(claim.provenance) || !predicate_allowed(&claim.predicate) {
+                continue;
+            }
+            let step = GraphPathStep {
+                source: claim.subject.clone(),
+                target: claim.object.clone(),
+                predicate: claim.predicate.clone(),
+                confidence: claim.confidence,
+                provenance: claim.provenance,
+                relationship_kind: RelationshipKind::Claim,
+                source_refs: claim.source_refs.clone(),
+            };
+            candidates.push(EdgeCandidate {
+                traverse_from: claim.subject.clone(),
+                traverse_to: claim.object.clone(),
+                source_id: claim.id,
+                kind_order: 0,
+                step: step.clone(),
+            });
+            if query.mode == GraphPathMode::Bidirectional {
+                candidates.push(EdgeCandidate {
+                    traverse_from: claim.object,
+                    traverse_to: claim.subject,
+                    source_id: claim.id,
+                    kind_order: 0,
+                    step,
+                });
+            }
+        }
+
+        for hyperedge in self.list_active_hyperedges()? {
+            if hyperedge.confidence < query.min_confidence
+                || !provenance_allowed(hyperedge.provenance)
+                || !predicate_allowed(&hyperedge.predicate)
+            {
+                continue;
+            }
+            for (left_index, left) in hyperedge.participants.iter().enumerate() {
+                for (right_index, right) in hyperedge.participants.iter().enumerate() {
+                    if left_index == right_index || left.entity == right.entity {
+                        continue;
+                    }
+                    candidates.push(EdgeCandidate {
+                        traverse_from: left.entity.clone(),
+                        traverse_to: right.entity.clone(),
+                        source_id: hyperedge.id,
+                        kind_order: 1,
+                        step: GraphPathStep {
+                            source: left.entity.clone(),
+                            target: right.entity.clone(),
+                            predicate: hyperedge.predicate.clone(),
+                            confidence: hyperedge.confidence,
+                            provenance: hyperedge.provenance,
+                            relationship_kind: RelationshipKind::Hyperedge,
+                            source_refs: hyperedge.source_refs.clone(),
+                        },
+                    });
+                }
+            }
+        }
+
+        Ok(candidates)
+    }
+
     /// Text-only keyword recall over active claims. This is the v0.1
     /// precursor to HybridRAG: cheap SQLite substring matching across the
     /// claim triple fields, ordered deterministically by id.
@@ -2284,6 +2744,44 @@ impl Store {
     }
 
     pub fn detect_communities(&self) -> Result<Vec<Community>, Error> {
+        #[derive(Debug, Clone)]
+        struct WeightedEdge {
+            left: String,
+            right: String,
+            weight: f64,
+        }
+
+        const STRONG_EDGE_THRESHOLD: f64 = 0.5;
+
+        fn provenance_weight(provenance: Provenance) -> f64 {
+            match provenance {
+                Provenance::UserAsserted => 1.0,
+                Provenance::Extracted => 0.95,
+                Provenance::Inferred => 0.65,
+                Provenance::Ambiguous => 0.35,
+            }
+        }
+
+        fn add_weight(
+            weights: &mut BTreeMap<(String, String), f64>,
+            left: &str,
+            right: &str,
+            weight: f64,
+        ) {
+            if left == right {
+                return;
+            }
+            let key = if left < right {
+                (left.to_string(), right.to_string())
+            } else {
+                (right.to_string(), left.to_string())
+            };
+            *weights.entry(key).or_insert(0.0) += weight;
+        }
+
+        let mut weights: BTreeMap<(String, String), f64> = BTreeMap::new();
+        let mut nodes = HashSet::new();
+
         let mut stmt = self.conn.prepare(
             "SELECT id
                FROM claims
@@ -2296,25 +2794,116 @@ impl Store {
             .into_iter()
             .map(|id| self.get_claim(id))
             .collect::<Result<Vec<_>, _>>()?;
+        for claim in claims {
+            nodes.insert(claim.subject.clone());
+            nodes.insert(claim.object.clone());
+            add_weight(
+                &mut weights,
+                &claim.subject,
+                &claim.object,
+                claim.confidence * provenance_weight(claim.provenance),
+            );
+        }
 
-        let mut seen_nodes = HashSet::new();
-        let mut communities = Vec::new();
-        for claim in &claims {
-            if seen_nodes.contains(&claim.subject) && seen_nodes.contains(&claim.object) {
-                continue;
+        for hyperedge in self.list_active_hyperedges()? {
+            for participant in &hyperedge.participants {
+                nodes.insert(participant.entity.clone());
             }
-            let graph = self.expand(&claim.subject, usize::MAX, None)?;
-            let mut members: Vec<String> = graph
-                .nodes
-                .into_iter()
-                .filter(|node| seen_nodes.insert(node.clone()))
-                .collect();
-            if !members.is_empty() {
-                members.sort();
-                let id = format!("community:{}", members.join("-"));
-                communities.push(Community { id, members });
+            for left_idx in 0..hyperedge.participants.len() {
+                for right_idx in (left_idx + 1)..hyperedge.participants.len() {
+                    add_weight(
+                        &mut weights,
+                        &hyperedge.participants[left_idx].entity,
+                        &hyperedge.participants[right_idx].entity,
+                        hyperedge.confidence * provenance_weight(hyperedge.provenance),
+                    );
+                }
             }
         }
+
+        let edges: Vec<WeightedEdge> = weights
+            .into_iter()
+            .map(|((left, right), weight)| WeightedEdge {
+                left,
+                right,
+                weight: weight.min(1.0),
+            })
+            .collect();
+
+        let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
+        for node in &nodes {
+            adjacency.entry(node.clone()).or_default();
+        }
+        for edge in &edges {
+            if edge.weight >= STRONG_EDGE_THRESHOLD {
+                adjacency
+                    .entry(edge.left.clone())
+                    .or_default()
+                    .push(edge.right.clone());
+                adjacency
+                    .entry(edge.right.clone())
+                    .or_default()
+                    .push(edge.left.clone());
+            }
+        }
+        for neighbours in adjacency.values_mut() {
+            neighbours.sort();
+        }
+
+        let mut seen = HashSet::new();
+        let mut communities = Vec::new();
+        let mut sorted_nodes: Vec<String> = nodes.into_iter().collect();
+        sorted_nodes.sort();
+
+        for node in sorted_nodes {
+            if !seen.insert(node.clone()) {
+                continue;
+            }
+            let mut members = Vec::new();
+            let mut queue = VecDeque::from([node]);
+            while let Some(current) = queue.pop_front() {
+                members.push(current.clone());
+                for neighbour in adjacency.get(&current).into_iter().flatten() {
+                    if seen.insert(neighbour.clone()) {
+                        queue.push_back(neighbour.clone());
+                    }
+                }
+            }
+            members.sort();
+            let member_set: HashSet<&str> = members.iter().map(String::as_str).collect();
+            let internal_edges: Vec<&WeightedEdge> = edges
+                .iter()
+                .filter(|edge| {
+                    member_set.contains(edge.left.as_str())
+                        && member_set.contains(edge.right.as_str())
+                })
+                .collect();
+            let score = if internal_edges.is_empty() {
+                0.0
+            } else {
+                internal_edges.iter().map(|edge| edge.weight).sum::<f64>()
+                    / internal_edges.len() as f64
+            };
+            let mut bridge_nodes: Vec<String> = members
+                .iter()
+                .filter(|member| {
+                    edges.iter().any(|edge| {
+                        (edge.left == **member && !member_set.contains(edge.right.as_str()))
+                            || (edge.right == **member && !member_set.contains(edge.left.as_str()))
+                    })
+                })
+                .cloned()
+                .collect();
+            bridge_nodes.sort();
+            let id = format!("community:{}", members.join("-"));
+            communities.push(Community {
+                id,
+                members,
+                score,
+                bridge_nodes,
+            });
+        }
+
         communities.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(communities)
     }
@@ -2741,6 +3330,18 @@ struct LogEntry<'a> {
     confidence: f64,
 }
 
+#[derive(Serialize)]
+struct HyperedgeLogEntry<'a> {
+    kind: &'a str,
+    ts: i64,
+    hyperedge_id: i64,
+    predicate: &'a str,
+    provenance: &'a str,
+    confidence: f64,
+    source_refs: &'a [String],
+    participants: &'a [HyperedgeParticipantInput],
+}
+
 fn observation_id(session_id: &str, content: &str, source_event_ids: &[i64]) -> String {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x100000001b3;
@@ -3017,6 +3618,20 @@ fn maybe_rotate_log(memory_dir: &Path, log_path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+fn validate_hyperedge_field(field: &'static str, value: &str) -> Result<(), Error> {
+    if value.trim().is_empty() {
+        return Err(Error::InvalidHyperedgeField { field });
+    }
+    Ok(())
+}
+
+fn validate_hyperedge_participant_field(field: &'static str, value: &str) -> Result<(), Error> {
+    if value.trim().is_empty() {
+        return Err(Error::InvalidHyperedgeParticipant { field });
+    }
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("sqlite: {0}")]
@@ -3041,6 +3656,10 @@ pub enum Error {
     InvalidEmbeddingVector,
     #[error("invalid claim {field}: must not be empty")]
     InvalidClaimField { field: &'static str },
+    #[error("invalid hyperedge {field}: must not be empty")]
+    InvalidHyperedgeField { field: &'static str },
+    #[error("invalid hyperedge participant {field}: must not be empty")]
+    InvalidHyperedgeParticipant { field: &'static str },
     #[error("invalid event {field}: must not be empty")]
     InvalidEventField { field: &'static str },
     #[error("invalid observation {field}: must not be empty")]
@@ -3161,6 +3780,7 @@ pub fn vacuum(
 #[derive(Debug, Clone, Default)]
 pub struct ReplayReport {
     pub claims: u64,
+    pub hyperedges: u64,
     pub events: u64,
     pub observations: u64,
     pub files_walked: u64,
@@ -3350,6 +3970,7 @@ fn apply_log_line(
 
     match kind.as_str() {
         "add_claim" => apply_add_claim(conn, &value, path, lineno, report),
+        "add_hyperedge" => apply_add_hyperedge(conn, &value, path, lineno, report),
         "record_event" => apply_record_event(conn, &value, path, lineno, report),
         "record_observation" => apply_record_observation(conn, &value, path, lineno, report),
         "prune_observations" => apply_prune_observations(conn, &value, path, lineno, report),
@@ -3510,6 +4131,114 @@ fn apply_add_claim(
     )?;
     report.claims += 1;
     Ok(())
+}
+
+fn apply_add_hyperedge(
+    conn: &Connection,
+    value: &serde_json::Value,
+    path: &str,
+    lineno: usize,
+    report: &mut ReplayReport,
+) -> Result<(), Error> {
+    let hyperedge_id = replay_i64(value, "hyperedge_id", path, lineno)?;
+    let ts = replay_i64(value, "ts", path, lineno)?;
+    let predicate = replay_str(value, "predicate", path, lineno)?;
+    let provenance_str = replay_str(value, "provenance", path, lineno)?;
+    let provenance: Provenance = provenance_str.parse()?;
+    let confidence = replay_f64(value, "confidence", path, lineno)?;
+    let source_refs: Vec<String> = serde_json::from_value(
+        replay_field(value, "source_refs", path, lineno)?.clone(),
+    )
+    .map_err(|err| Error::ReplayMalformed {
+        path: path.to_string(),
+        line: lineno,
+        detail: format!("'source_refs' is not a string array: {err}"),
+    })?;
+    let participants: Vec<HyperedgeParticipantInput> =
+        serde_json::from_value(replay_field(value, "participants", path, lineno)?.clone())
+            .map_err(|err| Error::ReplayMalformed {
+                path: path.to_string(),
+                line: lineno,
+                detail: format!("'participants' is not a participant array: {err}"),
+            })?;
+
+    let existing: Option<(String, String, f64, String)> = conn
+        .query_row(
+            "SELECT predicate, provenance, confidence, source_refs
+               FROM hyperedges WHERE id = ?1",
+            [hyperedge_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    if let Some(existing) = existing {
+        let existing_sources: Vec<String> = serde_json::from_str(&existing.3)?;
+        let existing_participants = replay_hyperedge_participants(conn, hyperedge_id)?;
+        let matches = existing.0 == predicate
+            && existing.1 == provenance.as_str()
+            && (existing.2 - confidence).abs() < 1e-9
+            && existing_sources == source_refs
+            && existing_participants == participants;
+        if !matches {
+            return Err(Error::ReplayDuplicateId {
+                detail: format!("hyperedge_id={hyperedge_id} content mismatch at {path}:{lineno}"),
+            });
+        }
+        return Ok(());
+    }
+
+    ontology_check_for_replay(conn, predicate, provenance, "local", ts)?;
+    let source_refs_json = serde_json::to_string(&source_refs)?;
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    let projection = (|| -> Result<(), Error> {
+        conn.execute(
+            "INSERT INTO hyperedges (id, predicate, provenance, confidence, source_refs, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'ACTIVE', ?6, ?6)",
+            params![
+                hyperedge_id,
+                predicate,
+                provenance.as_str(),
+                confidence,
+                source_refs_json,
+                ts,
+            ],
+        )?;
+        for participant in &participants {
+            ensure_entity_for_replay(conn, &participant.entity, ts)?;
+            conn.execute(
+                "INSERT INTO hyperedge_participants (hyperedge_id, role, entity)
+                 VALUES (?1, ?2, ?3)",
+                params![hyperedge_id, participant.role, participant.entity],
+            )?;
+        }
+        Ok(())
+    })();
+    if let Err(err) = projection {
+        let _ = conn.execute_batch("ROLLBACK");
+        return Err(err);
+    }
+    conn.execute_batch("COMMIT")?;
+    report.hyperedges += 1;
+    Ok(())
+}
+
+fn replay_hyperedge_participants(
+    conn: &Connection,
+    hyperedge_id: i64,
+) -> Result<Vec<HyperedgeParticipantInput>, Error> {
+    let mut stmt = conn.prepare(
+        "SELECT role, entity
+           FROM hyperedge_participants
+          WHERE hyperedge_id = ?1
+          ORDER BY id",
+    )?;
+    Ok(stmt
+        .query_map([hyperedge_id], |row| {
+            Ok(HyperedgeParticipantInput {
+                role: row.get(0)?,
+                entity: row.get(1)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// Replay-side ontology check (ADR-0018). Mirrors `Store::ontology_check`

@@ -1,6 +1,6 @@
 # Aver
 
-Aver is a local-first memory layer for coding agents: an append-only episodic log, a durable claim graph, vector recall primitives, deterministic code extraction, and an MCP/OAuth server surface in one Rust workspace.
+Aver is a local-first memory layer for coding agents: an append-only episodic log, a durable claim graph with first-class hyperedges, vector recall primitives, deterministic code extraction, and an MCP/OAuth server surface in one Rust workspace.
 
 Aver is experimental. The architecture is ADR-driven and the current implementation is useful, but not all ADRs are complete yet. See [Implementation status](#implementation-status) for what is built today.
 
@@ -20,12 +20,13 @@ The goal is a trustworthy substrate for coding agents that can:
 ## Features
 
 - **Local-first storage** — SQLite plus `log.jsonl` under a configurable memory directory.
-- **Append-first writes** — durable claims are appended to JSONL before SQLite insertion.
+- **Append-first writes** — durable claims and hyperedges are appended to JSONL before SQLite insertion.
 - **Structured claims** — memories are stored as `(subject, predicate, object)` claims with source references, confidence, status, and agent provenance.
+- **First-class hyperedges** — n-ary memories can be stored with predicate, provenance, confidence, source references, status, timestamps, and role/entity participants.
 - **Privacy gate** — token/path/entropy checks run before writes; rejected content is not persisted.
 - **Keyword, vector, and hybrid recall primitives** — text recall is available through the CLI; vector chunks and hybrid ranking over active claims are implemented in the core crate.
 - **Adaptive HybridRAG weights** — structural graph questions lean toward graph context; broad summary questions lean toward vectors; explicit alpha overrides are range-validated.
-- **Graph expansion and communities** — local claim neighborhoods and deterministic connected-component communities are available in core.
+- **Graph expansion, path queries, and communities** — local claim neighborhoods, confidence/provenance-aware shortest path queries over active claims and hyperedges, and deterministic weighted community detection are available in core.
 - **Contradiction records and confidence decay** — contradictions are explicit audit records; consolidation can decay contradicted active claims and report merged/superseded/decayed counts.
 - **Deterministic code extraction** — `aver-extractor` uses Tree-sitter Rust to extract functions, imports, calls, structs, enums, traits, impl methods, tests, and code facts.
 - **Candidate claim workflow** — episodic events can produce staged claims that are promoted or rejected explicitly.
@@ -96,9 +97,9 @@ The design maps to the ADRs:
 - **Continuity blockers** — session summaries mark uncovered ranges explicitly, and pruning refuses to proceed until coverage gaps are resolved by catch-up projection.
 - **Prune markers + audit recall** — pruning emits append-only tombstones in `observations.jsonl`; pruned observations disappear from default views but remain recallable with audit metadata.
 - **Semantic graph** — durable claims/triples in SQLite.
-- **Ontology reasoner** — ADR-0010 entity and predicate hierarchies are seeded on open, materialized into closure tables, and used by graph expansion so abstract filters such as `depends_on` also match descendant predicates like `calls` and `imports`.
+- **Ontology reasoner** — ADR-0010 entity and predicate hierarchies are seeded on open, materialized into closure tables, and used by graph expansion and path predicate filters so abstract filters such as `depends_on` also match descendant predicates like `calls` and `imports`.
 - **Typed entities** — claim subjects/objects are projected into `entities` with prefix-based types such as `Function:*` and fallback `Thing` for unknown entities.
-- **Vector store** — `vector_chunks` with JSON-serialized embeddings today; sqlite-vss-backed nearest-neighbor indexing is planned.
+- **Vector store** — `vector_chunks` with JSON-serialized embeddings and a `sqlite-vec`/`vec0` ANN table where the bundled extension is available.
 - **Extraction** — Rust Tree-sitter extractor turns source code into structured facts.
 - **Graph tools** — recall, expand, add-triple, contradict, and consolidate map the ADR-0008 surface onto the local claim store.
 - **Consolidation** — duplicate/conflict handling supersedes older claims, explicit contradictions can decay confidence, and report counts summarize merged, superseded, and decayed claims.
@@ -120,6 +121,7 @@ aver --help
 aver --memory-dir .aver status
 aver --memory-dir .aver remember <subject> <predicate> <object> --source <source>
 aver --memory-dir .aver recall <query>
+aver --memory-dir .aver communities
 ```
 
 Current CLI commands:
@@ -141,6 +143,7 @@ Current CLI commands:
 | `catch-up` | Run a deterministic catch-up projection over uncovered events. |
 | `compaction-summary` | Assemble a continuity summary including coverage gap warnings. |
 | `expand` | Expand an entity neighborhood from the local claim graph. |
+| `communities` | Print deterministic weighted graph communities with score and bridge nodes. |
 | `add-triple` | Append a confidence-bearing structured triple. |
 | `contradict` | Record a contradiction for a claim id and optional replacement claim. |
 | `consolidate` | Consolidate active duplicates/conflicts and apply confidence decay. |
@@ -321,17 +324,18 @@ Without `just`, use the equivalent Cargo commands shown in the [`justfile`](just
 Implemented today:
 
 - local-first `Store` backed by SQLite and JSONL,
-- migrations for claims, vector chunks, ontology tables, episodic events, candidate claims, and observation projections,
-- append-first claim and event writes,
+- migrations for claims, hyperedges, vector chunks, ontology tables, episodic events, candidate claims, and observation projections,
+- append-first claim, hyperedge, and event writes,
 - privacy filtering before claim, event, and observation writes,
 - claim CRUD and keyword recall,
+- active-only hyperedge create/list/recall/traversal APIs,
 - vector chunk storage and embedding abstractions,
 - Ollama embedding client and deterministic mock embedding client,
 - cosine similarity, adaptive HybridRAG weights, and hybrid vector/text recall primitives,
-- graph expansion/traversal over active claim triples,
+- graph expansion/traversal over active claim triples, confidence/provenance-aware path queries over active claims and hyperedges, and weighted community detection,
 - explicit contradiction records and confidence decay for contradicted active claims,
 - basic consolidation for duplicate/conflicting claims,
-- CLI `status`, `remember`, `recall`, and observation continuity surfaces (`record-observation`, `recall-observation`, `observation-coverage`, `catch-up`, `compaction-summary`),
+- CLI `status`, `remember`, `recall`, `communities`, and observation continuity surfaces (`record-observation`, `recall-observation`, `observation-coverage`, `catch-up`, `compaction-summary`),
 - Tree-sitter Rust extraction,
 - structured prose fact parsing,
 - MCP/OAuth server with ADR-0008 recall/expand/add-triple/contradict/consolidate tools, staged candidate-claim workflow, and observation recall/compaction-summary tools,
@@ -340,9 +344,9 @@ Implemented today:
 
 Partial or planned:
 
-- sqlite-vss-backed nearest-neighbor virtual table integration beyond the current SQLite metadata plus JSON embedding storage,
+- production vector-index operations beyond the current bundled `sqlite-vec`/`vec0` local ANN path and JSON fallback metadata,
 - adapter-boundary runtime integration crates/modules for Pi, Claude Code, Codex/OpenAI, OpenCode, MCP, and JSONL/CLI harnesses are defined by stable config/runtime types and adapter tests; runtime connectors remain partially implemented outside core types.
-- production shared-graph backend adapter beyond the current local connected-component community detection,
+- production shared-graph backend adapter beyond the current local weighted community detection,
 - broader production packaging, signed releases, and release automation beyond the current installer/`just dist` workflow.
 
 ## Documentation

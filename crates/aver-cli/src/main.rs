@@ -129,6 +129,9 @@ enum Command {
         predicates: Option<String>,
     },
 
+    /// Detect deterministic weighted graph communities.
+    Communities,
+
     /// Append a structured triple with an explicit confidence.
     AddTriple {
         subject: String,
@@ -193,8 +196,12 @@ fn main() -> anyhow::Result<()> {
         Command::Replay { force } => {
             let report = replay(&cli.memory_dir, *force)?;
             println!(
-                "replay: claims={} events={} observations={} files={}",
-                report.claims, report.events, report.observations, report.files_walked
+                "replay: claims={} hyperedges={} events={} observations={} files={}",
+                report.claims,
+                report.hyperedges,
+                report.events,
+                report.observations,
+                report.files_walked
             );
             return Ok(());
         }
@@ -372,6 +379,18 @@ fn main() -> anyhow::Result<()> {
             println!("nodes={}", graph.nodes.join(","));
             for edge in graph.edges {
                 println!("  {} {} {}", edge.subject, edge.predicate, edge.object);
+            }
+        }
+
+        Command::Communities => {
+            for community in store.detect_communities()? {
+                println!(
+                    "{} score={:.3} members={} bridges={}",
+                    community.id,
+                    community.score,
+                    community.members.join(","),
+                    community.bridge_nodes.join(",")
+                );
             }
         }
 

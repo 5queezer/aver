@@ -3,7 +3,10 @@
 
 use std::io::Write;
 
-use aver_core::{AgentKind, LOG_ROTATE_MAX_LINES, ObservationRelevance, Store, replay, vacuum};
+use aver_core::{
+    AgentKind, HyperedgeInput, HyperedgeParticipantInput, LOG_ROTATE_MAX_LINES,
+    ObservationRelevance, Provenance, Store, replay, vacuum,
+};
 use rusqlite::Connection;
 
 #[test]
@@ -130,6 +133,87 @@ fn vacuum_into_writes_a_copy() {
     let report = vacuum(dir.path(), Some(&copy), false).unwrap();
     assert!(copy.exists(), "VACUUM INTO should produce a copy");
     assert_eq!(report.vacuumed_into.as_deref(), Some(copy.as_path()));
+}
+
+#[test]
+fn replay_rebuilds_hyperedges_from_append_only_log() {
+    let dir = tempfile::tempdir().unwrap();
+
+    {
+        let store = Store::open(dir.path()).unwrap();
+        store
+            .add_hyperedge(HyperedgeInput {
+                predicate: "deployment".to_string(),
+                provenance: Provenance::UserAsserted,
+                confidence: 0.87,
+                source_refs: vec!["deploy-log".to_string()],
+                participants: vec![
+                    HyperedgeParticipantInput {
+                        role: "service".to_string(),
+                        entity: "api".to_string(),
+                    },
+                    HyperedgeParticipantInput {
+                        role: "environment".to_string(),
+                        entity: "prod".to_string(),
+                    },
+                ],
+            })
+            .unwrap();
+        store.close().unwrap();
+    }
+
+    std::fs::remove_file(dir.path().join("db.sqlite")).unwrap();
+    let _ = std::fs::remove_file(dir.path().join("db.sqlite-wal"));
+    let _ = std::fs::remove_file(dir.path().join("db.sqlite-shm"));
+
+    let report = replay(dir.path(), false).expect("replay should rebuild hyperedges");
+    assert_eq!(report.hyperedges, 1);
+
+    let store = Store::open(dir.path()).unwrap();
+    let hyperedge = store.get_hyperedge(1).unwrap();
+    assert_eq!(hyperedge.predicate, "deployment");
+    assert_eq!(hyperedge.provenance, Provenance::UserAsserted);
+    assert!((hyperedge.confidence - 0.87).abs() < 1e-9);
+    assert_eq!(hyperedge.source_refs, vec!["deploy-log".to_string()]);
+    assert_eq!(hyperedge.participants.len(), 2);
+    assert_eq!(hyperedge.participants[0].role, "service");
+    assert_eq!(hyperedge.participants[0].entity, "api");
+    assert_eq!(hyperedge.participants[1].role, "environment");
+    assert_eq!(hyperedge.participants[1].entity, "prod");
+}
+
+#[test]
+fn replay_rolls_back_hyperedge_projection_when_participant_insert_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let log_line = serde_json::json!({
+        "kind": "add_hyperedge",
+        "ts": 1,
+        "hyperedge_id": 1,
+        "predicate": "deployment",
+        "provenance": "USER_ASSERTED",
+        "confidence": 0.8,
+        "source_refs": ["manual"],
+        "participants": [
+            {"role": "service", "entity": "api"},
+            {"role": " ", "entity": "prod"}
+        ]
+    });
+    std::fs::write(dir.path().join("log.jsonl"), format!("{log_line}\n")).unwrap();
+
+    let err = replay(dir.path(), false).expect_err("invalid participant should fail replay");
+    assert!(err.to_string().contains("CHECK constraint failed"));
+
+    let conn = Connection::open(dir.path().join("db.sqlite.partial")).unwrap();
+    let hyperedge_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM hyperedges", [], |row| row.get(0))
+        .unwrap();
+    let participant_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM hyperedge_participants", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(hyperedge_rows, 0);
+    assert_eq!(participant_rows, 0);
 }
 
 #[test]

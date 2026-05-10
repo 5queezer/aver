@@ -20,6 +20,42 @@ pub struct Claim {
     pub last_verified_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HyperedgeParticipantInput {
+    pub role: String,
+    pub entity: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HyperedgeInput {
+    pub predicate: String,
+    pub provenance: Provenance,
+    pub confidence: f64,
+    pub source_refs: Vec<String>,
+    pub participants: Vec<HyperedgeParticipantInput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HyperedgeParticipant {
+    pub id: i64,
+    pub hyperedge_id: i64,
+    pub role: String,
+    pub entity: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Hyperedge {
+    pub id: i64,
+    pub predicate: String,
+    pub provenance: Provenance,
+    pub confidence: f64,
+    pub source_refs: Vec<String>,
+    pub status: ClaimStatus,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub participants: Vec<HyperedgeParticipant>,
+}
+
 impl Claim {
     pub fn text(&self) -> String {
         format!("{} {} {}", self.subject, self.predicate, self.object)
@@ -154,6 +190,71 @@ pub struct GraphExpansion {
     pub edges: Vec<Claim>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphPathMode {
+    Directed,
+    Bidirectional,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelationshipKind {
+    Claim,
+    Hyperedge,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphPathQuery {
+    pub source: String,
+    pub target: String,
+    pub min_confidence: f64,
+    pub allowed_provenance: Option<Vec<Provenance>>,
+    pub max_hops: usize,
+    pub predicates: Option<Vec<String>>,
+    pub mode: GraphPathMode,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphPathStep {
+    pub source: String,
+    pub target: String,
+    pub predicate: String,
+    pub confidence: f64,
+    pub provenance: Provenance,
+    pub relationship_kind: RelationshipKind,
+    pub source_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphPath {
+    pub source: String,
+    pub target: String,
+    pub steps: Vec<GraphPathStep>,
+    pub confidence: f64,
+    entity_path: Vec<String>,
+}
+
+impl GraphPath {
+    pub(crate) fn new(
+        source: String,
+        target: String,
+        steps: Vec<GraphPathStep>,
+        confidence: f64,
+        entity_path: Vec<String>,
+    ) -> Self {
+        Self {
+            source,
+            target,
+            steps,
+            confidence,
+            entity_path,
+        }
+    }
+
+    pub fn entities(&self) -> Vec<&str> {
+        self.entity_path.iter().map(String::as_str).collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContradictionRecord {
     pub id: i64,
@@ -173,9 +274,42 @@ pub struct NewClaim<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractorFact {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub provenance: Option<Provenance>,
+}
+
+impl ExtractorFact {
+    pub fn new(
+        subject: impl Into<String>,
+        predicate: impl Into<String>,
+        object: impl Into<String>,
+    ) -> Self {
+        Self {
+            subject: subject.into(),
+            predicate: predicate.into(),
+            object: object.into(),
+            provenance: None,
+        }
+    }
+
+    pub fn with_provenance(mut self, provenance: Provenance) -> Self {
+        self.provenance = Some(provenance);
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Community {
     pub id: String,
     pub members: Vec<String>,
+    /// Deterministic cohesion score for the community, currently the average
+    /// internal relationship weight after confidence/provenance weighting.
+    pub score: f64,
+    /// Member nodes that also touch relationships outside the community.
+    pub bridge_nodes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

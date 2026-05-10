@@ -10,44 +10,9 @@ Accepted (2026-05-10). Supersedes the vector-index portion of ADR-0006; the SQLi
 
 ADR-0006 chose `sqlite-vss` as the local-first vector store. ADR-0004 made vector similarity one half of the HybridRAG blend `α · vector + (1 − α) · graph`. The book treats ANN over embeddings as table stakes for a memory layer: "without a vector index, you do not have a HybridRAG system; you have a graph with a slow text search bolted on" [ch.99-100, ch.146].
 
-The current code does not honour either ADR.
+Historical implementation gap, now closed: early code stored embeddings only as opaque JSON in `vector_chunks`, kept a dormant `sqlite-vss` helper, and made `recall_hybrid_claims_with_alpha` full-scan `vector_chunks` while parsing every `embedding_json` blob and computing cosine similarity in Rust.
 
-`migrations/0002_vector_chunks.sql` stores embeddings as opaque JSON:
-
-```sql
-CREATE TABLE IF NOT EXISTS vector_chunks (
-  id          INTEGER PRIMARY KEY,
-  claim_id    INTEGER NOT NULL REFERENCES claims(id),
-  text        TEXT    NOT NULL,
-  embedding_model TEXT NOT NULL,
-  embedding_json TEXT,
-  created_at  INTEGER NOT NULL
-);
-```
-
-There is no virtual ANN table. Dimensionality is implicit in `embedding_model` and not enforced.
-
-`crates/aver-core/src/lib.rs:238` defines `prepare_sqlite_vss_index(dimensions)`:
-
-```rust
-"CREATE VIRTUAL TABLE IF NOT EXISTS vector_index USING vss0(embedding({dimensions}))"
-```
-
-It is never called by the migration runner. `vector_index_table_exists` (line 250) always returns false in practice. The function is dormant code.
-
-`recall_hybrid_claims_with_alpha` (`crates/aver-core/src/lib.rs:1797-1854`) compensates by full-scanning `vector_chunks`, parsing every `embedding_json` blob, and computing cosine similarity in Rust per row:
-
-```rust
-let mut stmt = self.conn.prepare(
-    "SELECT claim_id, embedding_json
-       FROM vector_chunks
-      WHERE embedding_json IS NOT NULL
-      ORDER BY id",
-)?;
-// ... per-row JSON parse + cosine in Rust
-```
-
-This is O(N) per recall in both rows scanned and JSON parsed. ADR-0004's consequences explicitly require cold-start under ~50ms "even on a project with millions of edges". A full-scan over `vector_chunks` violates that budget at ~10⁴ rows for a 768-dim model, and at ~10³ for a 3072-dim model. The contract is broken before the project hits its first non-trivial corpus.
+Current implementation status: `migrations/0010_vector_index.sql` creates a `sqlite-vec`/`vec0` virtual table named `vector_index` with the canonical `VECTOR_INDEX_DIM`; `Store::add_vector_chunk_with_embedding` writes matching-dimension embeddings to `vector_chunks` and `vector_index`; replay/open paths register the statically linked `sqlite-vec` extension before migrations; hybrid vector recall queries `vector_index` when available and falls back to the JSON full-scan path when the ANN table is missing or the query dimension does not match. The JSON column remains the durable rebuild source; the `vec0` table is a replayable projection.
 
 A second problem has accrued since ADR-0006: `sqlite-vss` is effectively abandoned. Its last release was January 2024. The author, Alex Garcia, redirected effort to `sqlite-vec`, a from-scratch successor. Building on an abandoned dependency for a load-bearing component is a known liability.
 
@@ -84,7 +49,7 @@ Rejected: status quo. The book is explicit [ch.146]: "the blend is the architect
 
 ### Schema
 
-Add `migrations/0003_vector_index.sql`:
+Implemented as `migrations/0010_vector_index.sql`:
 
 ```sql
 -- ADR-0017: ANN index over vector_chunks.
