@@ -25,6 +25,23 @@ fn fresh_database_has_entity_types_table() {
 }
 
 #[test]
+fn entity_type_name_must_not_be_blank() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute("INSERT INTO entity_types (name) VALUES ('   ')", [])
+        .expect_err("blank entity type names should be rejected");
+    assert!(
+        err.to_string()
+            .contains("entity_types.name must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_predicate_types_table() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
