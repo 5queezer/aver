@@ -422,6 +422,30 @@ fn candidate_claim_subject_must_not_be_blank() {
 }
 
 #[test]
+fn candidate_claim_predicate_must_not_be_blank() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let event_id = store
+        .record_event("session-1", "message", "payload", "test")
+        .expect("event insert should succeed");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO candidate_claims (event_id, subject, predicate, object, created_at)
+             VALUES (?1, 'Aver', '   ', 'SQLite', 0)",
+            [event_id],
+        )
+        .expect_err("blank candidate claim predicate should be rejected");
+    assert!(
+        err.to_string()
+            .contains("candidate_claims.predicate must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn observations_source_event_ids_must_be_valid_json_array() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
