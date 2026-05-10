@@ -42,6 +42,26 @@ fn entity_type_name_must_not_be_blank() {
 }
 
 #[test]
+fn entity_type_parent_must_not_self_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO entity_types (id, name, parent_id) VALUES (9999, 'SelfType', 9999)",
+            [],
+        )
+        .expect_err("entity types should not be their own parent");
+    assert!(
+        err.to_string()
+            .contains("entity_types.parent_id must differ from id"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_predicate_types_table() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");

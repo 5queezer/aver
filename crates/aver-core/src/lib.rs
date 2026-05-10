@@ -291,6 +291,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0063_ontology_extension_parent_exists_checks",
         include_str!("../../../migrations/0063_ontology_extension_parent_exists_checks.sql"),
     ),
+    (
+        "0064_entity_type_parent_distinct_checks",
+        include_str!("../../../migrations/0064_entity_type_parent_distinct_checks.sql"),
+    ),
 ];
 
 /// Canonical embedding dimension for the `vec0` ANN index (ADR-0017
