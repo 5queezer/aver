@@ -369,6 +369,35 @@ fn claims_agent_id_must_not_be_blank() {
 }
 
 #[test]
+fn claims_agent_id_allows_only_portable_identifier_chars() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let valid_id = store
+        .add_claim("Aver", "uses", "SQLite", "test")
+        .expect("valid claim should insert");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.execute(
+        "UPDATE claims SET agent_id = 'agent_1-ok' WHERE id = ?1",
+        [valid_id],
+    )
+    .expect("portable claim agent ids should remain valid");
+
+    let err = conn
+        .execute(
+            "UPDATE claims SET agent_id = 'bad id!' WHERE id = ?1",
+            [valid_id],
+        )
+        .expect_err("claim agent ids with spaces/punctuation should be rejected");
+    assert!(
+        err.to_string()
+            .contains("claims.agent_id contains invalid characters"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn observations_source_event_ids_must_be_valid_json_array() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
