@@ -122,6 +122,27 @@ fn episodic_event_kind_must_not_be_blank() {
 }
 
 #[test]
+fn episodic_event_source_must_not_be_blank() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO episodic_events (session_id, kind, payload, source, agent_id, agent_kind, ts)
+             VALUES ('session-1', 'message', 'payload', '   ', 'local', 'HUMAN', 0)",
+            [],
+        )
+        .expect_err("blank episodic event source should be rejected");
+    assert!(
+        err.to_string()
+            .contains("episodic_events.source must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_vector_index_virtual_table() {
     let dir = tempfile::tempdir().unwrap();
     let _store = Store::open(dir.path()).expect("open should succeed");
