@@ -15,4 +15,5 @@ Aver is a Rust, local-first, auditable memory layer for coding agents.
 - Preserve privacy filtering and log-first write ordering.
 - Keep tests deterministic/offline unless an explicit live-provider command or feature is used.
 - Update `README.md`, `doc/`, and ADRs whenever behavior, setup, architecture, or implementation status changes.
+- Update the MCP server `with_instructions(...)` string in `crates/aver-server/src/mcp.rs` whenever tools are added, removed, renamed, or their usage model changes.
 - Run fmt, clippy, and tests before claiming completion.
