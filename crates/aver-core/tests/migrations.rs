@@ -346,6 +346,29 @@ fn claims_source_refs_text_elements_must_not_be_blank() {
 }
 
 #[test]
+fn claims_agent_id_must_not_be_blank() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let valid_id = store
+        .add_claim("Aver", "uses", "SQLite", "test")
+        .expect("valid claim should insert");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "UPDATE claims SET agent_id = '   ' WHERE id = ?1",
+            [valid_id],
+        )
+        .expect_err("blank claim agent_id should be rejected");
+    assert!(
+        err.to_string()
+            .contains("claims.agent_id must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn observations_source_event_ids_must_be_valid_json_array() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
