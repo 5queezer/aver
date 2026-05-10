@@ -83,6 +83,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0011_ontology_enforcement",
         include_str!("../../../migrations/0011_ontology_enforcement.sql"),
     ),
+    (
+        "0012_source_refs_json_checks",
+        include_str!("../../../migrations/0012_source_refs_json_checks.sql"),
+    ),
 ];
 
 /// Canonical embedding dimension for the `vec0` ANN index (ADR-0017
@@ -110,12 +114,11 @@ fn ensure_sqlite_vec_registered() {
                 *mut *mut std::os::raw::c_char,
                 *const rusqlite::ffi::sqlite3_api_routines,
             ) -> std::os::raw::c_int;
-            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<
-                *const (),
-                RawAutoExt,
-            >(
-                sqlite_vec::sqlite3_vec_init as *const (),
-            )));
+            rusqlite::ffi::sqlite3_auto_extension(Some(
+                std::mem::transmute::<*const (), RawAutoExt>(
+                    sqlite_vec::sqlite3_vec_init as *const (),
+                ),
+            ));
         }
     });
 }
@@ -229,8 +232,6 @@ fn provenance_for_agent_kind(agent_kind: AgentKind) -> Provenance {
     }
 }
 
-
-
 impl Store {
     /// Open or create a memory store rooted at `memory_dir`.
     /// The directory is created if it does not exist; migrations are applied.
@@ -293,7 +294,9 @@ impl Store {
     /// for ADR-0019 §1 — the pragma is per-connection and cannot be observed by
     /// reopening a fresh `Connection`.
     pub fn wal_autocheckpoint(&self) -> Result<i64, Error> {
-        Ok(self.conn.pragma_query_value(None, "wal_autocheckpoint", |r| r.get(0))?)
+        Ok(self
+            .conn
+            .pragma_query_value(None, "wal_autocheckpoint", |r| r.get(0))?)
     }
 
     /// Explicit close: runs `PRAGMA wal_checkpoint(TRUNCATE)` to leave no WAL
@@ -1686,9 +1689,7 @@ impl Store {
             params![claim_id, text, embedding_model, embedding_json, now],
         )?;
         let chunk_id = tx.last_insert_rowid();
-        if embedding.len() == VECTOR_INDEX_DIM
-            && self.has_table("vector_index")
-        {
+        if embedding.len() == VECTOR_INDEX_DIM && self.has_table("vector_index") {
             tx.execute(
                 "INSERT INTO vector_index(chunk_id, embedding) VALUES (?1, ?2)",
                 params![chunk_id, embedding_json],
@@ -2066,9 +2067,7 @@ impl Store {
                 {
                     vector_scores
                         .entry(claim_id)
-                        .and_modify(|current: &mut f64| {
-                            *current = current.max(f64::from(score))
-                        })
+                        .and_modify(|current: &mut f64| *current = current.max(f64::from(score)))
                         .or_insert(f64::from(score));
                 }
             }
@@ -2555,7 +2554,6 @@ impl Store {
     }
 }
 
-
 impl GraphStorageAdapter for Store {
     fn mode(&self) -> StorageMode {
         StorageMode::Local
@@ -2565,7 +2563,6 @@ impl GraphStorageAdapter for Store {
         Store::detect_communities(self)
     }
 }
-
 
 fn parse_optional_embedding(value: Option<String>) -> rusqlite::Result<Option<Vec<f32>>> {
     value
@@ -2642,7 +2639,6 @@ fn observation_id(session_id: &str, content: &str, source_event_ids: &[i64]) -> 
     format!("{hash:016x}")[..12].to_string()
 }
 
-
 fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
     let mut line = serde_json::to_vec(value)?;
     line.push(b'\n');
@@ -2666,11 +2662,7 @@ impl AverLock {
     pub fn acquire(memory_dir: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(memory_dir)?;
         let path = memory_dir.join(".lock");
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut file) => {
                 let pid = std::process::id();
                 writeln!(file, "{pid}")?;
@@ -2982,10 +2974,8 @@ pub fn vacuum(
     let _lock = AverLock::acquire(memory_dir)?;
     let db_path = memory_dir.join("db.sqlite");
     let conn = Connection::open(&db_path)?;
-    let pages_before: i64 =
-        conn.pragma_query_value(None, "page_count", |r| r.get(0))?;
-    let freelist_before: i64 =
-        conn.pragma_query_value(None, "freelist_count", |r| r.get(0))?;
+    let pages_before: i64 = conn.pragma_query_value(None, "page_count", |r| r.get(0))?;
+    let freelist_before: i64 = conn.pragma_query_value(None, "freelist_count", |r| r.get(0))?;
 
     let vacuumed_into = if let Some(path) = into {
         // VACUUM INTO 'path' — does not block readers on origin.
@@ -3001,10 +2991,8 @@ pub fn vacuum(
         conn.execute_batch("ANALYZE")?;
     }
 
-    let pages_after: i64 =
-        conn.pragma_query_value(None, "page_count", |r| r.get(0))?;
-    let freelist_after: i64 =
-        conn.pragma_query_value(None, "freelist_count", |r| r.get(0))?;
+    let pages_after: i64 = conn.pragma_query_value(None, "page_count", |r| r.get(0))?;
+    let freelist_after: i64 = conn.pragma_query_value(None, "freelist_count", |r| r.get(0))?;
 
     Ok(VacuumReport {
         pages_before,

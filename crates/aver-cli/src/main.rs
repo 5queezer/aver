@@ -356,9 +356,9 @@ fn main() -> anyhow::Result<()> {
             );
         }
 
-        Command::Vacuum { .. } | Command::Replay { .. } => unreachable!(
-            "vacuum and replay are dispatched before opening the store"
-        ),
+        Command::Vacuum { .. } | Command::Replay { .. } => {
+            unreachable!("vacuum and replay are dispatched before opening the store")
+        }
     }
 
     store.close()?;

@@ -1,8 +1,6 @@
 use tree_sitter::Node;
 
-use crate::{
-    Error, ExtractedFact, collect_named_nodes, definition_facts, parse_with_language,
-};
+use crate::{Error, ExtractedFact, collect_named_nodes, definition_facts, parse_with_language};
 
 pub fn extract_python_functions(source: &str) -> Result<Vec<String>, Error> {
     let tree = parse_with_language(source, tree_sitter_python::language())?;

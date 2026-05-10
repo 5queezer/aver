@@ -1,0 +1,115 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/5queezer/pi-subflow/refs/heads/master/schemas/subflow-dag.schema.json
+# Adapted from examples/workflows/patterns/two-tier-audit.yaml.
+# Goal: independent second-opinion audit of "does Aver's SQLite schema follow
+# the recommendations in 'The Memory Layer' by Safi Shamsi?".
+#
+# The artifact under audit is the LIVE system, not a generated proposal:
+#   - Aver schema:    /home/christian/Projects/agent-memory-layer/.aver/db.sqlite
+#   - Aver source:    /home/christian/Projects/agent-memory-layer/crates/aver-core/src/{lib,seed,types,privacy,recall,validation}.rs
+#   - Book (PDF RAG): query via ~/.pi/agent/extensions/pdf-rag/.venv/bin/python ~/.pi/agent/extensions/pdf-rag/pdf_rag/cli.py query --json-input '{"question":"...","topK":N}'
+#   - Book PDF path:  /home/christian/Documents/Calibre/Safi Shamsi/The Memory Layer (86)/The Memory Layer - Safi Shamsi.pdf
+#
+# Why no generator: the comparison artifact is the codebase + db + book itself.
+# Each audit independently re-derives evidence, so no single anchor biases the verdict.
+
+triage:
+  agent: reviewer
+  model: openai-codex/gpt-5.3-codex-spark
+  task: |
+    Cheap gate. Spend <60 seconds confirming the inputs are reachable:
+      - `sqlite3 /home/christian/Projects/agent-memory-layer/.aver/db.sqlite '.schema'` returns a non-empty schema with a `claims` table.
+      - The pdf-rag query CLI returns at least one chunk for the question
+        "memory layer schema provenance confidence".
+    If both pass, end with the line `pass: true`. Otherwise `pass: false` and a one-paragraph reason.
+    Do NOT begin a deep analysis here — that is the next stage's job.
+  tools: [read, bash]
+  thinking: low
+
+schema_correctness:
+  agent: reviewer
+  model: openai-codex/gpt-5.5
+  needs: [triage]
+  task: |
+    Audit whether the actual SQLite schema matches what a faithful reading of
+    "The Memory Layer" prescribes for storage. Use sqlite3 directly:
+      sqlite3 /home/christian/Projects/agent-memory-layer/.aver/db.sqlite '.schema'
+      sqlite3 /home/christian/Projects/agent-memory-layer/.aver/db.sqlite 'SELECT name FROM sqlite_master WHERE type="index";'
+
+    Verify, per-table:
+      - claims: provenance enum, confidence REAL, source_refs JSON, S/P/O indexes (forward + reverse).
+      - vector_chunks: storage shape; is there a virtual ANN table (FTS5/sqlite-vss/sqlite-vec)?
+      - entity_types / predicate_types + closure tables: are claims actually FK-bound to these types, or free text?
+      - episodic_events / candidate_claims / observations: is the hippocampus -> consolidation pipeline expressed in the schema?
+      - contradictions, privacy_rejections.
+
+    Output: a bulleted list of "schema fact -> matches book / partially / does not match", each with a cited piece of evidence (sqlite output line OR file:line). Do not speculate beyond the schema.
+  tools: [read, bash]
+  thinking: medium
+
+book_grounding:
+  agent: reviewer
+  model: openai-codex/gpt-5.5
+  needs: [triage]
+  task: |
+    Audit what the book actually recommends for memory-layer storage. Use the pdf-rag CLI:
+      PY=~/.pi/agent/extensions/pdf-rag/.venv/bin/python
+      CLI=~/.pi/agent/extensions/pdf-rag/pdf_rag/cli.py
+      "$PY" "$CLI" query --json-input '{"question":"<query>","topK":6}'
+
+    Run at least 4 distinct queries covering: provenance/confidence labeling, hippocampus/consolidation flow, type/predicate ontology enforcement, HybridRAG vector+graph scoring, contradiction/ambiguity handling. Quote 1-2 sentences verbatim per recommendation, with chunk index.
+
+    Output: a numbered list of book recommendations relevant to a SQLite-backed memory store, each with a verbatim quote (<=2 sentences) and chunkIndex citation. Distinguish prescriptive recommendations ("you must / should / the schema enforces") from descriptive observations.
+  tools: [read, bash]
+  thinking: medium
+
+gap_analysis:
+  agent: reviewer
+  model: openai-codex/gpt-5.4-mini
+  needs: [triage]
+  task: |
+    Adversarial audit: assume someone claims "Aver matches the book except for X, Y, Z gaps". Stress-test by trying to falsify each candidate gap:
+      1. Ontology not enforced via FK on claims.
+      2. No ANN index over vector_chunks (HybridRAG impossible).
+      3. No Bayesian/inferential confidence propagation.
+      4. No hyperedges (binary triples only).
+      5. USER_ASSERTED is an Aver extension not in the book.
+
+    For each, attempt to find counter-evidence in the codebase (grep crates/, check for triggers, views, or runtime enforcement that the schema alone wouldn't show). Use bash freely.
+
+    Output: for each candidate gap, verdict in {confirmed, partial, refuted} with cited evidence. Add any gaps you find that aren't on the candidate list.
+  tools: [read, bash]
+  thinking: medium
+
+alternative_lens:
+  agent: reviewer
+  model: openai-codex/gpt-5.4-mini
+  needs: [triage]
+  task: |
+    What is the analysis missing? Consider angles a schema-and-book comparison typically overlooks:
+      - Privacy/secret handling (book ch. on safety; Aver has privacy_rejections + privacy.rs).
+      - Migration safety / append-only auditability (Aver has log.jsonl, events.jsonl alongside the db).
+      - Multi-agent identity (agent_id, agent_kind enums).
+      - Performance: WAL mode, index sizes, write amplification from dual SPO+OP indexes.
+      - Operational: backup, vacuum, schema versioning.
+
+    For each angle, state whether the book addresses it and whether the Aver schema addresses it. One paragraph per angle. Use pdf-rag and sqlite3 / file reads to check.
+  tools: [read, bash]
+  thinking: low
+
+final_verifier:
+  agent: reviewer
+  model: openai-codex/gpt-5.5
+  role: verifier
+  needs: [schema_correctness, book_grounding, gap_analysis, alternative_lens]
+  task: |
+    Synthesize the four audits into a single verdict. Deduplicate across audits. Separate confirmed gaps from speculation. Name the next concrete action for each blocker.
+    If triage was `pass: false`, short-circuit with a one-paragraph rejection that points at the triage output.
+
+    Use exactly these markdown headings:
+    ## Verdict
+    ## Blockers
+    ## Findings
+    ## Follow-ups
+  tools: [read]
+  thinking: medium
+  expectedSections: [Verdict, Blockers, Findings, Follow-ups]

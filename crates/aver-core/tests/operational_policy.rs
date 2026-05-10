@@ -3,9 +3,7 @@
 
 use std::io::Write;
 
-use aver_core::{
-    AgentKind, LOG_ROTATE_MAX_LINES, ObservationRelevance, Store, replay, vacuum,
-};
+use aver_core::{AgentKind, LOG_ROTATE_MAX_LINES, ObservationRelevance, Store, replay, vacuum};
 use rusqlite::Connection;
 
 #[test]

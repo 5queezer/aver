@@ -2,8 +2,8 @@ use tree_sitter::Node;
 
 use crate::{
     Error, ExtractedFact, collect_function_variable_names, collect_heritage_type_name,
-    collect_named_nodes, collect_names_from_kinds, definition_facts, first_named_descendant_of_kind,
-    parse_with_language,
+    collect_named_nodes, collect_names_from_kinds, definition_facts,
+    first_named_descendant_of_kind, parse_with_language,
 };
 
 pub fn extract_typescript_functions(source: &str) -> Result<Vec<String>, Error> {

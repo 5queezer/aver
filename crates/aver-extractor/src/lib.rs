@@ -171,11 +171,7 @@ pub(crate) fn collect_names_from_kinds(
     Ok(names)
 }
 
-pub(crate) fn definition_facts(
-    path: &str,
-    kind: &str,
-    names: Vec<String>,
-) -> Vec<ExtractedFact> {
+pub(crate) fn definition_facts(path: &str, kind: &str, names: Vec<String>) -> Vec<ExtractedFact> {
     names
         .into_iter()
         .map(|name| ExtractedFact {

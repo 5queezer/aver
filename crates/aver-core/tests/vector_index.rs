@@ -68,7 +68,9 @@ fn knn_query_returns_nearest_neighbour_first() {
 
     // Query closest to seed=1.0 — `near` should rank first.
     let query_client = MockEmbeddingClient::new(make_embedding(1.0));
-    let results = store.recall_hybrid_claims("Near", &query_client, 3).unwrap();
+    let results = store
+        .recall_hybrid_claims("Near", &query_client, 3)
+        .unwrap();
     assert!(!results.is_empty());
     assert_eq!(results[0].id, near, "nearest neighbour should rank first");
 }
@@ -123,7 +125,9 @@ fn migration_backfills_existing_vector_chunks_rows() {
             [],
         )
         .unwrap();
-        let claim_id: i64 = conn.query_row("SELECT last_insert_rowid()", [], |r| r.get(0)).unwrap();
+        let claim_id: i64 = conn
+            .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+            .unwrap();
         conn.execute(
             "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
              VALUES (?1, 't', 'nomic-embed-text', ?2, 0)",
