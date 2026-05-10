@@ -919,6 +919,25 @@ fn claims_subject_must_not_be_blank() {
 }
 
 #[test]
+fn claims_object_must_not_be_blank() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let valid_id = store
+        .add_claim("Aver", "uses", "SQLite", "test")
+        .expect("valid claim should insert");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute("UPDATE claims SET object = '   ' WHERE id = ?1", [valid_id])
+        .expect_err("blank claim object should be rejected");
+    assert!(
+        err.to_string().contains("claims.object must not be blank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn claims_agent_id_allows_only_portable_identifier_chars() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
