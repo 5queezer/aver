@@ -279,6 +279,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0060_ontology_extension_agent_id_nonblank_checks",
         include_str!("../../../migrations/0060_ontology_extension_agent_id_nonblank_checks.sql"),
     ),
+    (
+        "0061_ontology_extension_agent_id_charset_checks",
+        include_str!("../../../migrations/0061_ontology_extension_agent_id_charset_checks.sql"),
+    ),
 ];
 
 /// Canonical embedding dimension for the `vec0` ANN index (ADR-0017

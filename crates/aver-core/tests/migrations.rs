@@ -189,6 +189,34 @@ fn ontology_extension_agent_id_must_not_be_blank() {
 }
 
 #[test]
+fn ontology_extension_agent_id_allows_only_portable_identifier_chars() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.execute(
+        "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
+         VALUES ('custom_predicate', 'relates_to', 'agent_1-ok', 1)",
+        [],
+    )
+    .expect("portable ontology extension agent ids should remain valid");
+
+    let err = conn
+        .execute(
+            "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
+             VALUES ('another_predicate', 'relates_to', 'bad id!', 1)",
+            [],
+        )
+        .expect_err("ontology extension agent ids with spaces/punctuation should be rejected");
+    assert!(
+        err.to_string()
+            .contains("ontology_extension_log.agent_id contains invalid characters"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_entity_type_closure_table() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
