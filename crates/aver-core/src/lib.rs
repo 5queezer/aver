@@ -311,6 +311,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0068_entity_last_seen_at_positive_checks",
         include_str!("../../../migrations/0068_entity_last_seen_at_positive_checks.sql"),
     ),
+    (
+        "0069_entity_seen_after_created_checks",
+        include_str!("../../../migrations/0069_entity_seen_after_created_checks.sql"),
+    ),
 ];
 
 /// Canonical embedding dimension for the `vec0` ANN index (ADR-0017
