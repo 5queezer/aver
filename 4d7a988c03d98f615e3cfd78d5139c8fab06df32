@@ -1,0 +1,15 @@
+problem: Improve Aver MCP tool selection efficiency without breaking compatibility
+approach: Clarified tool descriptions, replaced flat MCP instructions with grouped guidance, synced README/tool docs, and added instruction-focused tests
+failed_paths:
+  - Editing compact schema structs in crates/aver-server/src/tools.rs was brittle with exact-match edits, so field-doc updates were limited to MCP-facing guidance changes
+verification:
+  - cargo fmt --all
+  - cargo test -p aver-server --test mcp_instructions --test mcp_service
+  - cargo clippy -p aver-server --tests -- -D warnings
+workflow_learning: For compacted Rust files, prefer instruction and doc updates plus integration tests when exact-match block edits are fragile
+related_files:
+  - README.md
+  - crates/aver-server/src/mcp.rs
+  - crates/aver-server/src/scopes.rs
+  - crates/aver-server/tests/mcp_service.rs
+  - crates/aver-server/tests/mcp_instructions.rs
