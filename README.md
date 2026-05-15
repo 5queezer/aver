@@ -204,7 +204,8 @@ Then run **MCP: Add Server** from the command palette and pick `aver`. VS Code d
 
 MCP currently exposes 18 tools, grouped to help agents keep the active choice set small:
 
-- **Default memory tools:** `recall`, `expand`, `remember_claim`, `add_triple`
+- **Primary memory tools:** `recall`, `remember_claim`, `record_event`, `record_observation`, `assemble_compaction_summary`
+- **Specialized traversal tools:** `expand`, `add_triple`
 - **Event-to-claim workflow:** `record_event`, `should_extract_memories`, `propose_candidate_claim`, `list_candidate_claims`, `promote_candidate_claim`, `reject_candidate_claim`
 - **Observation continuity:** `record_observation`, `recall_observation`, `observation_coverage`, `assemble_compaction_summary`
 - **Advanced claim maintenance:** `contradict`, `retire_claim`, `consolidate`, `add_vector_chunk`

@@ -9,13 +9,19 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RememberClaimParams {
+    /// Durable memory subject.
     pub subject: String,
+    /// Durable memory predicate.
     pub predicate: String,
+    /// Durable memory object.
     pub object: String,
+    /// Source provenance for the claim.
     #[serde(default)]
     pub source: Option<String>,
+    /// Agent identifier to attribute the claim to.
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// Agent kind for attribution. One of HUMAN, LLM, DETERMINISTIC_PARSER, EXTERNAL_TOOL.
     #[serde(default)]
     pub agent_kind: Option<String>,
     /// ADR-0021 hierarchical memory scope. Defaults to "global".
@@ -25,11 +31,15 @@ pub struct RememberClaimParams {
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RecallParams {
+    /// Natural-language or entity query to retrieve durable memory.
     pub query: String,
+    /// Hybrid retrieval weight.
     #[serde(default)]
     pub alpha: Option<f64>,
+    /// Graph hop limit.
     #[serde(default)]
     pub hops: Option<usize>,
+    /// Maximum results to return.
     #[serde(default)]
     pub top_k: Option<usize>,
     /// ADR-0021 scope filter. Defaults to "global".
@@ -63,98 +73,136 @@ pub struct RecallParams {
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct ExpandParams {
+    /// Anchor entity to traverse from.
     pub entity: String,
+    /// Hop limit for graph traversal.
     #[serde(default)]
     pub hops: Option<usize>,
+    /// Predicate allowlist for traversal.
     #[serde(default)]
     pub predicates: Option<Vec<String>>,
+    /// ADR-0021 scope filter.
     #[serde(default)]
     pub scope: Option<String>,
+    /// ADR-0021 walk mode.
     #[serde(default)]
     pub scope_walk: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct AddTripleParams {
+    /// Subject of the triple.
     pub subject: String,
+    /// Predicate of the triple.
     pub predicate: String,
+    /// Object of the triple.
     pub object: String,
+    /// Optional confidence override.
     #[serde(default)]
     pub confidence: Option<f64>,
+    /// Required source reference.
     pub source: String,
+    /// ADR-0021 scope filter.
     #[serde(default)]
     pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct ContradictNewClaimParams {
+    /// Replacement claim subject.
     pub subject: String,
+    /// Replacement claim predicate.
     pub predicate: String,
+    /// Replacement claim object.
     pub object: String,
+    /// Source for the replacement claim.
     pub source: String,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct ContradictParams {
+    /// Claim/triple identifier to contradict.
     pub triple_id: i64,
+    /// Human-readable contradiction reason.
     pub reason: String,
+    /// Optional replacement claim.
     #[serde(default)]
     pub new_claim: Option<ContradictNewClaimParams>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct ConsolidateParams {
+    /// ADR-0021 scope filter.
     #[serde(default)]
     pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RecordEventParams {
+    /// Session identifier for the event stream.
     pub session_id: String,
+    /// Event kind label.
     pub kind: String,
+    /// Raw event payload.
     pub payload: String,
+    /// Optional event source.
     #[serde(default)]
     pub source: Option<String>,
+    /// Agent identifier to attribute the event to.
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// Agent kind for attribution.
     #[serde(default)]
     pub agent_kind: Option<String>,
+    /// ADR-0021 scope filter.
     #[serde(default)]
     pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct ShouldExtractMemoriesParams {
+    /// Session identifier to inspect.
     pub session_id: String,
+    /// Event count threshold for extraction.
     pub event_threshold: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct ProposeCandidateClaimParams {
+    /// Source event identifier.
     pub event_id: i64,
+    /// Proposed claim subject.
     pub subject: String,
+    /// Proposed claim predicate.
     pub predicate: String,
+    /// Proposed claim object.
     pub object: String,
+    /// ADR-0021 scope filter.
     #[serde(default)]
     pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct ListCandidateClaimsParams {
+    /// Optional session filter.
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Candidate status filter.
     #[serde(default)]
     pub status: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct PromoteCandidateClaimParams {
+    /// Candidate claim identifier.
     pub candidate_id: i64,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RejectCandidateClaimParams {
+    /// Candidate claim identifier.
     pub candidate_id: i64,
+    /// Rejection reason.
     pub reason: String,
 }
 
@@ -180,39 +228,52 @@ impl From<ObservationRelevanceParam> for ObservationRelevance {
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RecordObservationParams {
+    /// Session identifier for the observation.
     pub session_id: String,
+    /// Observation content.
     pub content: String,
+    /// Observation relevance tier.
     pub relevance: ObservationRelevanceParam,
+    /// Source event identifiers backing the observation.
     pub source_event_ids: Vec<i64>,
+    /// Derivation note or prompt fragment.
     pub derivation: String,
+    /// ADR-0021 scope filter.
     #[serde(default)]
     pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct ObservationCoverageParams {
+    /// Session identifier to inspect.
     pub session_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RecallObservationParams {
+    /// Observation identifier.
     pub observation_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct AssembleCompactionSummaryParams {
+    /// Session identifier to summarize.
     pub session_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct AddVectorChunkParams {
+    /// Claim identifier to attach the vector chunk to.
     pub claim_id: i64,
+    /// Raw text to embed.
     pub text: String,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RetireClaimParams {
+    /// Claim identifier to retire.
     pub claim_id: i64,
+    /// Retirement reason.
     pub reason: String,
 }
 

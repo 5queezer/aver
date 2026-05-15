@@ -636,7 +636,13 @@ fn json_tool_result<T: serde::Serialize>(
 
 fn mcp_tool_instructions() -> String {
     {
-        let default_tools = ["recall", "expand", "remember_claim", "add_triple"];
+        let primary_tools = [
+            "recall",
+            "remember_claim",
+            "record_event",
+            "record_observation",
+            "assemble_compaction_summary",
+        ];
         let event_tools = [
             "record_event",
             "should_extract_memories",
@@ -651,6 +657,7 @@ fn mcp_tool_instructions() -> String {
             "observation_coverage",
             "assemble_compaction_summary",
         ];
+        let specialized_tools = ["expand", "add_triple"];
         let maintenance_tools = [
             "contradict",
             "retire_claim",
@@ -661,13 +668,23 @@ fn mcp_tool_instructions() -> String {
         format!(
             concat!(
                 "Aver exposes {} MCP tools. ",
-                "Start with the default memory tools: {}. ",
+                "Primary tools: {}. ",
+                "Decision policy: start with recall when you need existing durable memory; use remember_claim only for explicit long-term facts; use record_event for raw session history before extraction; use record_observation and assemble_compaction_summary for source-backed handoff state. ",
+                "Default workflows: recall existing memory before answering or updating; record_event -> should_extract_memories -> propose_candidate_claim/list_candidate_claims -> promote_candidate_claim or reject_candidate_claim for event-to-claim promotion; record_observation -> recall_observation or observation_coverage -> assemble_compaction_summary for continuity and compaction. ",
+                "Specialized tools: {}. Use expand only when you already know the anchor entity to traverse; use add_triple only when you need explicit confidence/source control instead of the simpler remember_claim path. ",
+                "Avoid routine use of maintenance tools: {}. Prefer contradict for normal conflicting evidence, retire_claim only for explicit invalidation, consolidate only when you need refreshed derived state, and add_vector_chunk only for retrieval tuning. ",
+                "Tool groups: event workflow {}. Observation workflow {}. Full tool index: {}.",
                 "Use event-to-claim workflow tools only when capturing session history or reviewing staged memories: {}. ",
                 "Use observation continuity tools for source-backed session summaries and handoff state: {}. ",
                 "Use advanced claim-maintenance tools sparingly for contradiction handling, invalidation, consolidation, and retrieval tuning: {}."
             ),
             ALL_TOOL_NAMES.len(),
-            default_tools.join(", "),
+            primary_tools.join(", "),
+            specialized_tools.join(", "),
+            maintenance_tools.join(", "),
+            event_tools.join(", "),
+            observation_tools.join(", "),
+            ALL_TOOL_NAMES.join(", "),
             event_tools.join(", "),
             observation_tools.join(", "),
             maintenance_tools.join(", "),
