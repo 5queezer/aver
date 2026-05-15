@@ -130,7 +130,7 @@ pub fn serialize_scope_list(scopes: &[Scope]) -> String {
 /// Mapping (per ADR-0020 §Scopes, plus tools added since the ADR):
 /// - `recall`, `expand` → `claims:read`
 /// - `remember_claim`, `add_triple`, `contradict`, `consolidate`,
-///   `add_vector_chunk` → `claims:write`
+///   `add_vector_chunk`, `retire_claim` → `claims:write`
 /// - `record_event`, `should_extract_memories` → `events:write`
 /// - `propose_candidate_claim`, `list_candidate_claims`,
 ///   `promote_candidate_claim`, `reject_candidate_claim`
