@@ -1,0 +1,11 @@
+problem: Normalize Rust extractor module symbols that use raw identifiers
+approach: Added a focused TDD regression for extract_rust_modules on mod r#type and reused existing normalize_rust_identifier in collect_modules
+failed_paths:
+  - Initial exact-match edits missed rustfmt spacing; re-read exact snippets before applying
+verification:
+  - cargo test -q -p aver-extractor extract_rust_modules_normalizes_raw_identifier_names
+  - ./autoresearch.sh
+workflow_learning: For compact rustfmt-formatted tests, inspect exact whitespace with a small processor before batch edit exact replacements
+related_files:
+  - crates/aver-extractor/src/lang/rust.rs
+  - crates/aver-extractor/tests/rust.rs
