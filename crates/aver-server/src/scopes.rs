@@ -1,8 +1,8 @@
 //! ADR-0020 slice 3: OAuth scope catalog and tool→scope lookup.
 //!
-//! Six scopes mirror the ADR-0008 / ADR-0015 tool groups. The canonical
-//! string form is what clients send in `scope=` and what discovery advertises
-//! under `scopes_supported`. The order in [`SUPPORTED`] is the deterministic
+//! Six scopes mirror the current MCP tool groups. The canonical string form
+//! is what clients send in `scope=` and what discovery advertises under
+//! `scopes_supported`. The order in [`SUPPORTED`] is the deterministic
 //! rendering order used by [`serialize_scope_list`].
 
 use std::fmt;

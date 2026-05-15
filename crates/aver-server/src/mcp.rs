@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::http::GrantedScopes;
 use crate::scope_resolution::ResolvedScope;
-use crate::scopes::{Scope, required_scope_for_tool};
+use crate::scopes::{ALL_TOOL_NAMES, Scope, required_scope_for_tool};
 use crate::tools::{
     AddTripleParams, AddVectorChunkParams, AssembleCompactionSummaryParams, AverTools,
     ConsolidateParams, ContradictParams, ExpandParams, ListCandidateClaimsParams,
@@ -137,7 +137,9 @@ impl AverMcpService {
         })
     }
 
-    #[tool(description = "Store a durable structured memory claim in Aver.")]
+    #[tool(
+        description = "Store a durable claim immediately when the fact is explicit and ready for long-term memory."
+    )]
     async fn remember_claim(
         &self,
         Parameters(params): Parameters<RememberClaimParams>,
@@ -175,7 +177,9 @@ impl AverMcpService {
         }
     }
 
-    #[tool(description = "Append a structured memory triple per ADR-0008.")]
+    #[tool(
+        description = "Write a durable `(subject, predicate, object)` triple with provenance and optional confidence."
+    )]
     async fn add_triple(
         &self,
         Parameters(mut params): Parameters<AddTripleParams>,
@@ -199,7 +203,9 @@ impl AverMcpService {
         json_tool_result(result, "add_triple")
     }
 
-    #[tool(description = "Expand a known entity into its local claim-graph neighborhood.")]
+    #[tool(
+        description = "Traverse the claim graph around one entity when you already know the anchor node to inspect."
+    )]
     async fn expand(
         &self,
         Parameters(mut params): Parameters<ExpandParams>,
@@ -227,7 +233,9 @@ impl AverMcpService {
         json_tool_result(result, "expand")
     }
 
-    #[tool(description = "Record an explicit contradiction for an existing claim.")]
+    #[tool(
+        description = "Attach contradictory evidence to an existing claim without removing it from normal recall results."
+    )]
     async fn contradict(
         &self,
         Parameters(params): Parameters<ContradictParams>,
@@ -248,7 +256,9 @@ impl AverMcpService {
         json_tool_result(result, "contradict")
     }
 
-    #[tool(description = "Run Aver's on-demand consolidation pass.")]
+    #[tool(
+        description = "Recompute derived claim state after writes, contradictions, or retirements when you need the latest merged view."
+    )]
     async fn consolidate(
         &self,
         Parameters(params): Parameters<ConsolidateParams>,
@@ -269,7 +279,9 @@ impl AverMcpService {
         json_tool_result(result, "consolidate")
     }
 
-    #[tool(description = "Record an append-only episodic event for later memory extraction.")]
+    #[tool(
+        description = "Append a raw session event for later extraction; use this before candidate-claim or observation workflows."
+    )]
     async fn record_event(
         &self,
         Parameters(mut params): Parameters<RecordEventParams>,
@@ -293,7 +305,9 @@ impl AverMcpService {
         json_tool_result(result, "record_event")
     }
 
-    #[tool(description = "Return whether a session should trigger memory extraction.")]
+    #[tool(
+        description = "Check whether a session has accumulated enough events to justify extraction work."
+    )]
     async fn should_extract_memories(
         &self,
         Parameters(params): Parameters<ShouldExtractMemoriesParams>,
@@ -314,7 +328,9 @@ impl AverMcpService {
         json_tool_result(result, "should_extract_memories")
     }
 
-    #[tool(description = "Stage a candidate claim from episodic event provenance.")]
+    #[tool(
+        description = "Stage a proposed durable claim from an event before promoting it into long-term memory."
+    )]
     async fn propose_candidate_claim(
         &self,
         Parameters(mut params): Parameters<ProposeCandidateClaimParams>,
@@ -339,7 +355,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "List staged candidate claims, optionally filtered by session_id and status."
+        description = "List staged candidate claims so you can review, promote, or reject them by session and status."
     )]
     async fn list_candidate_claims(
         &self,
@@ -361,7 +377,7 @@ impl AverMcpService {
         json_tool_result(result, "list_candidate_claims")
     }
 
-    #[tool(description = "Promote a staged candidate claim to durable Aver memory.")]
+    #[tool(description = "Promote one staged candidate claim into durable claim memory.")]
     async fn promote_candidate_claim(
         &self,
         Parameters(params): Parameters<PromoteCandidateClaimParams>,
@@ -382,7 +398,9 @@ impl AverMcpService {
         json_tool_result(result, "promote_candidate_claim")
     }
 
-    #[tool(description = "Reject a staged candidate claim with a reason.")]
+    #[tool(
+        description = "Reject a staged candidate claim and record why it should not become durable memory."
+    )]
     async fn reject_candidate_claim(
         &self,
         Parameters(params): Parameters<RejectCandidateClaimParams>,
@@ -403,7 +421,7 @@ impl AverMcpService {
         json_tool_result(result, "reject_candidate_claim")
     }
 
-    #[tool(description = "Record a source-backed episodic observation projection.")]
+    #[tool(description = "Record a derived observation backed by one or more source events.")]
     async fn record_observation(
         &self,
         Parameters(mut params): Parameters<RecordObservationParams>,
@@ -428,7 +446,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "Recall an observation and its exact supporting events by observation id."
+        description = "Fetch one observation plus the exact supporting event ids when you already have an observation id."
     )]
     async fn recall_observation(
         &self,
@@ -450,7 +468,9 @@ impl AverMcpService {
         json_tool_result(result, "recall_observation")
     }
 
-    #[tool(description = "Report which session events are covered by observations.")]
+    #[tool(
+        description = "Show which session events already have observation coverage and which still need summarization."
+    )]
     async fn observation_coverage(
         &self,
         Parameters(params): Parameters<ObservationCoverageParams>,
@@ -471,7 +491,9 @@ impl AverMcpService {
         json_tool_result(result, "observation_coverage")
     }
 
-    #[tool(description = "Mechanically assemble a compaction summary from current observations.")]
+    #[tool(
+        description = "Assemble a deterministic compaction summary from current observations for session handoff or compression."
+    )]
     async fn assemble_compaction_summary(
         &self,
         Parameters(params): Parameters<AssembleCompactionSummaryParams>,
@@ -492,7 +514,9 @@ impl AverMcpService {
         json_tool_result(result, "assemble_compaction_summary")
     }
 
-    #[tool(description = "Attach a text chunk to a claim for vector indexing.")]
+    #[tool(
+        description = "Attach retrieval text to an existing claim so it participates in vector and hybrid recall."
+    )]
     async fn add_vector_chunk(
         &self,
         Parameters(params): Parameters<AddVectorChunkParams>,
@@ -538,7 +562,9 @@ impl AverMcpService {
         json_tool_result(result, "retire_claim")
     }
 
-    #[tool(description = "Recall durable Aver claims by text query.")]
+    #[tool(
+        description = "Search durable claims by text query; start here when you need stored facts but do not know an exact entity id."
+    )]
     async fn recall(
         &self,
         Parameters(params): Parameters<RecallParams>,
@@ -608,6 +634,47 @@ fn json_tool_result<T: serde::Serialize>(
     }
 }
 
+fn mcp_tool_instructions() -> String {
+    {
+        let default_tools = ["recall", "expand", "remember_claim", "add_triple"];
+        let event_tools = [
+            "record_event",
+            "should_extract_memories",
+            "propose_candidate_claim",
+            "list_candidate_claims",
+            "promote_candidate_claim",
+            "reject_candidate_claim",
+        ];
+        let observation_tools = [
+            "record_observation",
+            "recall_observation",
+            "observation_coverage",
+            "assemble_compaction_summary",
+        ];
+        let maintenance_tools = [
+            "contradict",
+            "retire_claim",
+            "consolidate",
+            "add_vector_chunk",
+        ];
+
+        format!(
+            concat!(
+                "Aver exposes {} MCP tools. ",
+                "Start with the default memory tools: {}. ",
+                "Use event-to-claim workflow tools only when capturing session history or reviewing staged memories: {}. ",
+                "Use observation continuity tools for source-backed session summaries and handoff state: {}. ",
+                "Use advanced claim-maintenance tools sparingly for contradiction handling, invalidation, consolidation, and retrieval tuning: {}."
+            ),
+            ALL_TOOL_NAMES.len(),
+            default_tools.join(", "),
+            event_tools.join(", "),
+            observation_tools.join(", "),
+            maintenance_tools.join(", "),
+        )
+    }
+}
+
 #[tool_handler]
 impl ServerHandler for AverMcpService {
     fn get_info(&self) -> ServerInfo {
@@ -619,8 +686,6 @@ impl ServerHandler for AverMcpService {
                     .with_description("Structured claim memory server for agents.")
                     .with_icons(vec![Icon::new(icon_url).with_mime_type("image/svg+xml")]),
             )
-            .with_instructions(
-                "Available tools: recall, expand, add_triple, contradict, consolidate, remember_claim, record_event, should_extract_memories, propose_candidate_claim, list_candidate_claims, promote_candidate_claim, reject_candidate_claim, record_observation, recall_observation, observation_coverage, assemble_compaction_summary, add_vector_chunk.".to_string(),
-            )
+            .with_instructions(mcp_tool_instructions())
     }
 }

@@ -202,29 +202,14 @@ For Visual Studio Code, drop a workspace-level `.vscode/mcp.json` similar to:
 
 Then run **MCP: Add Server** from the command palette and pick `aver`. VS Code dynamic-registers with `POST /oauth/register`, opens the consent screen in your browser, and — after you click **Approve** — receives the authorization code and exchanges it for an access token automatically. Other MCP clients that support the OAuth 2.1 + PKCE discovery profile (`/.well-known/oauth-authorization-server`) follow the same path.
 
-MCP tools currently include the ADR-0008 stable memory surface:
+MCP currently exposes 18 tools, grouped to help agents keep the active choice set small:
 
-- `recall`
-- `expand`
-- `add_triple`
-- `contradict`
-- `consolidate`
+- **Default memory tools:** `recall`, `expand`, `remember_claim`, `add_triple`
+- **Event-to-claim workflow:** `record_event`, `should_extract_memories`, `propose_candidate_claim`, `list_candidate_claims`, `promote_candidate_claim`, `reject_candidate_claim`
+- **Observation continuity:** `record_observation`, `recall_observation`, `observation_coverage`, `assemble_compaction_summary`
+- **Advanced claim maintenance:** `contradict`, `retire_claim`, `consolidate`, `add_vector_chunk`
 
-Operational triggered-memory tools are also exposed:
-
-- `remember_claim`
-- `record_event`
-- `should_extract_memories`
-- `propose_candidate_claim`
-- `list_candidate_claims`
-- `promote_candidate_claim`
-- `reject_candidate_claim`
-- `record_observation`
-- `recall_observation`
-- `observation_coverage`
-- `assemble_compaction_summary`
-
-CLI-only continuity and maintenance surfaces (`catch-up`, `compaction-summary`) are implemented in `aver-cli`; MCP exposes core observation continuity read tools (`recall_observation`, `observation_coverage`, `assemble_compaction_summary`) and `record_observation`.
+CLI-only continuity and maintenance surfaces (`catch-up`, `compaction-summary`) are implemented in `aver-cli`; MCP exposes the observation continuity tools above plus `record_observation`, while claim-maintenance tasks stay available through the four advanced tools when agents explicitly need them.
 
 Adapter boundaries are explicit in `aver-server` via the `adapters` module (`Pi`, `ClaudeCode`, `CodexOpenAi`, `OpenCode`, `Mcp`, `JsonlCliHarness`) so host runtimes can be added without leaking host-specific logic into `aver-core`.
 
