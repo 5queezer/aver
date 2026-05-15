@@ -1,0 +1,15 @@
+problem: Improve MCP instruction guidance and schema docs for better LLM tool selection
+approach: Reworked mcp_tool_instructions into a playbook, added schema field docs to key tool params, and synced README/tests to the new guidance
+failed_paths:
+  - Initial exact-match edit attempts on tools.rs were brittle
+verification:
+  - cargo fmt
+  - cargo test -p aver-server --test mcp_instructions --test mcp_service
+  - cargo test -p aver-server
+  - cargo clippy -p aver-server --tests -- -D warnings
+workflow_learning: For compact Rust structs, line-based block rewrites are more reliable than whole-block exact-match edits
+related_files:
+  - crates/aver-server/src/mcp.rs
+  - crates/aver-server/src/tools.rs
+  - crates/aver-server/tests/mcp_instructions.rs
+  - README.md
