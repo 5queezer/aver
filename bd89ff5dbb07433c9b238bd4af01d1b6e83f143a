@@ -1,0 +1,10 @@
+problem: scopes doc comment omitted retire_claim from claims:write bullet
+approach: Updated crates/aver-server/src/scopes.rs doc mapping to include retire_claim and ran formatting plus focused tests
+failed_paths:
+  - None
+verification:
+  - cargo fmt
+  - cargo test -p aver-server scopes
+workflow_learning: Keep scope docs in sync with required_scope_for_tool and ALL_TOOL_NAMES when MCP tools change
+related_files:
+  - crates/aver-server/src/scopes.rs
