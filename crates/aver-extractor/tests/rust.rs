@@ -2,8 +2,8 @@
 
 use aver_extractor::{
     ExtractedFact, extract_rust_calls, extract_rust_enums, extract_rust_facts,
-    extract_rust_functions, extract_rust_imports, extract_rust_structs, extract_rust_tests,
-    extract_rust_traits, map_rust_tests_to_functions,
+    extract_rust_functions, extract_rust_imports, extract_rust_modules, extract_rust_structs,
+    extract_rust_tests, extract_rust_traits, map_rust_tests_to_functions,
 };
 
 #[test]
@@ -208,6 +208,13 @@ fn extract_rust_traits_finds_trait_name() {
     let traits = extract_rust_traits("trait EmbeddingClient { fn embed(&self); }").unwrap();
 
     assert_eq!(traits, vec!["EmbeddingClient".to_string()]);
+}
+
+#[test]
+fn extract_rust_modules_normalizes_raw_identifier_names() {
+    let modules = extract_rust_modules("mod r#type { fn remember() {} }").unwrap();
+
+    assert_eq!(modules, vec!["type".to_string()]);
 }
 
 #[test]

@@ -579,7 +579,7 @@ fn collect_modules(node: Node<'_>, source: &[u8], modules: &mut Vec<String>) -> 
     if node.kind() == "mod_item"
         && let Some(name) = node.child_by_field_name("name")
     {
-        modules.push(name.utf8_text(source)?.to_string());
+        modules.push(normalize_rust_identifier(name.utf8_text(source)?));
     }
 
     let mut cursor = node.walk();
