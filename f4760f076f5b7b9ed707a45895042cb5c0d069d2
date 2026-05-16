@@ -1,0 +1,14 @@
+problem: Add proactive-but-safe Aver MCP guidance so agents remember durable user-shared context without requiring a literal remember command
+approach: Updated server MCP instructions with a proactive policy, added an instruction regression test, and mirrored the policy in README and ADR-0015
+failed_paths:
+  - Initial exact-match edit on compacted mcp.rs instructions missed rustfmt formatting and required re-reading the exact snippet
+verification:
+  - cargo fmt --all
+  - cargo test -p aver-server --test mcp_instructions --test mcp_service
+  - cargo clippy -p aver-server --tests -- -D warnings
+workflow_learning: For compacted Rust/doc blocks, extract the exact serialized substring before batch-editing instruction text
+related_files:
+  - crates/aver-server/src/mcp.rs
+  - crates/aver-server/tests/mcp_instructions.rs
+  - README.md
+  - doc/adr/0015-mcp-oauth-server-and-agent-tool-surface.md
