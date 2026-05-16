@@ -1,0 +1,17 @@
+problem: Improve Aver MCP progressive discovery and tool-selection UX
+approach: Reworked server instructions into a default-active-set discovery card, tightened tool/schema descriptions, synced README, then ran AI hardening to add PII minimization wording
+failed_paths:
+  - Whole-function exact-match edits failed on rustfmt-expanded instruction blocks
+  - Initial identity guidance was too broad and needed data-minimization hardening
+verification:
+  - just check
+  - cargo fmt --all -- --check
+  - cargo test -p aver-server --test mcp_instructions --test mcp_service
+  - cargo test -p aver-server
+  - cargo clippy -p aver-server --tests -- -D warnings
+workflow_learning: MCP instruction strings are behavioral policy; harden them like data-handling code and test privacy/minimization clauses explicitly
+related_files:
+  - crates/aver-server/src/mcp.rs
+  - crates/aver-server/src/tools.rs
+  - crates/aver-server/tests/mcp_instructions.rs
+  - README.md
