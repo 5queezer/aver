@@ -1,0 +1,13 @@
+problem: Harden AI-generated OAuth consent scope checkbox implementation before PR merge
+approach: Ran AI code hardening review, fixed scope inputs being outside the submitted form, removed unsupported remember UI, added form-boundary regression assertions, and replaced duplicated per-scope form fields with flattened dynamic parsing keyed from SUPPORTED scopes
+failed_paths:
+  - Initial tests only checked HTML substrings and missed browser form submission semantics
+verification:
+  - cargo test -q -p aver-server consent_
+  - cargo test -q -p aver-server
+  - cargo clippy -q -p aver-server --tests -- -D warnings
+  - cargo fmt --all -- --check
+workflow_learning: For HTML form changes, test browser submission boundaries explicitly; string containment is insufficient for auth/consent surfaces
+related_files:
+  - crates/aver-server/src/consent.rs
+  - crates/aver-server/templates/consent.html
