@@ -202,17 +202,17 @@ For Visual Studio Code, drop a workspace-level `.vscode/mcp.json` similar to:
 
 Then run **MCP: Add Server** from the command palette and pick `aver`. VS Code dynamic-registers with `POST /oauth/register`, opens the consent screen in your browser, and — after you click **Approve** — receives the authorization code and exchanges it for an access token automatically. Other MCP clients that support the OAuth 2.1 + PKCE discovery profile (`/.well-known/oauth-authorization-server`) follow the same path.
 
-MCP currently exposes 18 tools, grouped to help agents keep the active choice set small:
+MCP currently exposes 18 tools through a progressive discovery card so agents keep the active choice set small:
 
-- **Primary memory tools:** `recall`, `remember_claim`, `record_event`, `record_observation`, `assemble_compaction_summary`
-- **Specialized traversal tools:** `expand`, `add_triple`
-- **Event-to-claim workflow:** `record_event`, `should_extract_memories`, `propose_candidate_claim`, `list_candidate_claims`, `promote_candidate_claim`, `reject_candidate_claim`
-- **Observation continuity:** `record_observation`, `recall_observation`, `observation_coverage`, `assemble_compaction_summary`
-- **Advanced claim maintenance:** `contradict`, `retire_claim`, `consolidate`, `add_vector_chunk`
+- **Default active set:** `recall`, `remember_claim`, `record_event`, `record_observation`, `assemble_compaction_summary`
+- **Event-to-claim workflow:** progressively load `should_extract_memories`, `propose_candidate_claim`, `list_candidate_claims`, `promote_candidate_claim`, `reject_candidate_claim` only when converting raw events into reviewed durable claims
+- **Graph navigation:** progressively load `expand` after recall returns an entity or an anchor is already known; use `add_triple` instead of `remember_claim` only when explicit source/confidence control is required
+- **Observation audit:** progressively load `recall_observation`, `observation_coverage` for handoff, compaction, or provenance checks
+- **Maintenance/repair:** keep `contradict`, `retire_claim`, `consolidate`, `add_vector_chunk` hidden until there is an explicit repair or retrieval-tuning need
 
-Aver's MCP guide is intentionally proactive but selective: agents should recall first, then record durable user-shared preferences, identity, project facts, and long-lived working context even when the user does not say "remember this" explicitly. When durability is uncertain, agents should prefer `record_event` over `remember_claim`, and they must not store secrets, credentials, or short-lived chatter.
+Aver's MCP guide is intentionally proactive but selective: agents should recall first, then record durable user-shared preferences, project facts, and long-lived working context even when the user does not say "remember this" explicitly. Identity details should be recorded only when they are necessary, user-shared, and not sensitive personal data. When durability is uncertain, agents should prefer `record_event` over `remember_claim`, and they must not store secrets, credentials, sensitive personal data, transient chat, or facts they cannot explain with provenance.
 
-CLI-only continuity and maintenance surfaces (`catch-up`, `compaction-summary`) are implemented in `aver-cli`; MCP exposes the observation continuity tools above plus `record_observation`, while claim-maintenance tasks stay available through the four advanced tools when agents explicitly need them.
+CLI-only continuity and maintenance surfaces (`catch-up`, `compaction-summary`) are implemented in `aver-cli`; MCP exposes `record_observation`, `assemble_compaction_summary`, and the observation audit tools above, while claim-maintenance tasks stay available through the four advanced tools when agents explicitly need them.
 
 Adapter boundaries are explicit in `aver-server` via the `adapters` module (`Pi`, `ClaudeCode`, `CodexOpenAi`, `OpenCode`, `Mcp`, `JsonlCliHarness`) so host runtimes can be added without leaking host-specific logic into `aver-core`.
 
