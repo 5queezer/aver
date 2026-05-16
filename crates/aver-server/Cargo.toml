@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+askama = "0.12"
 aver-core = { path = "../aver-core" }
 serde.workspace = true
 serde_json.workspace = true
