@@ -1,0 +1,17 @@
+problem: Allow users to grant Aver MCP OAuth scopes when clients omit scope requests, without embedding HTML in Rust source
+approach: Added Askama templates for consent/error pages, rendered all supported scopes as checkbox options with requested scopes preselected, and persisted checked scopes into consent/code/token flow
+failed_paths:
+  - Initial implementation built HTML strings directly in consent.rs before user clarified template requirement
+  - Repeated checkbox field names did not deserialize with serde_urlencoded, so each supported scope now has a stable field name
+verification:
+  - cargo test -q -p aver-server consent_
+  - cargo test -q -p aver-server
+  - cargo clippy -q -p aver-server --tests -- -D warnings
+  - cargo fmt --all -- --check
+workflow_learning: For server-rendered HTML in Rust services, choose a template crate up front and keep Rust limited to typed view models plus render calls
+related_files:
+  - crates/aver-server/src/consent.rs
+  - crates/aver-server/templates/consent.html
+  - crates/aver-server/templates/error.html
+  - crates/aver-server/Cargo.toml
+  - README.md
