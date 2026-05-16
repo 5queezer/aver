@@ -25,19 +25,18 @@
     <dt>Registered at (unix)</dt><dd>{{ client_registered_at }}</dd>
   </dl>
 
-  <p>Select access to grant:</p>
-  <ul>
-    {% for scope in scope_options %}
-      <li>
-        <label>
-          <input type="checkbox" name="{{ scope.field }}" value="{{ scope.value }}"{% if scope.checked %} checked{% endif %}>
-          <code>{{ scope.value }}</code>
-        </label>
-      </li>
-    {% endfor %}
-  </ul>
-
   <form method="POST" action="/oauth/authorize/decision">
+    <p>Select access to grant:</p>
+    <ul>
+      {% for scope in scope_options %}
+        <li>
+          <label>
+            <input type="checkbox" name="{{ scope.field }}" value="{{ scope.value }}"{% if scope.checked %} checked{% endif %}>
+            <code>{{ scope.value }}</code>
+          </label>
+        </li>
+      {% endfor %}
+    </ul>
     <input type="hidden" name="client_id" value="{{ client_id }}">
     <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}">
     <input type="hidden" name="code_challenge" value="{{ code_challenge }}">
@@ -47,7 +46,6 @@
     {% endfor %}
     <input type="hidden" name="scope_selection_present" value="1">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label><input type="checkbox" name="remember" value="1"> Remember this client</label>
     <div class="actions">
       <button type="submit" name="decision" value="approve">Approve</button>
       <button type="submit" name="decision" value="deny">Deny</button>

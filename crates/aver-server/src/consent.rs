@@ -23,6 +23,7 @@
 //! of mutable input we need to bind. We chose this over storing a per-session
 //! nonce row because it requires no schema and no cleanup.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
@@ -294,20 +295,12 @@ fn parse_scope(raw: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-fn scope_checkbox_field(scope: &str) -> &'static str {
-    match scope {
-        "claims:read" => "grant_claims_read",
-        "claims:write" => "grant_claims_write",
-        "events:write" => "grant_events_write",
-        "candidates:manage" => "grant_candidates_manage",
-        "observations:read" => "grant_observations_read",
-        "observations:write" => "grant_observations_write",
-        _ => "grant_unknown_scope",
-    }
+fn scope_checkbox_field(scope: &str) -> String {
+    format!("grant_{}", scope.replace(':', "_"))
 }
 
 struct ScopeOption<'a> {
-    field: &'static str,
+    field: String,
     value: &'a str,
     checked: bool,
 }
@@ -664,37 +657,24 @@ pub struct DecisionForm {
     pub csrf_token: String,
     pub decision: String,
     #[serde(default)]
-    pub remember: Option<String>,
-    #[serde(default)]
-    pub grant_claims_read: Option<String>,
-    #[serde(default)]
-    pub grant_claims_write: Option<String>,
-    #[serde(default)]
-    pub grant_events_write: Option<String>,
-    #[serde(default)]
-    pub grant_candidates_manage: Option<String>,
-    #[serde(default)]
-    pub grant_observations_read: Option<String>,
-    #[serde(default)]
-    pub grant_observations_write: Option<String>,
-    #[serde(default)]
     pub scope_selection_present: Option<String>,
+    #[serde(flatten)]
+    pub extra_fields: BTreeMap<String, String>,
 }
 
 fn selected_scopes_from_form(form: &DecisionForm) -> Result<Vec<String>, ScopeParseError> {
     let raw_scopes = if form.scope_selection_present.is_some() {
-        [
-            form.grant_claims_read.as_deref(),
-            form.grant_claims_write.as_deref(),
-            form.grant_events_write.as_deref(),
-            form.grant_candidates_manage.as_deref(),
-            form.grant_observations_read.as_deref(),
-            form.grant_observations_write.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" ")
+        SUPPORTED
+            .iter()
+            .filter_map(|scope| {
+                let scope = scope.as_str();
+                form.extra_fields
+                    .get(&scope_checkbox_field(scope))
+                    .filter(|value| value.as_str() == scope)
+                    .map(|_| scope)
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
     } else {
         form.scope.clone().unwrap_or_default()
     };
@@ -950,6 +930,19 @@ mod tests {
             html.contains("name=\"scope_selection_present\" value=\"1\""),
             "form should mark that checkbox selection is authoritative: {html}"
         );
+        let form_start = html.find("<form method=\"POST\"").unwrap();
+        let form_end = html.find("</form>").unwrap();
+        let checkbox = html
+            .find("name=\"grant_claims_read\" value=\"claims:read\"")
+            .unwrap();
+        assert!(
+            form_start < checkbox && checkbox < form_end,
+            "scope checkboxes must be submitted with the approval form: {html}"
+        );
+        assert!(
+            !html.contains("name=\"remember\""),
+            "consent page should not show an unsupported remember option: {html}"
+        );
     }
 
     #[test]
@@ -963,14 +956,11 @@ mod tests {
             state: None,
             csrf_token: "csrf".to_string(),
             decision: "approve".to_string(),
-            remember: None,
-            grant_claims_read: Some("claims:read".to_string()),
-            grant_claims_write: None,
-            grant_events_write: None,
-            grant_candidates_manage: None,
-            grant_observations_read: None,
-            grant_observations_write: None,
             scope_selection_present: Some("1".to_string()),
+            extra_fields: BTreeMap::from([(
+                "grant_claims_read".to_string(),
+                "claims:read".to_string(),
+            )]),
         };
 
         assert_eq!(
@@ -980,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn consent_decision_form_deserializes_repeated_checked_scopes() {
+    fn consent_decision_form_deserializes_checked_scopes() {
         let form: DecisionForm = serde_urlencoded::from_str(
             "client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A3999%2Fcallback&code_challenge=challenge&code_challenge_method=S256&scope=claims%3Aread+events%3Awrite&state=s&csrf_token=csrf&decision=approve&grant_claims_read=claims%3Aread&grant_events_write=events%3Awrite&scope_selection_present=1",
         )
