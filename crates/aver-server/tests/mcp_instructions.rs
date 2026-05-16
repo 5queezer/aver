@@ -16,6 +16,9 @@ fn mcp_instructions_group_primary_and_advanced_tools() {
         "Decision policy: start with recall when you need existing durable memory; use remember_claim only for explicit long-term facts; use record_event for raw session history before extraction; use record_observation and assemble_compaction_summary for source-backed handoff state."
     ));
     assert!(instructions.contains(
+        "Proactive memory policy: be proactive but selective when the user explicitly shares durable preferences, identity, project facts, or long-lived working context; record those facts even without a direct remember command, but never store secrets, credentials, or short-lived chatter, and prefer record_event over remember_claim when durability is uncertain."
+    ));
+    assert!(instructions.contains(
         "Default workflows: recall existing memory before answering or updating; record_event -> should_extract_memories -> propose_candidate_claim/list_candidate_claims -> promote_candidate_claim or reject_candidate_claim for event-to-claim promotion; record_observation -> recall_observation or observation_coverage -> assemble_compaction_summary for continuity and compaction."
     ));
     assert!(instructions.contains(

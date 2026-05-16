@@ -210,6 +210,8 @@ MCP currently exposes 18 tools, grouped to help agents keep the active choice se
 - **Observation continuity:** `record_observation`, `recall_observation`, `observation_coverage`, `assemble_compaction_summary`
 - **Advanced claim maintenance:** `contradict`, `retire_claim`, `consolidate`, `add_vector_chunk`
 
+Aver's MCP guide is intentionally proactive but selective: agents should recall first, then record durable user-shared preferences, identity, project facts, and long-lived working context even when the user does not say "remember this" explicitly. When durability is uncertain, agents should prefer `record_event` over `remember_claim`, and they must not store secrets, credentials, or short-lived chatter.
+
 CLI-only continuity and maintenance surfaces (`catch-up`, `compaction-summary`) are implemented in `aver-cli`; MCP exposes the observation continuity tools above plus `record_observation`, while claim-maintenance tasks stay available through the four advanced tools when agents explicitly need them.
 
 Adapter boundaries are explicit in `aver-server` via the `adapters` module (`Pi`, `ClaudeCode`, `CodexOpenAi`, `OpenCode`, `Mcp`, `JsonlCliHarness`) so host runtimes can be added without leaking host-specific logic into `aver-core`.

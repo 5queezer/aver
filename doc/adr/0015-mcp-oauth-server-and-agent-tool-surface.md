@@ -67,6 +67,8 @@ reject_candidate_claim(candidate_id, reason)
 
 These tools let an agent accumulate episodic context and explicitly trigger consolidation without silently writing every message into durable memory.
 
+MCP guidance should still be proactive: if a user explicitly shares durable preferences, identity, project facts, or long-lived working context, the agent should record that information even without a literal "remember" instruction. The guidance must stay selective and privacy-first: never store secrets or credentials, avoid promoting short-lived chatter into durable claims, and prefer the event/candidate path when durability is uncertain.
+
 ### Relationship to ADR-0008
 
 ADR-0008's five-tool surface remains the high-level memory surface for stable agent use. ADR-0015 refines the write side for MCP integrations by adding lower-level event/candidate tools. These lower-level tools are operational controls for the triggered memory pipeline, not a replacement for durable graph recall/expand/consolidate tools.
