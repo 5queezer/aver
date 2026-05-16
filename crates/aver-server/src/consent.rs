@@ -23,9 +23,11 @@
 //! of mutable input we need to bind. We chose this over storing a per-session
 //! nonce row because it requires no schema and no cleanup.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
+use askama::Template;
 use axum::extract::{ConnectInfo, Form, Query, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -37,6 +39,7 @@ use url::Url;
 
 use crate::auth::{AuthDb, Session, User, UserKind};
 use crate::origin::validate_browser_origin;
+use crate::scopes::{SUPPORTED, ScopeParseError, parse_scope_list};
 
 /// Cookie name for the Aver browser session.
 pub const SESSION_COOKIE_NAME: &str = "aver_session";
@@ -214,23 +217,6 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// HTML escape: `& < > " '` only (no full Unicode entities). Sufficient for
-/// the small set of attribute and text contexts we render.
-pub fn html_escape(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for c in input.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#x27;"),
-            other => out.push(other),
-        }
-    }
-    out
-}
-
 /// True iff the consent record covers every requested scope (treating an
 /// empty `requested` set as the implicit "default access" scope).
 pub fn consent_covers(granted: &[String], requested: &[String]) -> bool {
@@ -275,19 +261,17 @@ fn html_response(status: StatusCode, body: String, set_cookie: Option<String>) -
     response
 }
 
+#[derive(Template)]
+#[template(path = "error.html")]
+struct ErrorTemplate<'a> {
+    title: &'a str,
+    detail: &'a str,
+}
+
 fn html_error(status: StatusCode, title: &str, detail: &str) -> Response {
-    let body = format!(
-        concat!(
-            "<!doctype html><html><head><meta charset=\"utf-8\">",
-            "<title>{title}</title>",
-            "<style>body{{font-family:system-ui,sans-serif;max-width:480px;",
-            "margin:4em auto;padding:1em;color:#111}}h1{{font-size:1.2em}}",
-            "p{{color:#444}}</style></head><body><h1>{title}</h1>",
-            "<p>{detail}</p></body></html>",
-        ),
-        title = html_escape(title),
-        detail = html_escape(detail),
-    );
+    let body = ErrorTemplate { title, detail }
+        .render()
+        .expect("error template should render");
     html_response(status, body, None)
 }
 
@@ -311,6 +295,49 @@ fn parse_scope(raw: Option<&str>) -> Vec<String> {
         .collect()
 }
 
+fn scope_checkbox_field(scope: &str) -> String {
+    format!("grant_{}", scope.replace(':', "_"))
+}
+
+struct ScopeOption<'a> {
+    field: String,
+    value: &'a str,
+    checked: bool,
+}
+
+struct HiddenInput<'a> {
+    name: &'static str,
+    value: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "consent.html")]
+struct ConsentTemplate<'a> {
+    client_id: &'a str,
+    client_name: &'a str,
+    redirect_uri: &'a str,
+    client_registered_at: i64,
+    scope_options: Vec<ScopeOption<'a>>,
+    hidden_inputs: Vec<HiddenInput<'a>>,
+    code_challenge: &'a str,
+    code_challenge_method: &'a str,
+    csrf_token: &'a str,
+}
+
+fn scope_options<'a>(requested_scopes: &'a [String]) -> Vec<ScopeOption<'a>> {
+    SUPPORTED
+        .iter()
+        .map(|scope| {
+            let scope = scope.as_str();
+            ScopeOption {
+                field: scope_checkbox_field(scope),
+                value: scope,
+                checked: requested_scopes.iter().any(|requested| requested == scope),
+            }
+        })
+        .collect()
+}
+
 fn append_query_pair(url: &mut Url, key: &str, value: &str) {
     url.query_pairs_mut().append_pair(key, value);
 }
@@ -329,80 +356,33 @@ fn render_consent_page(
     raw_scope: Option<&str>,
     csrf_token: &str,
 ) -> String {
-    let scope_html = if scopes.is_empty() {
-        "<li>Default access</li>".to_string()
-    } else {
-        scopes
-            .iter()
-            .map(|s| format!("<li><code>{}</code></li>", html_escape(s)))
-            .collect::<String>()
-    };
-    let state_input = match state {
-        Some(s) => format!(
-            "<input type=\"hidden\" name=\"state\" value=\"{}\">",
-            html_escape(s)
-        ),
-        None => String::new(),
-    };
-    let scope_input = match raw_scope {
-        Some(s) => format!(
-            "<input type=\"hidden\" name=\"scope\" value=\"{}\">",
-            html_escape(s)
-        ),
-        None => String::new(),
-    };
-    format!(
-        concat!(
-            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">",
-            "<title>Authorize client — Aver</title>",
-            "<style>body{{font-family:system-ui,sans-serif;max-width:560px;",
-            "margin:3em auto;padding:1.5em;color:#111}}",
-            "h1{{font-size:1.3em}}dl{{margin:1em 0}}dt{{font-weight:600;",
-            "margin-top:.5em}}dd{{margin:0 0 .25em 0;font-family:monospace;",
-            "font-size:.9em;word-break:break-all}}ul{{margin:.5em 0}}",
-            ".actions{{margin-top:1.5em}}button{{font-size:1em;padding:.5em 1em;",
-            "margin-right:.5em}}label{{display:block;margin-top:1em}}",
-            ".note{{color:#666;font-size:.9em;margin-top:1em}}</style>",
-            "</head><body>",
-            "<h1>Allow this client to access your Aver memory?</h1>",
-            "<dl>",
-            "<dt>Client name</dt><dd>{client_name}</dd>",
-            "<dt>Client ID</dt><dd>{client_id}</dd>",
-            "<dt>Redirect URI</dt><dd>{redirect_uri}</dd>",
-            "<dt>Registered at (unix)</dt><dd>{registered_at}</dd>",
-            "</dl>",
-            "<p>Requested access:</p><ul>{scope_html}</ul>",
-            "<form method=\"POST\" action=\"/oauth/authorize/decision\">",
-            "<input type=\"hidden\" name=\"client_id\" value=\"{client_id_attr}\">",
-            "<input type=\"hidden\" name=\"redirect_uri\" value=\"{redirect_uri_attr}\">",
-            "<input type=\"hidden\" name=\"code_challenge\" value=\"{code_challenge}\">",
-            "<input type=\"hidden\" name=\"code_challenge_method\" value=\"{code_challenge_method}\">",
-            "{scope_input}",
-            "{state_input}",
-            "<input type=\"hidden\" name=\"csrf_token\" value=\"{csrf}\">",
-            "<label><input type=\"checkbox\" name=\"remember\" value=\"1\"> ",
-            "Remember this client</label>",
-            "<div class=\"actions\">",
-            "<button type=\"submit\" name=\"decision\" value=\"approve\">Approve</button>",
-            "<button type=\"submit\" name=\"decision\" value=\"deny\">Deny</button>",
-            "</div></form>",
-            "<p class=\"note\">Dynamic-registered MCP clients have no curated ",
-            "name or logo. Approve only if you initiated this flow.</p>",
-            "</body></html>",
-        ),
-        client_name = html_escape(client_name),
-        client_id = html_escape(client_id),
-        client_id_attr = html_escape(client_id),
-        redirect_uri = html_escape(redirect_uri),
-        redirect_uri_attr = html_escape(redirect_uri),
-        registered_at = client_registered_at,
-        scope_html = scope_html,
-        state_input = state_input,
-        scope_input = scope_input,
-        code_challenge = html_escape(code_challenge),
-        code_challenge_method = html_escape(code_challenge_method),
-        csrf = html_escape(csrf_token),
-    )
+    let mut hidden_inputs = Vec::new();
+    if let Some(scope) = raw_scope {
+        hidden_inputs.push(HiddenInput {
+            name: "scope",
+            value: scope,
+        });
+    }
+    if let Some(state) = state {
+        hidden_inputs.push(HiddenInput {
+            name: "state",
+            value: state,
+        });
+    }
+
+    ConsentTemplate {
+        client_id,
+        client_name,
+        redirect_uri,
+        client_registered_at,
+        scope_options: scope_options(scopes),
+        hidden_inputs,
+        code_challenge,
+        code_challenge_method,
+        csrf_token,
+    }
+    .render()
+    .expect("consent template should render")
 }
 
 /// Shared state injected by `http.rs`. We re-declare a thin trait bound here
@@ -677,7 +657,33 @@ pub struct DecisionForm {
     pub csrf_token: String,
     pub decision: String,
     #[serde(default)]
-    pub remember: Option<String>,
+    pub scope_selection_present: Option<String>,
+    #[serde(flatten)]
+    pub extra_fields: BTreeMap<String, String>,
+}
+
+fn selected_scopes_from_form(form: &DecisionForm) -> Result<Vec<String>, ScopeParseError> {
+    let raw_scopes = if form.scope_selection_present.is_some() {
+        SUPPORTED
+            .iter()
+            .filter_map(|scope| {
+                let scope = scope.as_str();
+                form.extra_fields
+                    .get(&scope_checkbox_field(scope))
+                    .filter(|value| value.as_str() == scope)
+                    .map(|_| scope)
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        form.scope.clone().unwrap_or_default()
+    };
+    parse_scope_list(&raw_scopes).map(|scopes| {
+        scopes
+            .into_iter()
+            .map(|scope| scope.as_str().to_string())
+            .collect()
+    })
 }
 
 pub async fn handle_authorize_decision(
@@ -803,7 +809,12 @@ pub async fn handle_authorize_decision(
 
     match form.decision.as_str() {
         "approve" => {
-            let scopes = parse_scope(form.scope.as_deref());
+            let scopes = match selected_scopes_from_form(&form) {
+                Ok(scopes) => scopes,
+                Err(err) => {
+                    return html_error(StatusCode::BAD_REQUEST, "Invalid scope", &err.to_string());
+                }
+            };
             if auth_db
                 .record_consent(&user.id, &form.client_id, &scopes)
                 .is_err()
@@ -846,15 +857,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn html_escape_handles_metacharacters() {
-        assert_eq!(html_escape("a & b"), "a &amp; b");
-        assert_eq!(html_escape("<x>"), "&lt;x&gt;");
-        assert_eq!(html_escape("\"q\""), "&quot;q&quot;");
-        assert_eq!(html_escape("'apos'"), "&#x27;apos&#x27;");
-        assert_eq!(html_escape("plain text 123"), "plain text 123");
-    }
-
-    #[test]
     fn csrf_token_round_trips() {
         let secret = b"01234567890123456789012345678901";
         let token = compute_csrf_token(secret, "sess", "client", "challenge");
@@ -895,6 +897,89 @@ mod tests {
             "challenge",
             &token
         ));
+    }
+
+    #[test]
+    fn consent_page_lists_all_supported_scopes_as_checkboxes() {
+        let html = render_consent_page(
+            "client-1",
+            "Aver MCP client",
+            "http://127.0.0.1:3999/callback",
+            123,
+            &["claims:read".to_string()],
+            None,
+            "challenge",
+            "S256",
+            Some("claims:read"),
+            "csrf",
+        );
+
+        for scope in crate::scopes::SUPPORTED {
+            let scope = scope.as_str();
+            let field = scope_checkbox_field(scope);
+            assert!(
+                html.contains(&format!("name=\"{field}\" value=\"{scope}\"")),
+                "missing checkbox for {scope}: {html}"
+            );
+        }
+        assert!(
+            html.contains("name=\"grant_claims_read\" value=\"claims:read\" checked"),
+            "requested scope should be pre-checked: {html}"
+        );
+        assert!(
+            html.contains("name=\"scope_selection_present\" value=\"1\""),
+            "form should mark that checkbox selection is authoritative: {html}"
+        );
+        let form_start = html.find("<form method=\"POST\"").unwrap();
+        let form_end = html.find("</form>").unwrap();
+        let checkbox = html
+            .find("name=\"grant_claims_read\" value=\"claims:read\"")
+            .unwrap();
+        assert!(
+            form_start < checkbox && checkbox < form_end,
+            "scope checkboxes must be submitted with the approval form: {html}"
+        );
+        assert!(
+            !html.contains("name=\"remember\""),
+            "consent page should not show an unsupported remember option: {html}"
+        );
+    }
+
+    #[test]
+    fn consent_decision_uses_checked_scopes_instead_of_original_request() {
+        let form = DecisionForm {
+            client_id: "client-1".to_string(),
+            redirect_uri: "http://127.0.0.1:3999/callback".to_string(),
+            code_challenge: "challenge".to_string(),
+            code_challenge_method: "S256".to_string(),
+            scope: Some("claims:read events:write".to_string()),
+            state: None,
+            csrf_token: "csrf".to_string(),
+            decision: "approve".to_string(),
+            scope_selection_present: Some("1".to_string()),
+            extra_fields: BTreeMap::from([(
+                "grant_claims_read".to_string(),
+                "claims:read".to_string(),
+            )]),
+        };
+
+        assert_eq!(
+            selected_scopes_from_form(&form).unwrap(),
+            vec!["claims:read"]
+        );
+    }
+
+    #[test]
+    fn consent_decision_form_deserializes_checked_scopes() {
+        let form: DecisionForm = serde_urlencoded::from_str(
+            "client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A3999%2Fcallback&code_challenge=challenge&code_challenge_method=S256&scope=claims%3Aread+events%3Awrite&state=s&csrf_token=csrf&decision=approve&grant_claims_read=claims%3Aread&grant_events_write=events%3Awrite&scope_selection_present=1",
+        )
+        .unwrap();
+
+        assert_eq!(
+            selected_scopes_from_form(&form).unwrap(),
+            vec!["claims:read", "events:write"]
+        );
     }
 
     #[test]

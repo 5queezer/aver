@@ -138,7 +138,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "Store a durable claim immediately when the fact is explicit and ready for long-term memory."
+        description = "Store one explicit, stable long-term fact as a durable claim. Prefer record_event when durability is uncertain; never store secrets or transient chat."
     )]
     async fn remember_claim(
         &self,
@@ -178,7 +178,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "Write a durable `(subject, predicate, object)` triple with provenance and optional confidence."
+        description = "Write a durable `(subject, predicate, object)` triple with required provenance and optional confidence. Prefer remember_claim unless you need explicit source/confidence control."
     )]
     async fn add_triple(
         &self,
@@ -204,7 +204,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "Traverse the claim graph around one entity when you already know the anchor node to inspect."
+        description = "Traverse the claim graph around a known anchor entity. Use after recall identifies an entity; do not use for broad text search."
     )]
     async fn expand(
         &self,
@@ -234,7 +234,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "Attach contradictory evidence to an existing claim without removing it from normal recall results."
+        description = "Attach contradictory evidence to an existing claim while keeping it visible to recall. Use retire_claim for explicit invalidation."
     )]
     async fn contradict(
         &self,
@@ -257,7 +257,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "Recompute derived claim state after writes, contradictions, or retirements when you need the latest merged view."
+        description = "Recompute derived claim state after writes, contradictions, or retirements. Use only when you need a refreshed merged view."
     )]
     async fn consolidate(
         &self,
@@ -280,7 +280,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "Append a raw session event for later extraction; use this before candidate-claim or observation workflows."
+        description = "Append raw session history for later extraction. Use for useful context that is not yet a durable fact; prefer remember_claim for explicit stable facts."
     )]
     async fn record_event(
         &self,
@@ -306,7 +306,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "Check whether a session has accumulated enough events to justify extraction work."
+        description = "Check whether a session has enough recorded events to justify memory extraction. Use before staging event-derived candidate claims."
     )]
     async fn should_extract_memories(
         &self,
@@ -329,7 +329,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "Stage a proposed durable claim from an event before promoting it into long-term memory."
+        description = "Stage a proposed durable claim from a recorded event. Use in the event-to-claim workflow before human/agent review and promotion."
     )]
     async fn propose_candidate_claim(
         &self,
@@ -355,7 +355,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "List staged candidate claims so you can review, promote, or reject them by session and status."
+        description = "List staged candidate claims by session/status for review. Use before promote_candidate_claim or reject_candidate_claim."
     )]
     async fn list_candidate_claims(
         &self,
@@ -377,7 +377,9 @@ impl AverMcpService {
         json_tool_result(result, "list_candidate_claims")
     }
 
-    #[tool(description = "Promote one staged candidate claim into durable claim memory.")]
+    #[tool(
+        description = "Promote one reviewed staged candidate into durable claim memory. Use only after the candidate has been inspected."
+    )]
     async fn promote_candidate_claim(
         &self,
         Parameters(params): Parameters<PromoteCandidateClaimParams>,
@@ -399,7 +401,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "Reject a staged candidate claim and record why it should not become durable memory."
+        description = "Reject a staged candidate claim and record why it should not become durable memory. Use instead of silently dropping bad candidates."
     )]
     async fn reject_candidate_claim(
         &self,
@@ -421,7 +423,9 @@ impl AverMcpService {
         json_tool_result(result, "reject_candidate_claim")
     }
 
-    #[tool(description = "Record a derived observation backed by one or more source events.")]
+    #[tool(
+        description = "Record a source-backed session observation for continuity, handoff, or compaction. Use source event ids for auditability."
+    )]
     async fn record_observation(
         &self,
         Parameters(mut params): Parameters<RecordObservationParams>,
@@ -446,7 +450,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "Fetch one observation plus the exact supporting event ids when you already have an observation id."
+        description = "Fetch one observation plus its supporting events when you already have an observation id. Use for exact provenance, not semantic search."
     )]
     async fn recall_observation(
         &self,
@@ -469,7 +473,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "Show which session events already have observation coverage and which still need summarization."
+        description = "Show which session events have observation coverage and which still need summarization. Use before compaction/handoff cleanup."
     )]
     async fn observation_coverage(
         &self,
@@ -492,7 +496,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "Assemble a deterministic compaction summary from current observations for session handoff or compression."
+        description = "Assemble a deterministic handoff/compaction summary from recorded observations. Use after source-backed observations exist."
     )]
     async fn assemble_compaction_summary(
         &self,
@@ -515,7 +519,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "Attach retrieval text to an existing claim so it participates in vector and hybrid recall."
+        description = "Attach extra retrieval text to an existing claim for vector/hybrid recall tuning. Use sparingly when normal claim text is insufficient."
     )]
     async fn add_vector_chunk(
         &self,
@@ -563,7 +567,7 @@ impl AverMcpService {
     }
 
     #[tool(
-        description = "Search durable claims by text query; start here when you need stored facts but do not know an exact entity id."
+        description = "Search durable claims by text query. Start here for stored facts, preferences, project context, or when you do not know an exact entity id."
     )]
     async fn recall(
         &self,
@@ -644,19 +648,13 @@ fn mcp_tool_instructions() -> String {
             "assemble_compaction_summary",
         ];
         let event_tools = [
-            "record_event",
             "should_extract_memories",
             "propose_candidate_claim",
             "list_candidate_claims",
             "promote_candidate_claim",
             "reject_candidate_claim",
         ];
-        let observation_tools = [
-            "record_observation",
-            "recall_observation",
-            "observation_coverage",
-            "assemble_compaction_summary",
-        ];
+        let observation_tools = ["recall_observation", "observation_coverage"];
         let specialized_tools = ["expand", "add_triple"];
         let maintenance_tools = [
             "contradict",
@@ -667,16 +665,16 @@ fn mcp_tool_instructions() -> String {
 
         format!(
             concat!(
-                "Aver exposes {} MCP tools. ",
-                "Primary tools: {}. ",
-                "Decision policy: start with recall when you need existing durable memory; use remember_claim only for explicit long-term facts; use record_event for raw session history before extraction; use record_observation and assemble_compaction_summary for source-backed handoff state. ",
-                "Proactive memory policy: be proactive but selective when the user explicitly shares durable preferences, identity, project facts, or long-lived working context; record those facts even without a direct remember command, but never store secrets, credentials, or short-lived chatter, and prefer record_event over remember_claim when durability is uncertain. ",
+                "Aver exposes {} MCP tools, but most sessions should start with the default active set. ",
+                "Default active set: {}. ",
+                "Decision policy: recall before answering when durable memory may matter; remember_claim only for explicit stable long-term facts; record_event for useful raw history; record_observation and assemble_compaction_summary for source-backed continuity. ",
+                "Proactive memory policy: record durable user-shared preferences, project facts, and long-lived working context even without a direct remember command; only record identity details when they are necessary, user-shared, and not sensitive personal data; prefer record_event over remember_claim when durability is uncertain. Avoid storing secrets, credentials, sensitive personal data, transient chat, or facts you cannot explain with provenance. ",
                 "Default workflows: recall existing memory before answering or updating; record_event -> should_extract_memories -> propose_candidate_claim/list_candidate_claims -> promote_candidate_claim or reject_candidate_claim for event-to-claim promotion; record_observation -> recall_observation or observation_coverage -> assemble_compaction_summary for continuity and compaction. ",
-                "Specialized tools: {}. Use expand only when you already know the anchor entity to traverse; use add_triple only when you need explicit confidence/source control instead of the simpler remember_claim path. ",
-                "Avoid routine use of maintenance tools: {}. Prefer contradict for normal conflicting evidence, retire_claim only for explicit invalidation, consolidate only when you need refreshed derived state, and add_vector_chunk only for retrieval tuning. ",
+                "Graph navigation tools available: {}. Progressively load graph navigation tools only after recall returns an entity or you already know an anchor: expand; use add_triple instead of remember_claim only when confidence/source control is required. ",
+                "Keep maintenance tools hidden until there is an explicit repair need: {}. Prefer contradict for normal conflicting evidence, retire_claim only for explicit invalidation, consolidate only when you need refreshed derived state, and add_vector_chunk only for retrieval tuning. ",
                 "Tool groups: event workflow {}. Observation workflow {}. Full tool index: {}.",
-                "Use event-to-claim workflow tools only when capturing session history or reviewing staged memories: {}. ",
-                "Use observation continuity tools for source-backed session summaries and handoff state: {}. ",
+                "Progressively load event-to-claim tools only when converting raw events into reviewed durable claims: {}. ",
+                "Progressively load observation audit tools only for handoff, compaction, or provenance checks: {}. ",
                 "Use advanced claim-maintenance tools sparingly for contradiction handling, invalidation, consolidation, and retrieval tuning: {}."
             ),
             ALL_TOOL_NAMES.len(),

@@ -15,7 +15,7 @@ pub struct RememberClaimParams {
     pub predicate: String,
     /// Durable memory object.
     pub object: String,
-    /// Source provenance for the claim.
+    /// Source provenance for the claim; include where the fact came from so future agents can audit it.
     #[serde(default)]
     pub source: Option<String>,
     /// Agent identifier to attribute the claim to.
@@ -24,14 +24,14 @@ pub struct RememberClaimParams {
     /// Agent kind for attribution. One of HUMAN, LLM, DETERMINISTIC_PARSER, EXTERNAL_TOOL.
     #[serde(default)]
     pub agent_kind: Option<String>,
-    /// ADR-0021 hierarchical memory scope. Defaults to "global".
+    /// ADR-0021 hierarchical memory scope. Defaults to the caller's resolved scope when used through MCP.
     #[serde(default)]
     pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RecallParams {
-    /// Natural-language or entity query to retrieve durable memory.
+    /// Natural-language or entity query to retrieve durable memory. Start broad enough to find related claims, then narrow with filters if needed.
     pub query: String,
     /// Hybrid retrieval weight.
     #[serde(default)]
@@ -39,14 +39,14 @@ pub struct RecallParams {
     /// Graph hop limit.
     #[serde(default)]
     pub hops: Option<usize>,
-    /// Maximum results to return.
+    /// Maximum results to return. Defaults to 5 in the MCP wrapper when omitted.
     #[serde(default)]
     pub top_k: Option<usize>,
     /// ADR-0021 scope filter. Defaults to "global".
     #[serde(default)]
     pub scope: Option<String>,
     /// ADR-0021 walk mode: "exact" | "ancestors" | "descendants" | "any".
-    /// Defaults to "any" when scope is omitted, "ancestors" otherwise.
+    /// Use exact for one scope only, ancestors to include parent scopes, descendants for child scopes, and any for broad recall.
     #[serde(default)]
     pub scope_walk: Option<String>,
     /// ADR-0023 filter: only return claims written by this `agent_id`.
@@ -141,9 +141,9 @@ pub struct ConsolidateParams {
 pub struct RecordEventParams {
     /// Session identifier for the event stream.
     pub session_id: String,
-    /// Event kind label.
+    /// Stable event label such as user_message, assistant_action, tool_result, or decision.
     pub kind: String,
-    /// Raw event payload.
+    /// Raw session content to preserve for later extraction; use this for context that is not yet a durable claim.
     pub payload: String,
     /// Optional event source.
     #[serde(default)]
