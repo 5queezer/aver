@@ -1,0 +1,19 @@
+problem: Merge and locally install completed Aver MCP/OAuth UX updates
+approach: Reused existing PR #1, updated its title/body to include MCP guidance work, merged with a merge commit, cleaned local Cargo.lock drift, then installed from source with install.sh
+failed_paths:
+  - gh pr create found PR #1 already existed for the branch
+  - Post-merge Cargo.lock had local generated drift and was restored to HEAD before install
+verification:
+  - just check
+  - gh pr view 1 confirmed state MERGED
+  - ./install.sh --from-source
+  - aver --version
+workflow_learning: Before creating a PR from an existing feature branch, check for an open PR and edit/merge it rather than creating a duplicate
+related_files:
+  - README.md
+  - crates/aver-server/src/mcp.rs
+  - crates/aver-server/src/tools.rs
+  - crates/aver-server/tests/mcp_instructions.rs
+  - crates/aver-server/src/consent.rs
+  - crates/aver-server/templates/consent.html
+  - crates/aver-server/templates/error.html
