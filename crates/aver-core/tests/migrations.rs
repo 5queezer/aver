@@ -1631,6 +1631,34 @@ fn candidate_claim_event_id_must_be_positive() {
 }
 
 #[test]
+fn candidate_claim_promoted_claim_id_must_be_positive_when_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let event_id = store
+        .record_event("session-1", "message", "payload", "test")
+        .expect("event insert should succeed");
+    let candidate_id = store
+        .propose_candidate_claim(event_id, "Aver", "uses", "SQLite")
+        .expect("candidate insert should succeed");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "UPDATE candidate_claims
+             SET status = 'PROMOTED', promoted_claim_id = 0
+             WHERE id = ?1",
+            [candidate_id],
+        )
+        .expect_err("candidate claim promoted claim ids must be positive when set");
+    assert!(
+        err.to_string()
+            .contains("candidate_claims.promoted_claim_id must be positive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn observations_source_event_ids_must_be_valid_json_array() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
