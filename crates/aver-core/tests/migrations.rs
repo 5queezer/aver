@@ -409,6 +409,27 @@ fn ontology_extension_parent_must_exist() {
 }
 
 #[test]
+fn ontology_extension_parent_must_not_self_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
+             VALUES ('uses', 'uses', 'agent', 1)",
+            [],
+        )
+        .expect_err("ontology extension parent should not self-reference predicate");
+    assert!(
+        err.to_string()
+            .contains("ontology_extension_log.parent must differ from predicate"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn ontology_extension_predicate_must_exist() {
     let dir = tempfile::tempdir().unwrap();
     let _store = Store::open(dir.path()).expect("open should succeed");
