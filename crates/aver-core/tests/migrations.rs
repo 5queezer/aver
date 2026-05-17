@@ -440,6 +440,33 @@ fn entity_type_closure_child_id_must_be_positive() {
 }
 
 #[test]
+fn entity_type_closure_ancestor_id_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let child_id: i64 = conn
+        .query_row(
+            "SELECT id FROM entity_types WHERE name = 'Thing'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("seeded Thing entity type should exist");
+    let err = conn
+        .execute(
+            "INSERT INTO entity_type_closure (child_id, ancestor_id) VALUES (?1, 0)",
+            [child_id],
+        )
+        .expect_err("entity type closure ancestor ids must be positive");
+    assert!(
+        err.to_string()
+            .contains("entity_type_closure.ancestor_id must be positive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn entity_name_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let _store = Store::open(dir.path()).expect("open should succeed");
