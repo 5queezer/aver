@@ -1777,6 +1777,29 @@ fn observations_source_event_ids_must_be_positive() {
 }
 
 #[test]
+fn observations_source_event_ids_must_not_contain_duplicates() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO observations (id, session_id, content, relevance, source_event_ids,
+                                       agent_id, agent_kind, derivation, ts)
+             VALUES ('dupe-ids', 'session-1', 'bad', 'high', '[1, 1]',
+                     'observer', 'LLM', 'test', 1)",
+            [],
+        )
+        .expect_err("duplicate source_event_ids should be rejected");
+    assert!(
+        err.to_string()
+            .contains("observations.source_event_ids elements must be unique"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn vector_chunk_embedding_json_must_be_null_or_json_array() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
