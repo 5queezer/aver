@@ -1,0 +1,15 @@
+problem: Unknown predicate MCP errors only said the predicate was not in predicate_types or predicate_alias
+action: Added Store::describe_unknown_predicate to render current predicate/alias vocabulary with best-effort suggestions, and enriched AverTools::remember_claim errors while preserving Error::UnknownPredicate{name} API shape
+failed_paths:
+  - Initially expanded Error::UnknownPredicate fields, then reverted after review flagged public API break risk
+verification:
+  - cargo fmt --all -- --check
+  - cargo clippy --all-targets --all-features -- -D warnings
+  - cargo test --all-features
+workflow_learning: Keep structured core errors stable and add user-facing diagnostics at tool/API boundaries when improving error messages
+related_files:
+  - crates/aver-core/src/lib.rs
+  - crates/aver-server/src/tools.rs
+  - crates/aver-core/tests/ontology_enforcement.rs
+  - crates/aver-server/tests/tools.rs
+  - README.md
