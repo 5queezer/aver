@@ -610,6 +610,33 @@ fn fresh_database_has_predicate_closure_table() {
 }
 
 #[test]
+fn predicate_closure_child_id_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let ancestor_id: i64 = conn
+        .query_row(
+            "SELECT id FROM predicate_types WHERE name = 'uses'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("seeded uses predicate type should exist");
+    let err = conn
+        .execute(
+            "INSERT INTO predicate_closure (child_id, ancestor_id) VALUES (0, ?1)",
+            [ancestor_id],
+        )
+        .expect_err("predicate closure child ids must be positive");
+    assert!(
+        err.to_string()
+            .contains("predicate_closure.child_id must be positive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_contradictions_table() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
