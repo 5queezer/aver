@@ -56,7 +56,7 @@ fn unknown_predicate_diagnostic_includes_available_predicates_and_suggestion() {
             "llm_agent",
             AgentKind::Llm,
             "app_server",
-            "requires",
+            "depends_onn",
             "database",
             "llm",
         )
@@ -66,7 +66,7 @@ fn unknown_predicate_diagnostic_includes_available_predicates_and_suggestion() {
         panic!("expected UnknownPredicate, got {err:?}");
     };
 
-    assert_eq!(name, "requires");
+    assert_eq!(name, "depends_onn");
 
     let msg = store.describe_unknown_predicate(&name).unwrap();
     assert!(msg.contains("did you mean `depends_on`?"), "{msg}");
