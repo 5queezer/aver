@@ -166,6 +166,27 @@ fn predicate_alias_created_at_must_be_positive() {
 }
 
 #[test]
+fn fresh_database_has_requires_predicate_alias() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let canonical: String = conn
+        .query_row(
+            "SELECT predicate_types.name
+               FROM predicate_alias
+               JOIN predicate_types ON predicate_types.id = predicate_alias.predicate_id
+              WHERE predicate_alias.alias = 'requires'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("requires alias should exist");
+
+    assert_eq!(canonical, "depends_on");
+}
+
+#[test]
 fn ontology_extension_predicate_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let _store = Store::open(dir.path()).expect("open should succeed");
