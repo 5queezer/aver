@@ -47,6 +47,31 @@ fn remember_claim_tool_writes_claim_and_recall_returns_it() {
 }
 
 #[test]
+fn remember_claim_unknown_predicate_error_lists_vocabulary_and_suggestion() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .remember_claim(RememberClaimParams {
+            subject: "PaymentGateway".to_string(),
+            predicate: "requires".to_string(),
+            object: "StripeSDK".to_string(),
+            source: Some("mcp-test".to_string()),
+            agent_id: Some("llm_agent".to_string()),
+            agent_kind: Some("LLM".to_string()),
+            scope: None,
+        })
+        .expect_err("LLM claims with unknown predicates should explain the vocabulary");
+
+    let msg = err.to_string();
+    assert!(msg.contains("unknown predicate: requires"), "{msg}");
+    assert!(msg.contains("did you mean `depends_on`?"), "{msg}");
+    assert!(msg.contains("available predicates:"), "{msg}");
+    assert!(msg.contains("`depends_on`"), "{msg}");
+    assert!(msg.contains("accepted aliases:"), "{msg}");
+}
+
+#[test]
 fn adr0008_five_tool_surface_covers_claim_graph_lifecycle() {
     let dir = tempfile::tempdir().unwrap();
     let tools = AverTools::open(dir.path()).unwrap();

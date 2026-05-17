@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use aver_core::{
-    AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, NewClaim,
-    Observation, ObservationCoverage, ObservationRecall, ObservationRelevance, PredicateWalk,
-    RecallFilters, ScopeWalk, Store,
+    AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, Error,
+    NewClaim, Observation, ObservationCoverage, ObservationRecall, ObservationRelevance,
+    PredicateWalk, RecallFilters, ScopeWalk, Store,
 };
 use serde::{Deserialize, Serialize};
 
@@ -520,6 +520,23 @@ impl AverTools {
         })
     }
 
+    fn core_error(&self, err: Error) -> anyhow::Error {
+        match err {
+            Error::UnknownPredicate { name } => {
+                let detail = self
+                    .store
+                    .describe_unknown_predicate(&name)
+                    .unwrap_or_else(|vocab_err| {
+                        format!(
+                            "unknown predicate: {name} (not in predicate_types or predicate_alias). failed to load available predicates: {vocab_err}"
+                        )
+                    });
+                anyhow::anyhow!(detail)
+            }
+            other => other.into(),
+        }
+    }
+
     pub fn remember_claim(&self, params: RememberClaimParams) -> anyhow::Result<ClaimView> {
         if params.subject.trim().is_empty() {
             anyhow::bail!("invalid subject: must not be empty");
@@ -538,15 +555,18 @@ impl AverTools {
             .unwrap_or("EXTERNAL_TOOL")
             .parse::<AgentKind>()?;
         let scope = params.scope.as_deref().unwrap_or("global");
-        let id = self.store.add_claim_from_agent_with_scope(
-            agent_id,
-            agent_kind,
-            &params.subject,
-            &params.predicate,
-            &params.object,
-            source,
-            scope,
-        )?;
+        let id = self
+            .store
+            .add_claim_from_agent_with_scope(
+                agent_id,
+                agent_kind,
+                &params.subject,
+                &params.predicate,
+                &params.object,
+                source,
+                scope,
+            )
+            .map_err(|err| self.core_error(err))?;
         Ok(self.store.get_claim(id)?.into())
     }
 

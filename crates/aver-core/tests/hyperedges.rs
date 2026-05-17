@@ -53,7 +53,7 @@ fn hyperedge_predicates_follow_ontology_policy() {
 
     assert!(matches!(
         err,
-        Error::UnknownPredicate { name } if name == "new_extracted_relation"
+        Error::UnknownPredicate { name, .. } if name == "new_extracted_relation"
     ));
     assert!(
         store

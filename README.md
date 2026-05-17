@@ -97,7 +97,7 @@ The design maps to the ADRs:
 - **Continuity blockers** — session summaries mark uncovered ranges explicitly, and pruning refuses to proceed until coverage gaps are resolved by catch-up projection.
 - **Prune markers + audit recall** — pruning emits append-only tombstones in `observations.jsonl`; pruned observations disappear from default views but remain recallable with audit metadata.
 - **Semantic graph** — durable claims/triples in SQLite.
-- **Ontology reasoner** — ADR-0010 entity and predicate hierarchies are seeded on open, materialized into closure tables, and used by graph expansion and path predicate filters so abstract filters such as `depends_on` also match descendant predicates like `calls` and `imports`.
+- **Ontology reasoner** — ADR-0010 entity and predicate hierarchies are seeded on open, materialized into closure tables, and used by graph expansion and path predicate filters so abstract filters such as `depends_on` also match descendant predicates like `calls` and `imports`; tool-facing diagnostics for unknown non-user predicates include the current predicate/alias vocabulary and a best-effort suggestion.
 - **Typed entities** — claim subjects/objects are projected into `entities` with prefix-based types such as `Function:*` and fallback `Thing` for unknown entities.
 - **Vector store** — `vector_chunks` with JSON-serialized embeddings and a `sqlite-vec`/`vec0` ANN table where the bundled extension is available.
 - **Extraction** — Rust Tree-sitter extractor turns source code into structured facts.

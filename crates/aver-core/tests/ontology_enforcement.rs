@@ -23,8 +23,8 @@ fn unknown_predicate_rejected_for_extracted() {
         .expect_err("EXTRACTED writes with unknown predicate must reject");
 
     assert!(
-        matches!(err, Error::UnknownPredicate { ref name } if name == "orchestrates"),
-        "expected UnknownPredicate{{ name: 'orchestrates' }}, got {err:?}"
+        matches!(err, Error::UnknownPredicate { ref name, .. } if name == "orchestrates"),
+        "expected UnknownPredicate for 'orchestrates', got {err:?}"
     );
 
     // No claim row written.
@@ -44,6 +44,37 @@ fn unknown_predicate_rejected_for_extracted() {
         !log.contains("orchestrates"),
         "rejected predicate must not appear in log.jsonl"
     );
+}
+
+#[test]
+fn unknown_predicate_diagnostic_includes_available_predicates_and_suggestion() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .add_claim_from_agent(
+            "llm_agent",
+            AgentKind::Llm,
+            "app_server",
+            "requires",
+            "database",
+            "llm",
+        )
+        .expect_err("LLM writes with unknown predicates should explain the vocabulary");
+
+    let Error::UnknownPredicate { name } = err else {
+        panic!("expected UnknownPredicate, got {err:?}");
+    };
+
+    assert_eq!(name, "requires");
+
+    let msg = store.describe_unknown_predicate(&name).unwrap();
+    assert!(msg.contains("did you mean `depends_on`?"), "{msg}");
+    assert!(msg.contains("available predicates:"), "{msg}");
+    assert!(msg.contains("`depends_on`"), "{msg}");
+    assert!(msg.contains("`uses`"), "{msg}");
+    assert!(msg.contains("accepted aliases:"), "{msg}");
+    assert!(msg.contains("`has-module`"), "{msg}");
 }
 
 #[test]

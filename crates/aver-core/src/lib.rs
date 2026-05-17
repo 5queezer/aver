@@ -223,6 +223,129 @@ fn provenance_for_agent_kind(agent_kind: AgentKind) -> Provenance {
     }
 }
 
+const UNKNOWN_PREDICATE_LIST_LIMIT: usize = 32;
+
+const COMMON_PREDICATE_SUGGESTIONS: &[(&str, &str)] = &[
+    ("requires", "depends_on"),
+    ("require", "depends_on"),
+    ("required", "depends_on"),
+    ("depends", "depends_on"),
+    ("depends-on", "depends_on"),
+    ("dependency", "depends_on"),
+    ("dependencies", "depends_on"),
+];
+
+fn normalize_predicate_name(name: &str) -> String {
+    name.trim()
+        .chars()
+        .map(|ch| match ch {
+            '-' | ' ' => '_',
+            _ => ch.to_ascii_lowercase(),
+        })
+        .collect()
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right_chars = right.chars().collect::<Vec<_>>();
+    let mut previous = (0..=right_chars.len()).collect::<Vec<_>>();
+    let mut current = vec![0; right_chars.len() + 1];
+
+    for (left_index, left_char) in left.chars().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_char) in right_chars.iter().enumerate() {
+            let deletion = previous[right_index + 1] + 1;
+            let insertion = current[right_index] + 1;
+            let substitution = previous[right_index] + usize::from(left_char != *right_char);
+            current[right_index + 1] = deletion.min(insertion).min(substitution);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+
+    previous[right_chars.len()]
+}
+
+fn suggest_unknown_predicate(
+    name: &str,
+    available_predicates: &[String],
+    available_aliases: &[String],
+) -> Option<String> {
+    let normalized = normalize_predicate_name(name);
+    for (misspelling, canonical) in COMMON_PREDICATE_SUGGESTIONS {
+        if normalized == normalize_predicate_name(misspelling)
+            && available_predicates
+                .iter()
+                .any(|predicate| predicate == canonical)
+        {
+            return Some((*canonical).to_string());
+        }
+    }
+
+    let mut best: Option<(&str, usize)> = None;
+    for candidate in available_predicates.iter().chain(available_aliases.iter()) {
+        let candidate_normalized = normalize_predicate_name(candidate);
+        let distance = edit_distance(&normalized, &candidate_normalized);
+        let is_better = match best {
+            None => true,
+            Some((best_candidate, best_distance)) => {
+                distance < best_distance
+                    || (distance == best_distance && candidate.len() < best_candidate.len())
+                    || (distance == best_distance
+                        && candidate.len() == best_candidate.len()
+                        && candidate.as_str() < best_candidate)
+            }
+        };
+        if is_better {
+            best = Some((candidate.as_str(), distance));
+        }
+    }
+
+    best.and_then(|(candidate, distance)| {
+        let threshold = match normalized.len().max(candidate.len()) {
+            0..=4 => 1,
+            5..=8 => 2,
+            _ => 3,
+        };
+        (distance <= threshold).then(|| candidate.to_string())
+    })
+}
+
+fn format_available_values(values: &[String]) -> String {
+    let mut formatted = values
+        .iter()
+        .take(UNKNOWN_PREDICATE_LIST_LIMIT)
+        .map(|value| format!("`{value}`"))
+        .collect::<Vec<_>>();
+    let remaining = values.len().saturating_sub(UNKNOWN_PREDICATE_LIST_LIMIT);
+    if remaining > 0 {
+        formatted.push(format!("… and {remaining} more"));
+    }
+    formatted.join(", ")
+}
+
+fn format_unknown_predicate(
+    name: &str,
+    suggestion: Option<&str>,
+    available_predicates: &[String],
+    available_aliases: &[String],
+) -> String {
+    let mut message =
+        format!("unknown predicate: {name} (not in predicate_types or predicate_alias).");
+    if let Some(suggestion) = suggestion {
+        message.push_str(&format!(" did you mean `{suggestion}`?"));
+    }
+    if !available_predicates.is_empty() {
+        message.push_str(" available predicates: ");
+        message.push_str(&format_available_values(available_predicates));
+        message.push('.');
+    }
+    if !available_aliases.is_empty() {
+        message.push_str(" accepted aliases: ");
+        message.push_str(&format_available_values(available_aliases));
+        message.push('.');
+    }
+    message
+}
+
 impl Store {
     /// Open or create a memory store rooted at `memory_dir`.
     /// The directory is created if it does not exist; migrations are applied.
@@ -491,6 +614,20 @@ impl Store {
         )?)
     }
 
+    /// Build a user-facing diagnostic for an unknown predicate using the
+    /// current runtime ontology tables.
+    pub fn describe_unknown_predicate(&self, predicate: &str) -> Result<String, Error> {
+        let (available_predicates, available_aliases) = self.predicate_vocabulary()?;
+        let suggestion =
+            suggest_unknown_predicate(predicate, &available_predicates, &available_aliases);
+        Ok(format_unknown_predicate(
+            predicate,
+            suggestion.as_deref(),
+            &available_predicates,
+            &available_aliases,
+        ))
+    }
+
     /// ADR-0018: resolve a predicate against `predicate_types.name` and the
     /// `predicate_alias` table.
     ///
@@ -548,6 +685,21 @@ impl Store {
                 })
             }
         }
+    }
+
+    fn predicate_vocabulary(&self) -> Result<(Vec<String>, Vec<String>), Error> {
+        let predicates =
+            self.query_string_column("SELECT name FROM predicate_types ORDER BY name")?;
+        let aliases =
+            self.query_string_column("SELECT alias FROM predicate_alias ORDER BY alias")?;
+        Ok((predicates, aliases))
+    }
+
+    fn query_string_column(&self, sql: &str) -> Result<Vec<String>, Error> {
+        let mut statement = self.conn.prepare(sql)?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Error::Sqlite)
     }
 
     fn infer_entity_type_name(&self, entity: &str) -> Result<String, Error> {
