@@ -2241,3 +2241,25 @@ fn hyperedge_participants_must_not_duplicate_role_entity() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn hyperedge_predicate_must_exist_in_predicate_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO hyperedges (predicate, provenance, confidence, source_refs, created_at, updated_at)
+             VALUES ('unknown_predicate', 'USER_ASSERTED', 1.0, '[\"session-1\"]', 1, 1)",
+            [],
+        )
+        .expect_err("hyperedge predicates should be in predicate_types");
+
+    assert!(
+        err.to_string()
+            .contains("hyperedges.predicate not in predicate_types"),
+        "unexpected error: {err}"
+    );
+}
