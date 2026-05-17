@@ -1948,6 +1948,27 @@ fn observations_source_event_ids_must_not_contain_duplicates() {
 }
 
 #[test]
+fn vector_chunk_claim_id_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
+             VALUES (0, 'bad', 'nomic-embed-text', NULL, 1)",
+            [],
+        )
+        .expect_err("vector chunk claim ids must be positive");
+    assert!(
+        err.to_string()
+            .contains("vector_chunks.claim_id must be positive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn vector_chunk_embedding_json_must_be_null_or_json_array() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
