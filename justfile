@@ -46,6 +46,11 @@ uninstall:
 release:
     cargo build --release --locked -p aver-cli
 
+# Build the release MCP/OAuth server binary
+release-server:
+    cargo build --release --locked -p aver-server
+    tmp="$(mktemp)"; strip -o "${tmp}" "${PWD}/target/release/aver-server"; mv "${tmp}" "${PWD}/target/release/aver-server"
+
 # Create a local release tarball and checksum under target/dist
 dist: release
     mkdir -p target/dist

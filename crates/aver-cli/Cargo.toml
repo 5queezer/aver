@@ -11,7 +11,7 @@ name = "aver"
 path = "src/main.rs"
 
 [dependencies]
-aver-core      = { path = "../aver-core" }
+aver-core      = { path = "../aver-core", default-features = false }
 clap.workspace   = true
 anyhow.workspace = true
 

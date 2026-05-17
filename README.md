@@ -52,7 +52,7 @@ Prerequisites:
 just install
 ```
 
-When run from the Aver git repository, `install.sh` detects the checkout and installs from source. This installs the `aver` CLI to `~/.cargo/bin` by default.
+When run from the Aver git repository, `install.sh` detects the checkout and installs from source. This installs the `aver` CLI to `~/.cargo/bin` by default. For local MCP/OAuth service deployments that execute `target/release/aver-server`, run `just release-server` to build and strip the server binary before restarting the service.
 
 ### Store and recall a claim
 

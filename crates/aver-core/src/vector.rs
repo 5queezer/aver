@@ -6,8 +6,6 @@
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
-
 #[derive(Debug, thiserror::Error)]
 pub enum EmbeddingError {
     #[error("json: {0}")]
@@ -133,29 +131,34 @@ pub fn normalized_cosine_score(left: &[f32], right: &[f32]) -> Option<f32> {
     cosine_similarity(left, right).map(|score| (score + 1.0) / 2.0)
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[cfg(feature = "ollama")]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct OllamaEmbeddingRequest<'a> {
     model: &'a str,
     prompt: &'a str,
 }
 
+#[cfg(feature = "ollama")]
 impl<'a> OllamaEmbeddingRequest<'a> {
     pub fn new(model: &'a str, prompt: &'a str) -> Self {
         Self { model, prompt }
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[cfg(feature = "ollama")]
+#[derive(Debug, Clone, serde::Deserialize, PartialEq)]
 pub struct OllamaEmbeddingResponse {
     pub embedding: Vec<f32>,
 }
 
+#[cfg(feature = "ollama")]
 #[derive(Debug, Clone)]
 pub struct OllamaEmbeddingClient {
     base_url: String,
     model: String,
 }
 
+#[cfg(feature = "ollama")]
 impl OllamaEmbeddingClient {
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
@@ -186,6 +189,7 @@ impl OllamaEmbeddingClient {
     }
 }
 
+#[cfg(feature = "ollama")]
 impl EmbeddingClient for OllamaEmbeddingClient {
     fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
         let response = ureq::post(&self.embeddings_url())

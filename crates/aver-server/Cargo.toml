@@ -12,8 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-askama = "0.12"
-aver-core = { path = "../aver-core" }
+askama = { version = "0.12", default-features = false }
+aver-core = { path = "../aver-core", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 serde_urlencoded = "0.7"
@@ -25,9 +25,9 @@ time.workspace = true
 schemars = "1.0"
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", rev = "a64be231527f923e9f84d4dd7bf3c3bd695ee53e", features = ["server", "macros", "transport-streamable-http-server"] }
 uuid = { version = "1", features = ["v4"] }
-axum = { version = "0.8", features = ["macros"] }
+axum = { version = "0.8", default-features = false, features = ["form", "http1", "json", "macros", "query", "tokio"] }
 http = "1"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", default-features = false, features = ["macros", "net", "rt-multi-thread"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors"] }
 url = "2.5"
