@@ -1919,3 +1919,25 @@ fn vector_chunk_created_at_must_be_positive() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn hyperedge_source_refs_must_not_be_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO hyperedges (predicate, provenance, confidence, source_refs, created_at, updated_at)
+             VALUES ('depends_on', 'USER_ASSERTED', 1.0, '[]', 1, 1)",
+            [],
+        )
+        .expect_err("hyperedges need at least one source reference");
+
+    assert!(
+        err.to_string()
+            .contains("hyperedges.source_refs must not be empty"),
+        "unexpected error: {err}"
+    );
+}
