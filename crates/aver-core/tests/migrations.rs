@@ -1985,3 +1985,25 @@ fn hyperedge_updated_at_must_not_precede_created_at() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn hyperedge_participant_hyperedge_id_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO hyperedge_participants (hyperedge_id, role, entity)
+             VALUES (0, 'source', 'Aver')",
+            [],
+        )
+        .expect_err("hyperedge participants need a positive hyperedge_id");
+
+    assert!(
+        err.to_string()
+            .contains("hyperedge_participants.hyperedge_id must be positive"),
+        "unexpected error: {err}"
+    );
+}
