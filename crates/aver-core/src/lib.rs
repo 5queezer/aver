@@ -225,15 +225,24 @@ fn provenance_for_agent_kind(agent_kind: AgentKind) -> Provenance {
 
 const UNKNOWN_PREDICATE_LIST_LIMIT: usize = 32;
 
-const COMMON_PREDICATE_SUGGESTIONS: &[(&str, &str)] = &[
-    ("requires", "depends_on"),
-    ("require", "depends_on"),
-    ("required", "depends_on"),
-    ("depends", "depends_on"),
-    ("depends-on", "depends_on"),
-    ("dependency", "depends_on"),
-    ("dependencies", "depends_on"),
-];
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct PredicateCandidate {
+    accepted: String,
+    canonical: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct PredicateSuggestion {
+    accepted: String,
+    canonical: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct PredicateVocabulary {
+    predicates: Vec<String>,
+    aliases: Vec<String>,
+    candidates: Vec<PredicateCandidate>,
+}
 
 fn normalize_predicate_name(name: &str) -> String {
     name.trim()
@@ -266,46 +275,40 @@ fn edit_distance(left: &str, right: &str) -> usize {
 
 fn suggest_unknown_predicate(
     name: &str,
-    available_predicates: &[String],
-    available_aliases: &[String],
-) -> Option<String> {
+    candidates: &[PredicateCandidate],
+) -> Option<PredicateSuggestion> {
     let normalized = normalize_predicate_name(name);
-    for (misspelling, canonical) in COMMON_PREDICATE_SUGGESTIONS {
-        if normalized == normalize_predicate_name(misspelling)
-            && available_predicates
-                .iter()
-                .any(|predicate| predicate == canonical)
-        {
-            return Some((*canonical).to_string());
-        }
-    }
+    let mut best: Option<(&PredicateCandidate, usize)> = None;
 
-    let mut best: Option<(&str, usize)> = None;
-    for candidate in available_predicates.iter().chain(available_aliases.iter()) {
-        let candidate_normalized = normalize_predicate_name(candidate);
+    for candidate in candidates {
+        let candidate_normalized = normalize_predicate_name(&candidate.accepted);
         let distance = edit_distance(&normalized, &candidate_normalized);
         let is_better = match best {
             None => true,
             Some((best_candidate, best_distance)) => {
                 distance < best_distance
-                    || (distance == best_distance && candidate.len() < best_candidate.len())
                     || (distance == best_distance
-                        && candidate.len() == best_candidate.len()
-                        && candidate.as_str() < best_candidate)
+                        && candidate.accepted.len() < best_candidate.accepted.len())
+                    || (distance == best_distance
+                        && candidate.accepted.len() == best_candidate.accepted.len()
+                        && candidate.accepted < best_candidate.accepted)
             }
         };
         if is_better {
-            best = Some((candidate.as_str(), distance));
+            best = Some((candidate, distance));
         }
     }
 
     best.and_then(|(candidate, distance)| {
-        let threshold = match normalized.len().max(candidate.len()) {
+        let threshold = match normalized.len().max(candidate.accepted.len()) {
             0..=4 => 1,
             5..=8 => 2,
             _ => 3,
         };
-        (distance <= threshold).then(|| candidate.to_string())
+        (distance <= threshold).then(|| PredicateSuggestion {
+            accepted: candidate.accepted.clone(),
+            canonical: candidate.canonical.clone(),
+        })
     })
 }
 
@@ -324,14 +327,20 @@ fn format_available_values(values: &[String]) -> String {
 
 fn format_unknown_predicate(
     name: &str,
-    suggestion: Option<&str>,
+    suggestion: Option<&PredicateSuggestion>,
     available_predicates: &[String],
     available_aliases: &[String],
 ) -> String {
     let mut message =
         format!("unknown predicate: {name} (not in predicate_types or predicate_alias).");
     if let Some(suggestion) = suggestion {
-        message.push_str(&format!(" did you mean `{suggestion}`?"));
+        match suggestion.canonical.as_deref() {
+            Some(canonical) if canonical != suggestion.accepted => message.push_str(&format!(
+                " did you mean `{}` (alias for `{canonical}`)?",
+                suggestion.accepted
+            )),
+            _ => message.push_str(&format!(" did you mean `{}`?", suggestion.accepted)),
+        }
     }
     if !available_predicates.is_empty() {
         message.push_str(" available predicates: ");
@@ -467,16 +476,39 @@ impl Store {
             .query_row("SELECT COUNT(*) FROM vector_index", [], |r| r.get(0))?)
     }
 
+    fn canonical_predicate_name(&self, predicate: &str) -> Result<Option<String>, Error> {
+        if self.predicate_type_id(predicate)?.is_some() {
+            return Ok(Some(predicate.to_string()));
+        }
+        self.conn
+            .query_row(
+                "SELECT predicate_types.name
+                   FROM predicate_alias
+                   JOIN predicate_types ON predicate_types.id = predicate_alias.predicate_id
+                  WHERE predicate_alias.alias = ?1",
+                [predicate],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Error::Sqlite)
+    }
+
     pub fn predicate_implies(&self, predicate: &str, ancestor: &str) -> Result<bool, Error> {
         validate_claim_field("predicate", predicate)?;
         validate_claim_field("predicate", ancestor)?;
-        if predicate == ancestor {
-            return Ok(true);
-        }
-        let Some(predicate_id) = self.predicate_type_id(predicate)? else {
+        let Some(predicate_name) = self.canonical_predicate_name(predicate)? else {
             return Ok(false);
         };
-        let Some(ancestor_id) = self.predicate_type_id(ancestor)? else {
+        let Some(ancestor_name) = self.canonical_predicate_name(ancestor)? else {
+            return Ok(false);
+        };
+        if predicate_name == ancestor_name {
+            return Ok(true);
+        }
+        let Some(predicate_id) = self.predicate_type_id(&predicate_name)? else {
+            return Ok(false);
+        };
+        let Some(ancestor_id) = self.predicate_type_id(&ancestor_name)? else {
             return Ok(false);
         };
         Ok(self
@@ -539,6 +571,11 @@ impl Store {
         let mut allowed = HashSet::new();
         for predicate in predicates {
             allowed.insert((*predicate).to_string());
+            let Some(canonical) = self.canonical_predicate_name(predicate)? else {
+                continue;
+            };
+            allowed.insert(canonical.clone());
+
             let mut stmt = self.conn.prepare(
                 "SELECT child.name
                    FROM predicate_types child
@@ -547,9 +584,24 @@ impl Store {
                   WHERE ancestor.name = ?1
                   ORDER BY child.id",
             )?;
-            let rows = stmt.query_map([*predicate], |row| row.get::<_, String>(0))?;
-            for row in rows {
-                allowed.insert(row?);
+            let rows = stmt.query_map([canonical.as_str()], |row| row.get::<_, String>(0))?;
+            let child_names = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+            drop(stmt);
+
+            for child_name in child_names {
+                allowed.insert(child_name.clone());
+                let mut alias_stmt = self.conn.prepare(
+                    "SELECT alias
+                       FROM predicate_alias
+                       JOIN predicate_types ON predicate_types.id = predicate_alias.predicate_id
+                      WHERE predicate_types.name = ?1
+                      ORDER BY alias",
+                )?;
+                let alias_rows =
+                    alias_stmt.query_map([child_name.as_str()], |row| row.get::<_, String>(0))?;
+                for alias in alias_rows {
+                    allowed.insert(alias?);
+                }
             }
         }
         Ok(allowed)
@@ -617,14 +669,13 @@ impl Store {
     /// Build a user-facing diagnostic for an unknown predicate using the
     /// current runtime ontology tables.
     pub fn describe_unknown_predicate(&self, predicate: &str) -> Result<String, Error> {
-        let (available_predicates, available_aliases) = self.predicate_vocabulary()?;
-        let suggestion =
-            suggest_unknown_predicate(predicate, &available_predicates, &available_aliases);
+        let vocabulary = self.predicate_vocabulary()?;
+        let suggestion = suggest_unknown_predicate(predicate, &vocabulary.candidates);
         Ok(format_unknown_predicate(
             predicate,
-            suggestion.as_deref(),
-            &available_predicates,
-            &available_aliases,
+            suggestion.as_ref(),
+            &vocabulary.predicates,
+            &vocabulary.aliases,
         ))
     }
 
@@ -687,17 +738,53 @@ impl Store {
         }
     }
 
-    fn predicate_vocabulary(&self) -> Result<(Vec<String>, Vec<String>), Error> {
+    fn predicate_vocabulary(&self) -> Result<PredicateVocabulary, Error> {
         let predicates =
             self.query_string_column("SELECT name FROM predicate_types ORDER BY name")?;
-        let aliases =
-            self.query_string_column("SELECT alias FROM predicate_alias ORDER BY alias")?;
-        Ok((predicates, aliases))
+        let alias_rows = self.query_alias_rows()?;
+        let aliases = alias_rows
+            .iter()
+            .map(|(alias, _canonical)| alias.clone())
+            .collect::<Vec<_>>();
+        let mut candidates = predicates
+            .iter()
+            .map(|predicate| PredicateCandidate {
+                accepted: predicate.clone(),
+                canonical: None,
+            })
+            .collect::<Vec<_>>();
+        candidates.extend(
+            alias_rows
+                .iter()
+                .map(|(alias, canonical)| PredicateCandidate {
+                    accepted: alias.clone(),
+                    canonical: Some(canonical.clone()),
+                }),
+        );
+        Ok(PredicateVocabulary {
+            predicates,
+            aliases,
+            candidates,
+        })
     }
 
     fn query_string_column(&self, sql: &str) -> Result<Vec<String>, Error> {
         let mut statement = self.conn.prepare(sql)?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Error::Sqlite)
+    }
+
+    fn query_alias_rows(&self) -> Result<Vec<(String, String)>, Error> {
+        let mut statement = self.conn.prepare(
+            "SELECT predicate_alias.alias, predicate_types.name
+               FROM predicate_alias
+               JOIN predicate_types ON predicate_types.id = predicate_alias.predicate_id
+              ORDER BY predicate_alias.alias",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Error::Sqlite)
     }

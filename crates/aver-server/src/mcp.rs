@@ -1,6 +1,6 @@
 use std::{
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 use rmcp::{
@@ -137,6 +137,16 @@ impl AverMcpService {
         })
     }
 
+    fn lock_tools(&self) -> Result<MutexGuard<'_, AverTools>, McpError> {
+        self.tools.lock().map_err(|err| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("memory tool lock poisoned: {err}"),
+                None,
+            )
+        })
+    }
+
     #[tool(
         description = "Store one explicit, stable long-term fact as a durable claim. Prefer record_event when durability is uncertain; never store secrets or transient chat."
     )]
@@ -146,35 +156,17 @@ impl AverMcpService {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "remember_claim")?;
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .remember_claim(CoreRememberClaimParams {
-                subject: params.subject,
-                predicate: params.predicate,
-                object: params.object,
-                source: params.source,
-                agent_id: params.agent_id,
-                agent_kind: params.agent_kind,
-                scope: params.scope.or_else(|| Some(request_scope(&ctx).scope)),
-            });
-        match result {
-            Ok(claim) => Ok(CallToolResult::success(vec![Content::text(
-                serde_json::to_string_pretty(&claim).unwrap_or_default(),
-            )])),
-            Err(err) => Err(McpError::new(
-                ErrorCode::INTERNAL_ERROR,
-                format!("remember_claim failed: {err}"),
-                None,
-            )),
-        }
+        let tools = self.lock_tools()?;
+        let result = tools.remember_claim(CoreRememberClaimParams {
+            subject: params.subject,
+            predicate: params.predicate,
+            object: params.object,
+            source: params.source,
+            agent_id: params.agent_id,
+            agent_kind: params.agent_kind,
+            scope: params.scope.or_else(|| Some(request_scope(&ctx).scope)),
+        });
+        json_tool_result(&tools, result, "remember_claim")
     }
 
     #[tool(
@@ -189,18 +181,9 @@ impl AverMcpService {
         if params.scope.is_none() {
             params.scope = Some(request_scope(&ctx).scope);
         }
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .add_triple(params);
-        json_tool_result(result, "add_triple")
+        let tools = self.lock_tools()?;
+        let result = tools.add_triple(params);
+        json_tool_result(&tools, result, "add_triple")
     }
 
     #[tool(
@@ -219,18 +202,9 @@ impl AverMcpService {
         if params.scope.is_none() {
             params.scope = Some(resolved.scope);
         }
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .expand(params);
-        json_tool_result(result, "expand")
+        let tools = self.lock_tools()?;
+        let result = tools.expand(params);
+        json_tool_result(&tools, result, "expand")
     }
 
     #[tool(
@@ -242,18 +216,9 @@ impl AverMcpService {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "contradict")?;
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .contradict(params);
-        json_tool_result(result, "contradict")
+        let tools = self.lock_tools()?;
+        let result = tools.contradict(params);
+        json_tool_result(&tools, result, "contradict")
     }
 
     #[tool(
@@ -265,18 +230,9 @@ impl AverMcpService {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "consolidate")?;
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .consolidate(params);
-        json_tool_result(result, "consolidate")
+        let tools = self.lock_tools()?;
+        let result = tools.consolidate(params);
+        json_tool_result(&tools, result, "consolidate")
     }
 
     #[tool(
@@ -291,18 +247,9 @@ impl AverMcpService {
         if params.scope.is_none() {
             params.scope = Some(request_scope(&ctx).scope);
         }
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .record_event(params);
-        json_tool_result(result, "record_event")
+        let tools = self.lock_tools()?;
+        let result = tools.record_event(params);
+        json_tool_result(&tools, result, "record_event")
     }
 
     #[tool(
@@ -314,18 +261,9 @@ impl AverMcpService {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "should_extract_memories")?;
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .should_extract_memories(params);
-        json_tool_result(result, "should_extract_memories")
+        let tools = self.lock_tools()?;
+        let result = tools.should_extract_memories(params);
+        json_tool_result(&tools, result, "should_extract_memories")
     }
 
     #[tool(
@@ -340,18 +278,9 @@ impl AverMcpService {
         if params.scope.is_none() {
             params.scope = Some(request_scope(&ctx).scope);
         }
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .propose_candidate_claim(params);
-        json_tool_result(result, "propose_candidate_claim")
+        let tools = self.lock_tools()?;
+        let result = tools.propose_candidate_claim(params);
+        json_tool_result(&tools, result, "propose_candidate_claim")
     }
 
     #[tool(
@@ -363,18 +292,9 @@ impl AverMcpService {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "list_candidate_claims")?;
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .list_candidate_claims(params);
-        json_tool_result(result, "list_candidate_claims")
+        let tools = self.lock_tools()?;
+        let result = tools.list_candidate_claims(params);
+        json_tool_result(&tools, result, "list_candidate_claims")
     }
 
     #[tool(
@@ -386,18 +306,9 @@ impl AverMcpService {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "promote_candidate_claim")?;
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .promote_candidate_claim(params);
-        json_tool_result(result, "promote_candidate_claim")
+        let tools = self.lock_tools()?;
+        let result = tools.promote_candidate_claim(params);
+        json_tool_result(&tools, result, "promote_candidate_claim")
     }
 
     #[tool(
@@ -409,18 +320,9 @@ impl AverMcpService {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "reject_candidate_claim")?;
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .reject_candidate_claim(params);
-        json_tool_result(result, "reject_candidate_claim")
+        let tools = self.lock_tools()?;
+        let result = tools.reject_candidate_claim(params);
+        json_tool_result(&tools, result, "reject_candidate_claim")
     }
 
     #[tool(
@@ -435,18 +337,9 @@ impl AverMcpService {
         if params.scope.is_none() {
             params.scope = Some(request_scope(&ctx).scope);
         }
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .record_observation(params);
-        json_tool_result(result, "record_observation")
+        let tools = self.lock_tools()?;
+        let result = tools.record_observation(params);
+        json_tool_result(&tools, result, "record_observation")
     }
 
     #[tool(
@@ -458,18 +351,9 @@ impl AverMcpService {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "recall_observation")?;
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .recall_observation(params);
-        json_tool_result(result, "recall_observation")
+        let tools = self.lock_tools()?;
+        let result = tools.recall_observation(params);
+        json_tool_result(&tools, result, "recall_observation")
     }
 
     #[tool(
@@ -481,18 +365,9 @@ impl AverMcpService {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "observation_coverage")?;
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .observation_coverage(params);
-        json_tool_result(result, "observation_coverage")
+        let tools = self.lock_tools()?;
+        let result = tools.observation_coverage(params);
+        json_tool_result(&tools, result, "observation_coverage")
     }
 
     #[tool(
@@ -504,18 +379,9 @@ impl AverMcpService {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "assemble_compaction_summary")?;
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .assemble_compaction_summary(params);
-        json_tool_result(result, "assemble_compaction_summary")
+        let tools = self.lock_tools()?;
+        let result = tools.assemble_compaction_summary(params);
+        json_tool_result(&tools, result, "assemble_compaction_summary")
     }
 
     #[tool(
@@ -527,18 +393,9 @@ impl AverMcpService {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "add_vector_chunk")?;
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .add_vector_chunk(params);
-        json_tool_result(result, "add_vector_chunk")
+        let tools = self.lock_tools()?;
+        let result = tools.add_vector_chunk(params);
+        json_tool_result(&tools, result, "add_vector_chunk")
     }
 
     #[tool(
@@ -552,18 +409,9 @@ impl AverMcpService {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "retire_claim")?;
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .retire_claim(params);
-        json_tool_result(result, "retire_claim")
+        let tools = self.lock_tools()?;
+        let result = tools.retire_claim(params);
+        json_tool_result(&tools, result, "retire_claim")
     }
 
     #[tool(
@@ -575,54 +423,37 @@ impl AverMcpService {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "recall")?;
-        let result = self
-            .tools
-            .lock()
-            .map_err(|err| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("memory tool lock poisoned: {err}"),
-                    None,
-                )
-            })?
-            .recall({
-                let resolved = request_scope(&ctx);
-                let walk = params.scope_walk.clone().or_else(|| {
-                    if params.scope.is_none() {
-                        Some(resolved.default_walk.as_str().to_string())
-                    } else {
-                        None
-                    }
-                });
-                CoreRecallParams {
-                    query: params.query,
-                    alpha: params.alpha,
-                    hops: params.hops,
-                    top_k: Some(params.top_k),
-                    scope: params.scope.or(Some(resolved.scope)),
-                    scope_walk: walk,
-                    agent_id: None,
-                    agent_kind: None,
-                    predicate: None,
-                    predicate_walk: None,
-                    min_confidence: None,
-                    status: None,
+        let tools = self.lock_tools()?;
+        let result = tools.recall({
+            let resolved = request_scope(&ctx);
+            let walk = params.scope_walk.clone().or_else(|| {
+                if params.scope.is_none() {
+                    Some(resolved.default_walk.as_str().to_string())
+                } else {
+                    None
                 }
             });
-        match result {
-            Ok(claims) => Ok(CallToolResult::success(vec![Content::text(
-                serde_json::to_string_pretty(&claims).unwrap_or_default(),
-            )])),
-            Err(err) => Err(McpError::new(
-                ErrorCode::INTERNAL_ERROR,
-                format!("recall failed: {err}"),
-                None,
-            )),
-        }
+            CoreRecallParams {
+                query: params.query,
+                alpha: params.alpha,
+                hops: params.hops,
+                top_k: Some(params.top_k),
+                scope: params.scope.or(Some(resolved.scope)),
+                scope_walk: walk,
+                agent_id: None,
+                agent_kind: None,
+                predicate: None,
+                predicate_walk: None,
+                min_confidence: None,
+                status: None,
+            }
+        });
+        json_tool_result(&tools, result, "recall")
     }
 }
 
 fn json_tool_result<T: serde::Serialize>(
+    tools: &AverTools,
     result: anyhow::Result<T>,
     tool_name: &str,
 ) -> Result<CallToolResult, McpError> {
@@ -632,7 +463,7 @@ fn json_tool_result<T: serde::Serialize>(
         )])),
         Err(err) => Err(McpError::new(
             ErrorCode::INTERNAL_ERROR,
-            format!("{tool_name} failed: {err}"),
+            format!("{tool_name} failed: {}", tools.describe_error(&err)),
             None,
         )),
     }
@@ -703,5 +534,38 @@ impl ServerHandler for AverMcpService {
                     .with_icons(vec![Icon::new(icon_url).with_mime_type("image/svg+xml")]),
             )
             .with_instructions(mcp_tool_instructions())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_tool_result_enriches_unknown_predicate_for_any_tool_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = AverTools::open(dir.path()).unwrap();
+
+        let err = json_tool_result::<serde_json::Value>(
+            &tools,
+            Err(aver_core::Error::UnknownPredicate {
+                name: "requirse".to_string(),
+            }
+            .into()),
+            "add_triple",
+        )
+        .expect_err("unknown predicate should become an MCP error");
+
+        let msg = err.message.to_string();
+        assert!(
+            msg.contains("add_triple failed: unknown predicate: requirse"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("did you mean `requires` (alias for `depends_on`)?"),
+            "{msg}"
+        );
+        assert!(msg.contains("available predicates:"), "{msg}");
+        assert!(msg.contains("accepted aliases:"), "{msg}");
     }
 }
