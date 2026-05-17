@@ -2184,3 +2184,25 @@ fn hyperedge_source_refs_must_not_contain_duplicates() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn observation_prune_marker_ids_must_not_contain_duplicates() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO observation_prune_markers (id, session_id, pruned_observation_ids, ts)
+             VALUES ('marker-1', 'session-1', '[\"obs-1\", \"obs-1\"]', 1)",
+            [],
+        )
+        .expect_err("observation prune marker ids should not contain duplicates");
+
+    assert!(
+        err.to_string()
+            .contains("observation_prune_markers.pruned_observation_ids elements must be unique"),
+        "unexpected error: {err}"
+    );
+}
