@@ -206,6 +206,27 @@ fn predicate_alias_created_at_must_be_positive() {
 }
 
 #[test]
+fn predicate_alias_predicate_id_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO predicate_alias (alias, predicate_id, created_at, note)
+             VALUES ('invalid_predicate', 0, 1, 'test')",
+            [],
+        )
+        .expect_err("predicate alias predicate ids must be positive");
+    assert!(
+        err.to_string()
+            .contains("predicate_alias.predicate_id must be positive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_requires_predicate_alias() {
     let dir = tempfile::tempdir().unwrap();
     let _store = Store::open(dir.path()).expect("open should succeed");
