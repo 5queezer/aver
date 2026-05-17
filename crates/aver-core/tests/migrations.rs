@@ -597,6 +597,27 @@ fn contradiction_new_claim_must_not_equal_claim() {
 }
 
 #[test]
+fn contradiction_claim_id_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO contradictions (claim_id, reason, created_at)
+             VALUES (0, 'unsupported by source', 1)",
+            [],
+        )
+        .expect_err("contradiction claim ids must be positive");
+    assert!(
+        err.to_string()
+            .contains("contradictions.claim_id must be positive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_observations_table() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
