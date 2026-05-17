@@ -78,6 +78,71 @@ fn unknown_predicate_diagnostic_includes_available_predicates_and_suggestion() {
 }
 
 #[test]
+fn requires_alias_resolves_to_depends_on_for_claims_and_graph_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let claim_id = store
+        .add_claim_from_agent(
+            "llm_agent",
+            AgentKind::Llm,
+            "app_server",
+            "requires",
+            "database",
+            "llm",
+        )
+        .expect("requires should be accepted as an alias for depends_on");
+
+    let claim = store.get_claim(claim_id).unwrap();
+    assert_eq!(claim.predicate, "requires");
+    assert!(store.predicate_implies("requires", "depends_on").unwrap());
+    assert!(store.predicate_implies("requires", "relates_to").unwrap());
+
+    let expansion = store
+        .expand("app_server", 1, Some(&["depends_on"]))
+        .expect("depends_on filter should include requires alias edges");
+    assert!(
+        expansion
+            .edges
+            .iter()
+            .any(|edge| edge.id == claim_id && edge.predicate == "requires"),
+        "depends_on graph filter should include the requires alias edge: {expansion:?}"
+    );
+}
+
+#[test]
+fn unknown_predicate_diagnostic_uses_fuzzy_alias_aware_suggestions() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store
+        .add_claim_from_agent(
+            "llm_agent",
+            AgentKind::Llm,
+            "app_server",
+            "requirse",
+            "database",
+            "llm",
+        )
+        .expect_err("misspelled aliases should still reject");
+
+    let Error::UnknownPredicate { name } = err else {
+        panic!("expected UnknownPredicate, got {err:?}");
+    };
+    assert_eq!(name, "requirse");
+
+    let msg = store.describe_unknown_predicate(&name).unwrap();
+    assert!(
+        msg.contains("did you mean `requires` (alias for `depends_on`)?"),
+        "{msg}"
+    );
+    assert!(msg.contains("available predicates:"), "{msg}");
+    assert!(msg.contains("`depends_on`"), "{msg}");
+    assert!(msg.contains("accepted aliases:"), "{msg}");
+    assert!(msg.contains("`requires`"), "{msg}");
+}
+
+#[test]
 fn unknown_predicate_auto_added_for_user_asserted() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
