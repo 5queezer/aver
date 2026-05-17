@@ -2029,3 +2029,25 @@ fn observation_prune_marker_ts_must_be_positive() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn observation_prune_marker_ids_must_be_json_array() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO observation_prune_markers (id, session_id, pruned_observation_ids, ts)
+             VALUES ('marker-1', 'session-1', '{\"obs\":1}', 1)",
+            [],
+        )
+        .expect_err("observation prune marker ids should be a JSON array");
+
+    assert!(
+        err.to_string()
+            .contains("observation_prune_markers.pruned_observation_ids must be a JSON array"),
+        "unexpected error: {err}"
+    );
+}
