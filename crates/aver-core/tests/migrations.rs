@@ -2095,3 +2095,25 @@ fn observation_prune_marker_session_id_must_not_be_blank() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn observation_prune_marker_id_must_not_be_blank() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO observation_prune_markers (id, session_id, pruned_observation_ids, ts)
+             VALUES (' ', 'session-1', '[\"obs-1\"]', 1)",
+            [],
+        )
+        .expect_err("observation prune marker id should not be blank");
+
+    assert!(
+        err.to_string()
+            .contains("observation_prune_markers.id must not be blank"),
+        "unexpected error: {err}"
+    );
+}
