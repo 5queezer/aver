@@ -130,6 +130,26 @@ fn predicate_type_parent_must_not_self_reference() {
 }
 
 #[test]
+fn predicate_type_parent_must_be_positive_when_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO predicate_types (name, parent_id) VALUES ('invalid_parent', 0)",
+            [],
+        )
+        .expect_err("predicate type parent ids must be positive when set");
+    assert!(
+        err.to_string()
+            .contains("predicate_types.parent_id must be positive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn predicate_alias_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let _store = Store::open(dir.path()).expect("open should succeed");
