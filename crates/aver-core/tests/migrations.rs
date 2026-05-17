@@ -62,6 +62,26 @@ fn entity_type_parent_must_not_self_reference() {
 }
 
 #[test]
+fn entity_type_parent_must_be_positive_when_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO entity_types (name, parent_id) VALUES ('InvalidParent', 0)",
+            [],
+        )
+        .expect_err("entity type parent ids must be positive when set");
+    assert!(
+        err.to_string()
+            .contains("entity_types.parent_id must be positive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_predicate_types_table() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
