@@ -520,21 +520,18 @@ impl AverTools {
         })
     }
 
-    fn core_error(&self, err: Error) -> anyhow::Error {
-        match err {
-            Error::UnknownPredicate { name } => {
-                let detail = self
-                    .store
-                    .describe_unknown_predicate(&name)
-                    .unwrap_or_else(|vocab_err| {
-                        format!(
-                            "unknown predicate: {name} (not in predicate_types or predicate_alias). failed to load available predicates: {vocab_err}"
-                        )
-                    });
-                anyhow::anyhow!(detail)
-            }
-            other => other.into(),
+    pub fn describe_error(&self, err: &anyhow::Error) -> String {
+        if let Some(Error::UnknownPredicate { name }) = err.downcast_ref::<Error>() {
+            return self
+                .store
+                .describe_unknown_predicate(name)
+                .unwrap_or_else(|vocab_err| {
+                    format!(
+                        "unknown predicate: {name} (not in predicate_types or predicate_alias). failed to load available predicates: {vocab_err}"
+                    )
+                });
         }
+        err.to_string()
     }
 
     pub fn remember_claim(&self, params: RememberClaimParams) -> anyhow::Result<ClaimView> {
@@ -555,18 +552,15 @@ impl AverTools {
             .unwrap_or("EXTERNAL_TOOL")
             .parse::<AgentKind>()?;
         let scope = params.scope.as_deref().unwrap_or("global");
-        let id = self
-            .store
-            .add_claim_from_agent_with_scope(
-                agent_id,
-                agent_kind,
-                &params.subject,
-                &params.predicate,
-                &params.object,
-                source,
-                scope,
-            )
-            .map_err(|err| self.core_error(err))?;
+        let id = self.store.add_claim_from_agent_with_scope(
+            agent_id,
+            agent_kind,
+            &params.subject,
+            &params.predicate,
+            &params.object,
+            source,
+            scope,
+        )?;
         Ok(self.store.get_claim(id)?.into())
     }
 
