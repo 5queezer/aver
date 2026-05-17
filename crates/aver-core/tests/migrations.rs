@@ -2117,3 +2117,25 @@ fn observation_prune_marker_id_must_not_be_blank() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn hyperedge_source_refs_elements_must_be_nonblank_strings() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO hyperedges (predicate, provenance, confidence, source_refs, created_at, updated_at)
+             VALUES ('depends_on', 'USER_ASSERTED', 1.0, '[\"session-1\", \" \" ]', 1, 1)",
+            [],
+        )
+        .expect_err("hyperedge source refs should contain nonblank strings");
+
+    assert!(
+        err.to_string()
+            .contains("hyperedges.source_refs elements must be nonblank strings"),
+        "unexpected error: {err}"
+    );
+}
