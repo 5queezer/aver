@@ -1963,3 +1963,25 @@ fn hyperedge_predicate_must_not_be_blank() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn hyperedge_updated_at_must_not_precede_created_at() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO hyperedges (predicate, provenance, confidence, source_refs, created_at, updated_at)
+             VALUES ('depends_on', 'USER_ASSERTED', 1.0, '[\"session-1\"]', 10, 9)",
+            [],
+        )
+        .expect_err("hyperedge updates must not predate creation");
+
+    assert!(
+        err.to_string()
+            .contains("hyperedges.updated_at must be >= created_at"),
+        "unexpected error: {err}"
+    );
+}
