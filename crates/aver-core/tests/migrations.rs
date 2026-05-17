@@ -1483,6 +1483,27 @@ fn candidate_claim_created_at_must_be_positive() {
 }
 
 #[test]
+fn candidate_claim_event_id_must_be_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "INSERT INTO candidate_claims (event_id, subject, predicate, object, created_at)
+             VALUES (0, 'Aver', 'uses', 'SQLite', 1)",
+            [],
+        )
+        .expect_err("candidate claim event ids must be positive");
+    assert!(
+        err.to_string()
+            .contains("candidate_claims.event_id must be positive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn observations_source_event_ids_must_be_valid_json_array() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
