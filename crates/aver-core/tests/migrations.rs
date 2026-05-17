@@ -227,6 +227,34 @@ fn predicate_alias_predicate_id_must_be_positive() {
 }
 
 #[test]
+fn predicate_alias_note_must_not_be_blank_when_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let predicate_id: i64 = conn
+        .query_row(
+            "SELECT id FROM predicate_types WHERE name = 'uses'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("seeded predicate should exist");
+    let err = conn
+        .execute(
+            "INSERT INTO predicate_alias (alias, predicate_id, created_at, note)
+             VALUES ('uses_blank_note', ?1, 1, '   ')",
+            [predicate_id],
+        )
+        .expect_err("blank predicate alias notes should be rejected when set");
+    assert!(
+        err.to_string()
+            .contains("predicate_alias.note must be NULL or nonblank"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn fresh_database_has_requires_predicate_alias() {
     let dir = tempfile::tempdir().unwrap();
     let _store = Store::open(dir.path()).expect("open should succeed");
