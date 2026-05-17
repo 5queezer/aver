@@ -895,6 +895,29 @@ fn claims_source_refs_text_elements_must_not_be_blank() {
 }
 
 #[test]
+fn claims_source_refs_must_not_contain_duplicates() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+    let valid_id = store
+        .add_claim("Aver", "uses", "SQLite", "test")
+        .expect("valid source_refs produced by Store should insert");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let err = conn
+        .execute(
+            "UPDATE claims SET source_refs = '[\"test\", \"test\"]' WHERE id = ?1",
+            [valid_id],
+        )
+        .expect_err("duplicate source_refs should be rejected");
+    assert!(
+        err.to_string()
+            .contains("claims.source_refs elements must be unique"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn claims_agent_id_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
