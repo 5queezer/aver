@@ -21,6 +21,9 @@ fn mcp_instructions_are_a_progressive_discovery_card() {
         "Progressively load event-to-claim tools only when converting raw events into reviewed durable claims: should_extract_memories, propose_candidate_claim, list_candidate_claims, promote_candidate_claim, reject_candidate_claim."
     ));
     assert!(instructions.contains(
+        "unknown-predicate errors include fuzzy/semantic suggestions, accepted aliases, and a retry hint"
+    ));
+    assert!(instructions.contains(
         "Progressively load graph navigation tools only after recall returns an entity or you already know an anchor: expand; use add_triple instead of remember_claim only when confidence/source control is required."
     ));
     assert!(instructions.contains(

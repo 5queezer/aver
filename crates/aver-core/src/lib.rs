@@ -273,11 +273,35 @@ fn edit_distance(left: &str, right: &str) -> usize {
     previous[right_chars.len()]
 }
 
+fn semantic_predicate_hint(normalized: &str) -> Option<&'static str> {
+    match normalized {
+        "deprioritizes" | "prioritizes" | "prioritises" | "favors" | "favours" | "likes"
+        | "preference" => Some("prefers"),
+        "requires" | "needs" | "needed_by" | "depends" | "depends_upon" => Some("depends_on"),
+        "about" | "related_to" | "associated_with" => Some("relates_to"),
+        "owns" | "owner" | "owned" => Some("owns"),
+        "tests" | "tested_by" | "validates" => Some("tests"),
+        "fixes" | "resolves" | "repairs" => Some("fixes"),
+        _ => None,
+    }
+}
+
 fn suggest_unknown_predicate(
     name: &str,
     candidates: &[PredicateCandidate],
 ) -> Option<PredicateSuggestion> {
     let normalized = normalize_predicate_name(name);
+    if let Some(semantic_hint) = semantic_predicate_hint(&normalized)
+        && let Some(candidate) = candidates
+            .iter()
+            .find(|candidate| candidate.accepted == semantic_hint)
+    {
+        return Some(PredicateSuggestion {
+            accepted: candidate.accepted.clone(),
+            canonical: candidate.canonical.clone(),
+        });
+    }
+
     let mut best: Option<(&PredicateCandidate, usize)> = None;
 
     for candidate in candidates {
@@ -351,6 +375,14 @@ fn format_unknown_predicate(
         message.push_str(" accepted aliases: ");
         message.push_str(&format_available_values(available_aliases));
         message.push('.');
+    }
+    if let Some(suggestion) = suggestion {
+        message.push_str(&format!(
+            " retry hint: safe to retry with predicate `{}`; do not invent predicates or silently rewrite the stored claim.",
+            suggestion.accepted
+        ));
+    } else {
+        message.push_str(" retry hint: choose one available predicate or alias, then retry; `relates_to` is the safest generic fallback when no precise predicate fits.");
     }
     message
 }

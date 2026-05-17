@@ -73,6 +73,39 @@ fn remember_claim_unknown_predicate_typo_lists_vocabulary_and_suggestion() {
     assert!(msg.contains("`depends_on`"), "{msg}");
     assert!(msg.contains("accepted aliases:"), "{msg}");
     assert!(msg.contains("`requires`"), "{msg}");
+    assert!(msg.contains("retry hint:"), "{msg}");
+    assert!(
+        msg.contains("safe to retry with predicate `requires`"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn remember_claim_unknown_semantic_predicate_suggests_safe_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .remember_claim(RememberClaimParams {
+            subject: "Aver autoresearch".to_string(),
+            predicate: "deprioritizes".to_string(),
+            object: "unsafe migration triggers".to_string(),
+            source: Some("mcp-test".to_string()),
+            agent_id: Some("llm_agent".to_string()),
+            agent_kind: Some("LLM".to_string()),
+            scope: None,
+        })
+        .expect_err("LLM claims with semantic predicate misses should explain repair");
+
+    let msg = tools.describe_error(&err);
+    assert!(msg.contains("unknown predicate: deprioritizes"), "{msg}");
+    assert!(msg.contains("did you mean `prefers`?"), "{msg}");
+    assert!(
+        msg.contains(
+            "retry hint: safe to retry with predicate `prefers`; do not invent predicates"
+        ),
+        "{msg}"
+    );
 }
 
 #[test]
