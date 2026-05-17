@@ -2206,3 +2206,38 @@ fn observation_prune_marker_ids_must_not_contain_duplicates() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn hyperedge_participants_must_not_duplicate_role_entity() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).expect("open should succeed");
+    drop(_store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.execute(
+        "INSERT INTO hyperedges (id, predicate, provenance, confidence, source_refs, created_at, updated_at)
+         VALUES (1, 'depends_on', 'USER_ASSERTED', 1.0, '[\"session-1\"]', 1, 1)",
+        [],
+    )
+    .expect("hyperedge insert should succeed");
+    conn.execute(
+        "INSERT INTO hyperedge_participants (hyperedge_id, role, entity)
+         VALUES (1, 'source', 'Aver')",
+        [],
+    )
+    .expect("first participant insert should succeed");
+
+    let err = conn
+        .execute(
+            "INSERT INTO hyperedge_participants (hyperedge_id, role, entity)
+             VALUES (1, 'source', 'Aver')",
+            [],
+        )
+        .expect_err("duplicate hyperedge participants should be rejected");
+
+    assert!(
+        err.to_string()
+            .contains("hyperedge_participants role/entity must be unique per hyperedge"),
+        "unexpected error: {err}"
+    );
+}
