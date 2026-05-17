@@ -476,16 +476,39 @@ impl Store {
             .query_row("SELECT COUNT(*) FROM vector_index", [], |r| r.get(0))?)
     }
 
+    fn canonical_predicate_name(&self, predicate: &str) -> Result<Option<String>, Error> {
+        if self.predicate_type_id(predicate)?.is_some() {
+            return Ok(Some(predicate.to_string()));
+        }
+        self.conn
+            .query_row(
+                "SELECT predicate_types.name
+                   FROM predicate_alias
+                   JOIN predicate_types ON predicate_types.id = predicate_alias.predicate_id
+                  WHERE predicate_alias.alias = ?1",
+                [predicate],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Error::Sqlite)
+    }
+
     pub fn predicate_implies(&self, predicate: &str, ancestor: &str) -> Result<bool, Error> {
         validate_claim_field("predicate", predicate)?;
         validate_claim_field("predicate", ancestor)?;
-        if predicate == ancestor {
-            return Ok(true);
-        }
-        let Some(predicate_id) = self.predicate_type_id(predicate)? else {
+        let Some(predicate_name) = self.canonical_predicate_name(predicate)? else {
             return Ok(false);
         };
-        let Some(ancestor_id) = self.predicate_type_id(ancestor)? else {
+        let Some(ancestor_name) = self.canonical_predicate_name(ancestor)? else {
+            return Ok(false);
+        };
+        if predicate_name == ancestor_name {
+            return Ok(true);
+        }
+        let Some(predicate_id) = self.predicate_type_id(&predicate_name)? else {
+            return Ok(false);
+        };
+        let Some(ancestor_id) = self.predicate_type_id(&ancestor_name)? else {
             return Ok(false);
         };
         Ok(self
@@ -548,6 +571,11 @@ impl Store {
         let mut allowed = HashSet::new();
         for predicate in predicates {
             allowed.insert((*predicate).to_string());
+            let Some(canonical) = self.canonical_predicate_name(predicate)? else {
+                continue;
+            };
+            allowed.insert(canonical.clone());
+
             let mut stmt = self.conn.prepare(
                 "SELECT child.name
                    FROM predicate_types child
@@ -556,9 +584,24 @@ impl Store {
                   WHERE ancestor.name = ?1
                   ORDER BY child.id",
             )?;
-            let rows = stmt.query_map([*predicate], |row| row.get::<_, String>(0))?;
-            for row in rows {
-                allowed.insert(row?);
+            let rows = stmt.query_map([canonical.as_str()], |row| row.get::<_, String>(0))?;
+            let child_names = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+            drop(stmt);
+
+            for child_name in child_names {
+                allowed.insert(child_name.clone());
+                let mut alias_stmt = self.conn.prepare(
+                    "SELECT alias
+                       FROM predicate_alias
+                       JOIN predicate_types ON predicate_types.id = predicate_alias.predicate_id
+                      WHERE predicate_types.name = ?1
+                      ORDER BY alias",
+                )?;
+                let alias_rows =
+                    alias_stmt.query_map([child_name.as_str()], |row| row.get::<_, String>(0))?;
+                for alias in alias_rows {
+                    allowed.insert(alias?);
+                }
             }
         }
         Ok(allowed)
