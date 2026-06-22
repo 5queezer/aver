@@ -8,6 +8,12 @@ edition      = "2024"
 license      = "MIT"
 authors      = ["Christian Pojoni"]
 rust-version = "1.95"
+description  = "Local-first, auditable memory layer for coding agents"
+repository   = "https://github.com/5queezer/aver"
+homepage     = "https://github.com/5queezer/aver"
+readme       = "README.md"
+keywords     = ["ai", "memory", "mcp", "sqlite", "rust"]
+categories   = ["command-line-utilities", "database"]
 
 [workspace.dependencies]
 rusqlite    = { version = "0.32", features = ["bundled"] }

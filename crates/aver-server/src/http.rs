@@ -16,6 +16,7 @@ use rmcp::transport::{
 };
 use serde::Deserialize;
 use tower_http::cors::{Any as CorsAny, CorsLayer};
+use url::Url;
 
 use crate::{
     auth::{AuthDb, hash_token},
@@ -38,6 +39,16 @@ struct HttpState {
     config: ServerConfig,
     auth_db: Arc<Mutex<AuthDb>>,
     consent_deps: Arc<ConsentDeps>,
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    if matches!(host, "localhost" | "127.0.0.1" | "::1") {
+        return true;
+    }
+    Url::parse(&format!("http://{host}"))
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1"))
 }
 
 pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
@@ -71,7 +82,11 @@ pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
         .allow_methods(CorsAny)
         .allow_headers(CorsAny);
     let cors = if state.config.cors_origins.is_empty() {
-        cors.allow_origin(CorsAny)
+        if is_loopback_host(&state.config.host) {
+            cors.allow_origin(CorsAny)
+        } else {
+            cors.allow_origin(state.config.base_url.parse::<HeaderValue>()?)
+        }
     } else {
         let origins = state
             .config

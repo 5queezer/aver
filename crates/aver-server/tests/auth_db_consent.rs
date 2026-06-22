@@ -1,4 +1,4 @@
-use aver_server::auth::{AuthDb, ClientConsent, User, UserKind};
+use aver_server::auth::{AuthDb, ClientConsent, User, UserKind, hash_token};
 
 fn open_db() -> (tempfile::TempDir, AuthDb) {
     let dir = tempfile::tempdir().unwrap();
@@ -119,6 +119,44 @@ fn record_consent_replaces_scopes_and_clears_revocation() {
         regranted.granted_scopes,
         vec!["recall".to_string(), "remember".to_string()],
     );
+}
+
+#[test]
+fn revoke_consent_invalidates_existing_access_tokens() {
+    let (_dir, db) = open_db();
+    let verifier = "verifier";
+    let redirect = "http://localhost:8080/callback";
+    db.upsert_user(&User {
+        id: "u".into(),
+        kind: UserKind::Local,
+        external_id: None,
+        created_at: now(),
+    })
+    .unwrap();
+    let client = db
+        .register_client("Aver test client", &[redirect.to_string()])
+        .unwrap();
+    db.record_consent("u", &client.client_id, &["claims:read".into()])
+        .unwrap();
+    let code = db
+        .store_authorization_code(
+            &client.client_id,
+            "u",
+            &aver_server::oauth::pkce_s256_challenge(verifier),
+            redirect,
+            &["claims:read".into()],
+        )
+        .unwrap();
+    let tokens = db
+        .exchange_authorization_code_for_tokens(&code, &client.client_id, verifier, redirect)
+        .unwrap();
+    let access_hash = hash_token(&tokens.access_token);
+    assert!(db.validate_access_token(&access_hash).unwrap().is_some());
+
+    db.revoke_consent("u", &client.client_id).unwrap();
+
+    assert_eq!(db.validate_access_token(&access_hash).unwrap(), None);
+    assert!(db.refresh_access_token(&tokens.refresh_token).is_err());
 }
 
 #[test]

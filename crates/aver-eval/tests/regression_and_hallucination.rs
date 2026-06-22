@@ -16,14 +16,18 @@ fn query_suite_regression_fails_when_metric_drops_more_than_five_percent() {
     );
 
     assert!(report.failed);
-    assert!(report
-        .failures
-        .iter()
-        .any(|failure| failure.metric == "recall"));
-    assert!(report
-        .failures
-        .iter()
-        .all(|failure| failure.drop_fraction > 0.05));
+    assert!(
+        report
+            .failures
+            .iter()
+            .any(|failure| failure.metric == "recall")
+    );
+    assert!(
+        report
+            .failures
+            .iter()
+            .all(|failure| failure.drop_fraction > 0.05)
+    );
 }
 
 #[test]

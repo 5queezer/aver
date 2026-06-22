@@ -4,8 +4,8 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use aver_core::{
-    vector::{EmbeddingClient, EmbeddingError, OllamaEmbeddingClient},
     Store,
+    vector::{EmbeddingClient, EmbeddingError, OllamaEmbeddingClient},
 };
 use serde::{Deserialize, Serialize};
 

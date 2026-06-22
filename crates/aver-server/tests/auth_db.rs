@@ -1,4 +1,5 @@
 use aver_server::auth::{AuthDb, RegisteredClient, hash_token};
+use rusqlite::Connection;
 
 #[test]
 fn auth_db_validates_stored_access_token_hash() {
@@ -18,6 +19,46 @@ fn auth_db_validates_stored_access_token_hash() {
             .unwrap(),
         None
     );
+}
+
+#[test]
+fn auth_db_rejects_expired_access_tokens() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let db = AuthDb::open(&auth_db_path).unwrap();
+    let token_hash = hash_token("expired-token");
+
+    db.store_access_token_hash(&token_hash, "user-1", &[])
+        .unwrap();
+    Connection::open(&auth_db_path)
+        .unwrap()
+        .execute(
+            "UPDATE access_tokens SET expires_at = strftime('%s','now') - 1 WHERE token_hash = ?1",
+            [&token_hash],
+        )
+        .unwrap();
+
+    assert_eq!(db.validate_access_token(&token_hash).unwrap(), None);
+}
+
+#[test]
+fn auth_db_rejects_revoked_access_tokens() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let db = AuthDb::open(&auth_db_path).unwrap();
+    let token_hash = hash_token("revoked-token");
+
+    db.store_access_token_hash(&token_hash, "user-1", &[])
+        .unwrap();
+    Connection::open(&auth_db_path)
+        .unwrap()
+        .execute(
+            "UPDATE access_tokens SET revoked_at = strftime('%s','now') WHERE token_hash = ?1",
+            [&token_hash],
+        )
+        .unwrap();
+
+    assert_eq!(db.validate_access_token(&token_hash).unwrap(), None);
 }
 
 #[test]
@@ -45,5 +86,23 @@ fn auth_db_registers_oauth_clients() {
     assert!(
         !db.client_allows_redirect_uri(&client.client_id, "http://evil.example/callback")
             .unwrap()
+    );
+}
+
+#[test]
+fn auth_db_rejects_non_loopback_http_redirect_uris() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = AuthDb::open(dir.path().join("auth.db")).unwrap();
+
+    let err = db
+        .register_client(
+            "Aver test client",
+            &["http://evil.example/callback".to_string()],
+        )
+        .unwrap_err();
+
+    assert!(
+        err.to_string().contains("loopback") || err.to_string().contains("redirect_uri"),
+        "unexpected error: {err}"
     );
 }

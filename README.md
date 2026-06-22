@@ -2,7 +2,14 @@
 
 Aver is a local-first memory layer for coding agents: an append-only episodic log, a durable claim graph with first-class hyperedges, vector recall primitives, deterministic code extraction, and an MCP/OAuth server surface in one Rust workspace.
 
-Aver is experimental. The architecture is ADR-driven and the current implementation is useful, but not all ADRs are complete yet. See [Implementation status](#implementation-status) for what is built today.
+Aver is experimental systems infrastructure. The architecture is ADR-driven and the implementation is useful for local development, but it is not yet hardened as a hosted multi-user service. See [Implementation status](#implementation-status) for what is built today.
+
+## Status
+
+- **Maturity:** experimental / alpha
+- **Default deployment:** localhost-first CLI and MCP server
+- **Quality gate:** `cargo fmt`, `cargo clippy`, `cargo test`, and project policy checks in CI
+- **Security posture:** privacy filtering runs before memory writes; public deployments still require explicit CORS origins, HTTPS, and trusted reverse-proxy boundaries
 
 ## Why
 
@@ -276,7 +283,7 @@ ADR-0013 permits non-Rust prose/document extraction plugins only behind stdin/st
 ## Project Structure
 
 ```text
-agent-memory-layer/
+aver/
 ├── crates/
 │   ├── aver-core/       # Store, claims, events, privacy filter, vectors, recall, consolidation
 │   ├── aver-cli/        # `aver` command-line interface

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use aver_eval::tuning::{suggest_next, TuningObservation, TuningSearchSpace};
+use aver_eval::tuning::{TuningObservation, TuningSearchSpace, suggest_next};
 use clap::Parser;
 use serde::Serialize;
 

@@ -1,4 +1,5 @@
 use aver_server::{auth::AuthDb, config::ServerConfig};
+use rusqlite::Connection;
 
 #[test]
 fn auth_code_exchange_issues_refresh_token_and_allows_refresh_grant() {
@@ -36,6 +37,37 @@ fn auth_code_exchange_issues_refresh_token_and_allows_refresh_grant() {
     let refreshed = db.refresh_access_token(&tokens.refresh_token).unwrap();
     assert_ne!(refreshed.access_token, tokens.access_token);
     assert_eq!(refreshed.refresh_token, tokens.refresh_token);
+}
+
+#[test]
+fn expired_refresh_token_cannot_mint_access_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let db = AuthDb::open(&auth_db_path).unwrap();
+    let verifier = "verifier";
+    let redirect = "http://localhost:8080/callback";
+    let code = db
+        .store_authorization_code(
+            "client-1",
+            "user-1",
+            &aver_server::oauth::pkce_s256_challenge(verifier),
+            redirect,
+            &[],
+        )
+        .unwrap();
+    let tokens = db
+        .exchange_authorization_code_for_tokens(&code, "client-1", verifier, redirect)
+        .unwrap();
+
+    Connection::open(&auth_db_path)
+        .unwrap()
+        .execute(
+            "UPDATE refresh_tokens SET expires_at = strftime('%s','now') - 1 WHERE token_hash = ?1",
+            [aver_server::auth::hash_token(&tokens.refresh_token)],
+        )
+        .unwrap();
+
+    assert!(db.refresh_access_token(&tokens.refresh_token).is_err());
 }
 
 #[test]

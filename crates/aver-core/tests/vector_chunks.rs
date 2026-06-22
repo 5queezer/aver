@@ -2,7 +2,7 @@
 //! indexing is wired in.
 
 use aver_core::{
-    Store,
+    Error, PrivacyRejection, Store,
     vector::{EmbeddingClient, EmbeddingError, MockEmbeddingClient},
 };
 
@@ -31,6 +31,69 @@ fn add_vector_chunk_returns_chunk_id_for_claim() {
         .expect("chunk metadata insert should succeed");
 
     assert_eq!(chunk_id, 1);
+}
+
+#[test]
+fn add_vector_chunk_rejects_secret_text_before_persisting() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim("auth_service", "depends_on", "stripe_sdk", "test_session")
+        .unwrap();
+    let token = ["sk", "-", "abcdefghijklmnopqrstuvwxyz1234567890"].concat();
+
+    let result = store.add_vector_chunk(
+        claim_id,
+        &format!("auth_service uses secret token {token}"),
+        "nomic-embed-text",
+    );
+
+    assert!(matches!(
+        result,
+        Err(Error::Privacy(PrivacyRejection::OpenAiKey))
+    ));
+    assert!(
+        store
+            .list_vector_chunks_for_claim(claim_id)
+            .unwrap()
+            .is_empty(),
+        "secret-bearing vector chunk must not be persisted"
+    );
+    assert_eq!(
+        store
+            .privacy_rejection_count(PrivacyRejection::OpenAiKey)
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn add_vector_chunk_with_embedding_rejects_secret_text_before_persisting() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim("auth_service", "depends_on", "stripe_sdk", "test_session")
+        .unwrap();
+    let token = ["sk", "-", "abcdefghijklmnopqrstuvwxyz1234567890"].concat();
+
+    let result = store.add_vector_chunk_with_embedding(
+        claim_id,
+        &format!("auth_service uses secret token {token}"),
+        "nomic-embed-text",
+        &[0.1, 0.2, 0.3],
+    );
+
+    assert!(matches!(
+        result,
+        Err(Error::Privacy(PrivacyRejection::OpenAiKey))
+    ));
+    assert!(
+        store
+            .list_vector_chunks_for_claim(claim_id)
+            .unwrap()
+            .is_empty(),
+        "secret-bearing embedded vector chunk must not be persisted"
+    );
 }
 
 #[test]

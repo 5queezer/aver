@@ -5,6 +5,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use url::Url;
+
 use crate::oauth::verify_pkce_s256;
 
 pub fn hash_token(token: &str) -> String {
@@ -101,12 +103,28 @@ fn now_unix() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
 
+const ACCESS_TOKEN_TTL_SECS: i64 = 60 * 60;
+const REFRESH_TOKEN_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+
 fn encode_scopes(scopes: &[String]) -> String {
     scopes.join(" ")
 }
 
 fn decode_scopes(raw: &str) -> Vec<String> {
     raw.split_ascii_whitespace().map(str::to_string).collect()
+}
+
+fn redirect_uri_allowed(uri: &str) -> bool {
+    let Ok(parsed) = Url::parse(uri) else {
+        return false;
+    };
+    match parsed.scheme() {
+        "https" => true,
+        "http" => parsed
+            .host_str()
+            .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1")),
+        _ => false,
+    }
 }
 
 /// Generates a 256-bit random session identifier.
@@ -135,7 +153,10 @@ impl AuthDb {
             "CREATE TABLE IF NOT EXISTS access_tokens (
                 token_hash     TEXT PRIMARY KEY,
                 user_id        TEXT NOT NULL,
+                client_id      TEXT,
                 created_at     INTEGER NOT NULL,
+                expires_at     INTEGER NOT NULL DEFAULT 0,
+                revoked_at     INTEGER,
                 granted_scopes TEXT NOT NULL DEFAULT ''
             );
 
@@ -161,7 +182,10 @@ impl AuthDb {
             CREATE TABLE IF NOT EXISTS refresh_tokens (
                 token_hash     TEXT PRIMARY KEY,
                 user_id        TEXT NOT NULL,
+                client_id      TEXT,
                 created_at     INTEGER NOT NULL,
+                expires_at     INTEGER NOT NULL DEFAULT 0,
+                revoked_at     INTEGER,
                 granted_scopes TEXT NOT NULL DEFAULT ''
             );
 
@@ -214,6 +238,25 @@ impl AuthDb {
         let _ = conn.execute_batch(
             "ALTER TABLE refresh_tokens ADD COLUMN granted_scopes TEXT NOT NULL DEFAULT '';",
         );
+        for statement in [
+            "ALTER TABLE access_tokens ADD COLUMN client_id TEXT;",
+            "ALTER TABLE access_tokens ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE access_tokens ADD COLUMN revoked_at INTEGER;",
+            "ALTER TABLE refresh_tokens ADD COLUMN client_id TEXT;",
+            "ALTER TABLE refresh_tokens ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE refresh_tokens ADD COLUMN revoked_at INTEGER;",
+        ] {
+            let _ = conn.execute_batch(statement);
+        }
+        let now = now_unix();
+        let _ = conn.execute(
+            "UPDATE access_tokens SET expires_at = ?1 WHERE expires_at = 0",
+            [now + ACCESS_TOKEN_TTL_SECS],
+        );
+        let _ = conn.execute(
+            "UPDATE refresh_tokens SET expires_at = ?1 WHERE expires_at = 0",
+            [now + REFRESH_TOKEN_TTL_SECS],
+        );
         Ok(Self { conn })
     }
 
@@ -228,10 +271,8 @@ impl AuthDb {
             "at least one redirect_uri is required"
         );
         anyhow::ensure!(
-            redirect_uris
-                .iter()
-                .all(|uri| uri.starts_with("http://") || uri.starts_with("https://")),
-            "redirect_uris must be absolute HTTP(S) URLs"
+            redirect_uris.iter().all(|uri| redirect_uri_allowed(uri)),
+            "redirect_uris must be HTTPS URLs or loopback HTTP URLs"
         );
 
         let client = RegisteredClient {
@@ -304,12 +345,30 @@ impl AuthDb {
         user_id: &str,
         granted_scopes: &[String],
     ) -> anyhow::Result<()> {
+        self.store_access_token_hash_for_client(token_hash, user_id, None, granted_scopes)
+    }
+
+    fn store_access_token_hash_for_client(
+        &self,
+        token_hash: &str,
+        user_id: &str,
+        client_id: Option<&str>,
+        granted_scopes: &[String],
+    ) -> anyhow::Result<()> {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let scopes = encode_scopes(granted_scopes);
         self.conn.execute(
-            "INSERT OR REPLACE INTO access_tokens (token_hash, user_id, created_at, granted_scopes)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![token_hash, user_id, now, scopes],
+            "INSERT OR REPLACE INTO access_tokens
+                (token_hash, user_id, client_id, created_at, expires_at, revoked_at, granted_scopes)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+            params![
+                token_hash,
+                user_id,
+                client_id,
+                now,
+                now + ACCESS_TOKEN_TTL_SECS,
+                scopes
+            ],
         )?;
         Ok(())
     }
@@ -324,7 +383,7 @@ impl AuthDb {
         redirect_uri: &str,
         granted_scopes: &[String],
     ) -> anyhow::Result<String> {
-        let code = uuid::Uuid::new_v4().to_string();
+        let code = random_session_id();
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let expires_at = now + 600; // 10 minutes
         let scopes = encode_scopes(granted_scopes);
@@ -414,25 +473,38 @@ impl AuthDb {
             params![now, code],
         )?;
         let scopes = decode_scopes(&granted_scopes);
-        self.issue_token_pair(&user_id, None, &scopes)
+        self.issue_token_pair(&user_id, Some(client_id), None, &scopes)
     }
 
     fn issue_token_pair(
         &self,
         user_id: &str,
+        client_id: Option<&str>,
         existing_refresh_token: Option<String>,
         granted_scopes: &[String],
     ) -> anyhow::Result<TokenPair> {
-        let access_token = uuid::Uuid::new_v4().to_string();
-        self.store_access_token_hash(&hash_token(&access_token), user_id, granted_scopes)?;
-        let refresh_token =
-            existing_refresh_token.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let access_token = random_session_id();
+        self.store_access_token_hash_for_client(
+            &hash_token(&access_token),
+            user_id,
+            client_id,
+            granted_scopes,
+        )?;
+        let refresh_token = existing_refresh_token.unwrap_or_else(random_session_id);
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let scopes = encode_scopes(granted_scopes);
         self.conn.execute(
-            "INSERT OR REPLACE INTO refresh_tokens (token_hash, user_id, created_at, granted_scopes)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![hash_token(&refresh_token), user_id, now, scopes],
+            "INSERT OR REPLACE INTO refresh_tokens
+                (token_hash, user_id, client_id, created_at, expires_at, revoked_at, granted_scopes)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+            params![
+                hash_token(&refresh_token),
+                user_id,
+                client_id,
+                now,
+                now + REFRESH_TOKEN_TTL_SECS,
+                scopes
+            ],
         )?;
         Ok(TokenPair {
             access_token,
@@ -442,13 +514,22 @@ impl AuthDb {
 
     pub fn refresh_access_token(&self, refresh_token: &str) -> anyhow::Result<TokenPair> {
         let token_hash = hash_token(refresh_token);
-        let (user_id, granted_scopes): (String, String) = self.conn.query_row(
-            "SELECT user_id, granted_scopes FROM refresh_tokens WHERE token_hash = ?1",
-            [token_hash],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let (user_id, client_id, granted_scopes): (String, Option<String>, String) =
+            self.conn.query_row(
+                "SELECT user_id, client_id, granted_scopes
+               FROM refresh_tokens
+              WHERE token_hash = ?1 AND revoked_at IS NULL AND expires_at > ?2",
+                params![token_hash, now],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
         let scopes = decode_scopes(&granted_scopes);
-        self.issue_token_pair(&user_id, Some(refresh_token.to_string()), &scopes)
+        self.issue_token_pair(
+            &user_id,
+            client_id.as_deref(),
+            Some(refresh_token.to_string()),
+            &scopes,
+        )
     }
 
     /// Returns the access-token row's `(user_id, granted_scopes_raw)` if the
@@ -460,10 +541,13 @@ impl AuthDb {
         &self,
         token_hash: &str,
     ) -> anyhow::Result<Option<(String, String)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT user_id, granted_scopes FROM access_tokens WHERE token_hash = ?1")?;
-        let mut rows = stmt.query([token_hash])?;
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let mut stmt = self.conn.prepare(
+            "SELECT user_id, granted_scopes
+               FROM access_tokens
+              WHERE token_hash = ?1 AND revoked_at IS NULL AND expires_at > ?2",
+        )?;
+        let mut rows = stmt.query(params![token_hash, now])?;
         Ok(match rows.next()? {
             Some(row) => Some((row.get(0)?, row.get(1)?)),
             None => None,
@@ -604,6 +688,18 @@ impl AuthDb {
             "UPDATE client_consents
                 SET revoked_at = ?3
               WHERE user_id = ?1 AND client_id = ?2",
+            params![user_id, client_id, now],
+        )?;
+        self.conn.execute(
+            "UPDATE access_tokens
+                SET revoked_at = ?3
+              WHERE user_id = ?1 AND client_id = ?2 AND revoked_at IS NULL",
+            params![user_id, client_id, now],
+        )?;
+        self.conn.execute(
+            "UPDATE refresh_tokens
+                SET revoked_at = ?3
+              WHERE user_id = ?1 AND client_id = ?2 AND revoked_at IS NULL",
             params![user_id, client_id, now],
         )?;
         Ok(())

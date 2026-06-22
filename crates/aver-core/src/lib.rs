@@ -2550,6 +2550,8 @@ impl Store {
         self.ensure_claim_exists(claim_id)?;
         validate_vector_chunk_text(text)?;
         validate_embedding_model(embedding_model)?;
+        self.privacy_filter_recording(text)?;
+        self.privacy_filter_path_recording(embedding_model)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         self.conn.execute(
             "INSERT INTO vector_chunks (claim_id, text, embedding_model, created_at)
@@ -2576,6 +2578,8 @@ impl Store {
         validate_vector_chunk_text(text)?;
         validate_embedding_model(embedding_model)?;
         validate_embedding_vector(embedding)?;
+        self.privacy_filter_recording(text)?;
+        self.privacy_filter_path_recording(embedding_model)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let embedding_json = serde_json::to_string(embedding)?;
 

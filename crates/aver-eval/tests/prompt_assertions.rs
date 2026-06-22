@@ -1,6 +1,6 @@
 use aver_eval::prompt_assertions::{
-    assert_prompt_contract, contract_for, BeamPromptVersion, PromptContractError,
-    PromptContractSpec, PromptKind,
+    BeamPromptVersion, PromptContractError, PromptContractSpec, PromptKind, assert_prompt_contract,
+    contract_for,
 };
 
 #[test]

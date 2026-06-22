@@ -1,4 +1,4 @@
-use aver_eval::tuning::{suggest_next, TuningObservation, TuningSearchSpace};
+use aver_eval::tuning::{TuningObservation, TuningSearchSpace, suggest_next};
 
 #[test]
 fn bayesian_tuner_prefers_promising_untried_retrieval_neighborhood() {
