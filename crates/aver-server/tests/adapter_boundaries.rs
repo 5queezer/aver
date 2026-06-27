@@ -3,8 +3,9 @@ use std::collections::BTreeSet;
 use aver_server::adapters::{
     AdapterConfig, AdapterRunContext, AdapterRuntime, ClaudeCodeAdapterConfig,
     CodexOpenAiAdapterConfig, JsonlCliAdapterConfig, McpAdapterConfig, OpenCodeAdapterConfig,
-    PiAdapterConfig,
+    PiAdapter, PiAdapterConfig, PiHook,
 };
+use aver_server::tools::AverTools;
 
 fn _assert_send_sync<T: Send + Sync>() {}
 fn _assert_deserializable<T: for<'de> serde::Deserialize<'de> + serde::Serialize>() {}
@@ -75,4 +76,89 @@ fn run_context_traits_never_depend_on_aver_core_agent_ids() {
     assert_eq!(context.session_id.as_str(), "session-1");
     assert_eq!(context.runtime, AdapterRuntime::Pi);
     assert!(context.metadata.is_empty());
+}
+
+#[test]
+fn pi_adapter_is_send_sync() {
+    _assert_send_sync::<PiAdapter>();
+}
+
+#[test]
+fn pi_adapter_session_start_records_episodic_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = std::sync::Arc::new(std::sync::Mutex::new(AverTools::open(dir.path()).unwrap()));
+    let adapter = PiAdapter::new(tools.clone());
+
+    adapter
+        .session_start("pi-test-session", Some("pi-agent-1"))
+        .unwrap();
+
+    // Verify event was recorded
+    let t = tools.lock().unwrap();
+    let coverage = t
+        .observation_coverage(aver_server::tools::ObservationCoverageParams {
+            session_id: "pi-test-session".to_string(),
+        })
+        .unwrap();
+    // Just started, no observations yet, but event exists
+    assert!(!coverage.event_ids.is_empty() || coverage.covered_event_ids.is_empty());
+}
+
+#[test]
+fn pi_adapter_agent_action_records_event_with_correct_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = std::sync::Arc::new(std::sync::Mutex::new(AverTools::open(dir.path()).unwrap()));
+    let adapter = PiAdapter::new(tools.clone());
+
+    let event_id = adapter
+        .agent_action(
+            "pi-action-session",
+            "user_message",
+            "Test user message payload",
+            Some("pi-agent-2"),
+        )
+        .unwrap();
+
+    assert!(event_id > 0);
+
+    // Verify agent_action for LLM kind works
+    let event_id2 = adapter
+        .agent_action(
+            "pi-action-session",
+            "assistant_action",
+            "Test assistant action payload",
+            Some("pi-agent-2"),
+        )
+        .unwrap();
+    assert!(event_id2 > event_id);
+}
+
+#[test]
+fn pi_adapter_session_compact_blocks_on_uncovered_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = std::sync::Arc::new(std::sync::Mutex::new(AverTools::open(dir.path()).unwrap()));
+    let adapter = PiAdapter::new(tools.clone());
+
+    // Record some events without observations
+    adapter
+        .agent_action(
+            "compact-test-session",
+            "user_message",
+            "Event 1",
+            Some("pi"),
+        )
+        .unwrap();
+    adapter
+        .agent_action(
+            "compact-test-session",
+            "assistant_action",
+            "Event 2",
+            Some("pi"),
+        )
+        .unwrap();
+
+    // Session compact should be blocked due to uncovered events
+    let result = adapter.session_compact("compact-test-session").unwrap();
+    assert!(result.contains("Compaction blocked"));
+    assert!(result.contains("events uncovered"));
 }

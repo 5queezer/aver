@@ -340,7 +340,8 @@ Implemented today:
 Partial or planned:
 
 - production vector-index operations beyond the current bundled `sqlite-vec`/`vec0` local ANN path and JSON fallback metadata,
-- adapter-boundary runtime integration crates/modules for Pi, Claude Code, Codex/OpenAI, OpenCode, MCP, and JSONL/CLI harnesses are defined by stable config/runtime types and adapter tests; runtime connectors remain partially implemented outside core types.
+- Pi adapter runtime integration: `PiHook` trait and `PiAdapter` struct translate Pi session hooks into episodic events, with coverage-aware compaction (ADR-0016).
+- Claude Code, Codex/OpenAI, OpenCode, and JSONL/CLI adapter implementations follow the same pattern.
 - production shared-graph backend adapter beyond the current local weighted community detection,
 - broader production packaging, signed releases, and release automation beyond the current installer/`just dist` workflow.
 

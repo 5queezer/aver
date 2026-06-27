@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::tools::AverTools;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AdapterRuntime {
@@ -115,6 +117,118 @@ impl AdapterConfig {
 impl AdapterRuntimeConfig for AdapterConfig {
     fn runtime(&self) -> AdapterRuntime {
         AdapterConfig::runtime(self)
+    }
+}
+
+/// Pi agent hook trait. Runtime adapters implement this to translate host-specific
+/// hook calls into Aver core operations.
+pub trait PiHook {
+    /// Hook called when a Pi session starts. Implementations should record a session-start event.
+    fn session_start(&self, session_id: &str, agent_id: Option<&str>) -> anyhow::Result<()>;
+
+    /// Hook called when a Pi agent takes an action. Implementations should record an episodic event.
+    /// Returns the recorded event ID.
+    fn agent_action(
+        &self,
+        session_id: &str,
+        kind: &str,
+        payload: &str,
+        agent_id: Option<&str>,
+    ) -> anyhow::Result<i64>;
+
+    /// Hook called when a Pi session ends or compacts. Implementations should trigger catch-up observation.
+    fn session_compact(&self, session_id: &str) -> anyhow::Result<String>;
+}
+
+/// Pi adapter that translates Pi hooks into Aver core operations.
+/// This implements ADR-0016's requirement for runtime adapters outside `aver-core`.
+pub struct PiAdapter {
+    tools: std::sync::Arc<std::sync::Mutex<AverTools>>,
+}
+
+impl PiAdapter {
+    /// Create a new Pi adapter with the given tools.
+    pub fn new(tools: std::sync::Arc<std::sync::Mutex<AverTools>>) -> Self {
+        Self { tools }
+    }
+}
+
+impl PiHook for PiAdapter {
+    fn session_start(&self, session_id: &str, agent_id: Option<&str>) -> anyhow::Result<()> {
+        let tools = self
+            .tools
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let agent = agent_id.unwrap_or("pi");
+        // Record session start event
+        let event = tools.record_event(crate::tools::RecordEventParams {
+            session_id: session_id.to_string(),
+            kind: "session_start".to_string(),
+            payload: format!("Pi agent session started for {agent}"),
+            source: Some("pi-hook".to_string()),
+            agent_id: Some(agent.to_string()),
+            agent_kind: Some("LLM".to_string()),
+            scope: Some("global".to_string()),
+        })?;
+        let _ = event; // Event is recorded; we only care it succeeded
+        Ok(())
+    }
+
+    fn agent_action(
+        &self,
+        session_id: &str,
+        kind: &str,
+        payload: &str,
+        agent_id: Option<&str>,
+    ) -> anyhow::Result<i64> {
+        let tools = self
+            .tools
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        let agent = agent_id.unwrap_or("pi");
+        // Record agent action as episodic event
+        let event = tools.record_event(crate::tools::RecordEventParams {
+            session_id: session_id.to_string(),
+            kind: kind.to_string(),
+            payload: payload.to_string(),
+            source: Some("pi-hook".to_string()),
+            agent_id: Some(agent.to_string()),
+            agent_kind: Some(
+                if kind == "user_message" {
+                    "HUMAN"
+                } else {
+                    "LLM"
+                }
+                .to_string(),
+            ),
+            scope: Some("global".to_string()),
+        })?;
+        Ok(event.id)
+    }
+
+    fn session_compact(&self, session_id: &str) -> anyhow::Result<String> {
+        let tools = self
+            .tools
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {e}"))?;
+        // Check coverage and assemble compaction summary
+        let coverage = tools.observation_coverage(crate::tools::ObservationCoverageParams {
+            session_id: session_id.to_string(),
+        })?;
+
+        if !coverage.uncovered_event_ids.is_empty() {
+            return Ok(format!(
+                "Compaction blocked: {} events uncovered. Run catch-up observation first.",
+                coverage.uncovered_event_ids.len()
+            ));
+        }
+
+        // Assemble the compaction summary
+        let summary =
+            tools.assemble_compaction_summary(crate::tools::AssembleCompactionSummaryParams {
+                session_id: session_id.to_string(),
+            })?;
+        Ok(summary.summary)
     }
 }
 
