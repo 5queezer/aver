@@ -19,13 +19,17 @@ use tower_http::cors::{Any as CorsAny, CorsLayer};
 use url::Url;
 
 use crate::{
-    auth::{AuthDb, hash_token},
+    auth::{ACCESS_TOKEN_TTL_SECS, AuthDb, hash_token},
     config::ServerConfig,
-    consent::{ConsentDeps, handle_authorize_decision, handle_loopback_get_authorize},
+    consent::{
+        ConsentDeps, handle_authorize_decision, handle_loopback_get_authorize,
+        handle_revoke_consent,
+    },
     mcp::AverMcpService,
     oauth::authorization_server_metadata,
     scope_resolution::resolve_scope,
     scopes::parse_scope_list_lossy,
+    tools::AverTools,
 };
 
 /// Per-request bag of OAuth scopes granted by the bearer token. Inserted as
@@ -67,13 +71,23 @@ pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
         axum::middleware::from_fn_with_state(state.clone(), validate_bearer_token),
     );
 
-    let memory_dir = state.config.memory_dir.clone();
+    // Open ONE memory store for the whole process and share it across MCP
+    // sessions. `StreamableHttpService::new` runs the factory once per
+    // session; opening the store inside the factory would give every session
+    // its own SQLite connection on the same `memory_dir`, breaking the
+    // single-writer invariant (log rotation and claim-id pre-allocation
+    // race). rusqlite connections are Send-but-not-Sync, so the store sits
+    // behind the same `Arc<Mutex<_>>` pattern used for `AuthDb`; per-session
+    // state is limited to auth/scope context carried in request extensions.
+    let shared_tools = Arc::new(Mutex::new(AverTools::open(&state.config.memory_dir)?));
     let base_url = state.config.base_url.clone();
     let mcp_service: StreamableHttpService<AverMcpService, LocalSessionManager> =
         StreamableHttpService::new(
             move || {
-                AverMcpService::open(memory_dir.clone(), base_url.clone())
-                    .map_err(std::io::Error::other)
+                Ok(AverMcpService::from_shared_tools(
+                    shared_tools.clone(),
+                    base_url.clone(),
+                ))
             },
             LocalSessionManager::default().into(),
             StreamableHttpServerConfig::default(),
@@ -113,6 +127,7 @@ pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
         .route("/oauth/register", post(oauth_register))
         .route("/oauth/authorize", get(oauth_authorize))
         .route("/oauth/authorize/decision", post(oauth_authorize_decision))
+        .route("/oauth/consent/revoke", post(oauth_consent_revoke))
         .route("/oauth/token", post(oauth_token))
         .merge(protected_api)
         .merge(protected_mcp)
@@ -170,6 +185,16 @@ async fn resolve_request_scope(request: Request<Body>, next: Next) -> Response {
     }
 }
 
+/// RFC 6750 §3: bearer-protected surfaces must answer 401s with a
+/// `WWW-Authenticate: Bearer` challenge so clients know how to authenticate.
+fn unauthorized_bearer() -> Response {
+    let mut response = StatusCode::UNAUTHORIZED.into_response();
+    response
+        .headers_mut()
+        .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+    response
+}
+
 async fn validate_bearer_token(
     axum::extract::State(state): axum::extract::State<HttpState>,
     mut request: Request<Body>,
@@ -181,7 +206,7 @@ async fn validate_bearer_token(
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "));
     let Some(token) = token else {
-        return StatusCode::UNAUTHORIZED.into_response();
+        return unauthorized_bearer();
     };
     let granted_raw = {
         let Ok(db) = state.auth_db.lock() else {
@@ -189,7 +214,7 @@ async fn validate_bearer_token(
         };
         match db.validate_access_token(&hash_token(token)) {
             Ok(Some((_, scopes_raw))) => scopes_raw,
-            Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+            Ok(None) => return unauthorized_bearer(),
             Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     };
@@ -333,6 +358,39 @@ async fn oauth_authorize_decision(
     .await
 }
 
+/// Dispatcher for `POST /oauth/consent/revoke`. Same shape as
+/// [`oauth_authorize_decision`]: fail closed when ConnectInfo is absent.
+async fn oauth_consent_revoke(
+    axum::extract::State(state): axum::extract::State<HttpState>,
+    request: Request<Body>,
+) -> Response {
+    let connect_info = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .copied();
+    let Some(connect) = connect_info else {
+        return html_response_unavailable();
+    };
+
+    let (mut parts, body) = request.into_parts();
+    let headers = std::mem::take(&mut parts.headers);
+    let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let form: crate::consent::RevokeConsentForm = match serde_urlencoded::from_bytes(&bytes) {
+        Ok(f) => f,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    handle_revoke_consent(
+        axum::extract::State(state.consent_deps.clone()),
+        connect,
+        headers,
+        Form(form),
+    )
+    .await
+}
+
 #[derive(Debug, Deserialize)]
 struct TokenRequest {
     grant_type: String,
@@ -348,31 +406,53 @@ struct TokenRequest {
     refresh_token: String,
 }
 
+/// RFC 6749 §5.2 error body for the token endpoint.
+fn token_error(status: StatusCode, error: &'static str) -> (StatusCode, Json<serde_json::Value>) {
+    (status, Json(serde_json::json!({ "error": error })))
+}
+
 async fn oauth_token(
     axum::extract::State(state): axum::extract::State<HttpState>,
     Form(request): Form<TokenRequest>,
-) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let db = state
         .auth_db
         .lock()
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| token_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error"))?;
     let tokens = match request.grant_type.as_str() {
-        "authorization_code" => db
-            .exchange_authorization_code_for_tokens(
+        "authorization_code" => {
+            if request.code.is_empty()
+                || request.client_id.is_empty()
+                || request.code_verifier.is_empty()
+            {
+                return Err(token_error(StatusCode::BAD_REQUEST, "invalid_request"));
+            }
+            db.exchange_authorization_code_for_tokens(
                 &request.code,
                 &request.client_id,
                 &request.code_verifier,
                 &request.redirect_uri,
             )
-            .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?,
-        "refresh_token" => db
-            .refresh_access_token(&request.refresh_token)
-            .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?,
-        _ => return Err(axum::http::StatusCode::BAD_REQUEST),
+            .map_err(|_| token_error(StatusCode::BAD_REQUEST, "invalid_grant"))?
+        }
+        "refresh_token" => {
+            if request.refresh_token.is_empty() {
+                return Err(token_error(StatusCode::BAD_REQUEST, "invalid_request"));
+            }
+            db.refresh_access_token(&request.refresh_token)
+                .map_err(|_| token_error(StatusCode::BAD_REQUEST, "invalid_grant"))?
+        }
+        _ => {
+            return Err(token_error(
+                StatusCode::BAD_REQUEST,
+                "unsupported_grant_type",
+            ));
+        }
     };
     Ok(Json(serde_json::json!({
         "access_token": tokens.access_token,
         "refresh_token": tokens.refresh_token,
         "token_type": "Bearer",
+        "expires_in": ACCESS_TOKEN_TTL_SECS,
     })))
 }

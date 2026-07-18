@@ -36,7 +36,55 @@ fn auth_code_exchange_issues_refresh_token_and_allows_refresh_grant() {
 
     let refreshed = db.refresh_access_token(&tokens.refresh_token).unwrap();
     assert_ne!(refreshed.access_token, tokens.access_token);
-    assert_eq!(refreshed.refresh_token, tokens.refresh_token);
+    // Rotation: the refresh grant mints a NEW refresh token and retires the
+    // presented one.
+    assert_ne!(refreshed.refresh_token, tokens.refresh_token);
+    assert!(db.refresh_access_token(&tokens.refresh_token).is_err());
+}
+
+#[test]
+fn refresh_token_reuse_revokes_token_family() {
+    // RFC 6819 §5.2.2.3: presenting an already-rotated refresh token signals
+    // theft; every live token of the (user, client) family is revoked.
+    let dir = tempfile::tempdir().unwrap();
+    let db = AuthDb::open(dir.path().join("auth.db")).unwrap();
+    let verifier = "verifier";
+    let redirect = "http://localhost:8080/callback";
+    let code = db
+        .store_authorization_code(
+            "client-1",
+            "user-1",
+            &aver_server::oauth::pkce_s256_challenge(verifier),
+            redirect,
+            &["claims:read".to_string()],
+        )
+        .unwrap();
+    let tokens = db
+        .exchange_authorization_code_for_tokens(&code, "client-1", verifier, redirect)
+        .unwrap();
+
+    // Legitimate first refresh rotates the pair.
+    let rotated = db.refresh_access_token(&tokens.refresh_token).unwrap();
+    assert!(
+        db.validate_access_token(&aver_server::auth::hash_token(&rotated.access_token))
+            .unwrap()
+            .is_some()
+    );
+
+    // Attacker (or buggy client) replays the retired token.
+    let err = db.refresh_access_token(&tokens.refresh_token).unwrap_err();
+    assert!(
+        err.to_string().contains("reuse"),
+        "expected reuse-detection error, got: {err}"
+    );
+
+    // The whole family — rotated access AND refresh tokens — is dead.
+    assert!(
+        db.validate_access_token(&aver_server::auth::hash_token(&rotated.access_token))
+            .unwrap()
+            .is_none()
+    );
+    assert!(db.refresh_access_token(&rotated.refresh_token).is_err());
 }
 
 #[test]

@@ -93,6 +93,75 @@ async fn oauth_token_route_exchanges_authorization_code_with_pkce() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["token_type"], "Bearer");
     assert!(json["access_token"].as_str().unwrap().len() > 10);
+    assert_eq!(
+        json["expires_in"],
+        serde_json::json!(aver_server::auth::ACCESS_TOKEN_TTL_SECS),
+        "token response must carry RFC 6749 §5.1 expires_in",
+    );
+}
+
+#[tokio::test]
+async fn oauth_token_route_returns_rfc6749_json_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = ServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 3317,
+        base_url: "https://aver.example.com".to_string(),
+        memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
+        auth_db_path: dir.path().join("auth.db").to_string_lossy().to_string(),
+        cors_origins: Vec::new(),
+        trusted_auth_header: None,
+    };
+    let app = build_router(config).unwrap();
+
+    async fn token_request(app: &axum::Router, form: &str) -> (StatusCode, serde_json::Value) {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/oauth/token")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(form.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body)
+            .unwrap_or_else(|err| panic!("token error body must be JSON: {err}"));
+        (status, json)
+    }
+
+    // Unknown grant type → unsupported_grant_type.
+    let (status, json) = token_request(&app, "grant_type=client_credentials").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json["error"], "unsupported_grant_type");
+
+    // Bogus authorization code → invalid_grant.
+    let (status, json) = token_request(
+        &app,
+        "grant_type=authorization_code&code=nope&client_id=c&code_verifier=v&redirect_uri=http://localhost:8080/callback",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json["error"], "invalid_grant");
+
+    // Bogus refresh token → invalid_grant.
+    let (status, json) = token_request(&app, "grant_type=refresh_token&refresh_token=nope").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json["error"], "invalid_grant");
+
+    // Missing required fields → invalid_request.
+    let (status, json) = token_request(&app, "grant_type=refresh_token").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json["error"], "invalid_request");
+    let (status, json) = token_request(&app, "grant_type=authorization_code&code=abc").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json["error"], "invalid_request");
 }
 
 #[tokio::test]
@@ -130,6 +199,28 @@ async fn protected_health_requires_bearer_token() {
         .await
         .unwrap();
     assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    // RFC 6750 §3: 401s must carry a Bearer challenge.
+    assert_eq!(
+        unauthorized.headers().get(header::WWW_AUTHENTICATE),
+        Some(&header::HeaderValue::from_static("Bearer")),
+    );
+
+    let wrong_token = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/health")
+                .header(header::AUTHORIZATION, "Bearer wrong-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong_token.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        wrong_token.headers().get(header::WWW_AUTHENTICATE),
+        Some(&header::HeaderValue::from_static("Bearer")),
+    );
 
     let authorized = app
         .oneshot(
@@ -305,4 +396,9 @@ async fn mcp_route_requires_bearer_token() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response.headers().get(header::WWW_AUTHENTICATE),
+        Some(&header::HeaderValue::from_static("Bearer")),
+        "MCP 401s must carry a Bearer challenge for OAuth-capable clients",
+    );
 }
