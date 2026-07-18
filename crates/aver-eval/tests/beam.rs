@@ -51,6 +51,18 @@ fn beam_redacts_secret_like_tokens_before_ingestion() {
 }
 
 #[test]
+fn beam_sanitize_keeps_known_hash_hex_tokens() {
+    // Git SHAs and hex digests are identifiers, not secrets.
+    let sha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709";
+    let sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    let raw = format!("commit {sha1} checksum {sha256}");
+
+    let sanitized = aver_eval::beam::sanitize_memory_text(&raw);
+
+    assert_eq!(sanitized, raw);
+}
+
+#[test]
 fn beam_answer_prompt_satisfies_v1_contract() {
     let prompt = aver_eval::beam::answer_prompt("When is launch?", "April 1", &[]);
     let contract = aver_eval::prompt_assertions::contract_for(
@@ -164,6 +176,26 @@ fn beam_context_ordering_treats_now_as_current_question() {
     );
 
     assert_eq!(contexts, vec!["new city", "old city"]);
+}
+
+#[test]
+fn beam_context_ordering_ignores_represent_and_presented() {
+    // Whole-word matching: "represent"/"presented" must not trip "present".
+    let contexts = aver_eval::beam::order_contexts_for_question(
+        "Which values represent the presented totals?",
+        vec![
+            (
+                "conversation:1:message:1".to_string(),
+                "first total".to_string(),
+            ),
+            (
+                "conversation:1:message:9".to_string(),
+                "last total".to_string(),
+            ),
+        ],
+    );
+
+    assert_eq!(contexts, vec!["first total", "last total"]);
 }
 
 #[test]

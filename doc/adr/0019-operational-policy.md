@@ -207,7 +207,7 @@ snapshot becomes worth the second code path. Also revisit if shared mode
 |-----------------|----------------------------------------------------------------------------------------------------------------------|
 | Inputs          | `.aver/log.jsonl` plus all rotated `.aver/log.{N}.jsonl.gz` (in numeric order, oldest first), then `events.jsonl`, then `observations.jsonl`, then per-agent `agents/<id>/log.jsonl` |
 | Output          | A fully populated `db.sqlite` containing claims, episodic events, observations, candidate claims, contradictions, ontology seed |
-| Determinism     | Pure function of input log content; running twice produces byte-identical `db.sqlite` after `VACUUM`                 |
+| Determinism     | Pure function of input log content; running twice produces row-identical `db.sqlite` contents after `VACUUM`, modulo migration-stamped timestamps (migrations stamp `strftime('%s','now')`, so byte-identical files are not guaranteed) |
 | Idempotency     | Replay over an existing `db.sqlite` is allowed only with `--force`; default refuses to start if `claims` is non-empty |
 | Identifier policy | The `id` from each log record is preserved verbatim. Conflicting ids fail loudly (`E_REPLAY_DUPLICATE_ID`) — they indicate log corruption, not a valid state |
 | Privacy filter  | The privacy filter (ADR-0009) **does not run** during replay. The log is presumed already filtered at write time. A replay-time re-filter would silently drop rows that are present in the source of truth |

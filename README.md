@@ -35,7 +35,7 @@ The goal is a trustworthy substrate for coding agents that can:
 - **Adaptive HybridRAG weights** — structural graph questions lean toward graph context; broad summary questions lean toward vectors; explicit alpha overrides are range-validated.
 - **Graph expansion, path queries, and communities** — local claim neighborhoods, confidence/provenance-aware shortest path queries over active claims and hyperedges, and deterministic weighted community detection are available in core.
 - **Contradiction records and confidence decay** — contradictions are explicit audit records; consolidation can decay contradicted active claims and report merged/superseded/decayed counts.
-- **Deterministic code extraction** — `aver-extractor` uses Tree-sitter Rust to extract functions, imports, calls, structs, enums, traits, impl methods, tests, and code facts.
+- **Deterministic code extraction** — `aver-extractor` uses Tree-sitter to extract functions, imports, calls, structs, enums, traits, impl methods, tests, and code facts across 13 languages (C, C++, C#, Go, Java, JavaScript, Kotlin, PHP, Python, Ruby, Rust, Swift, TypeScript).
 - **Candidate claim workflow** — episodic events can produce staged claims that are promoted or rejected explicitly.
 - **Observation continuity surfaces** — episodic events can produce privacy-checked, source-backed observations that are recallable by ID, summarized by compaction, and coverage-accounted across full session event ranges.
 - **Continuity reliability controls** — coverage accounting, deterministic `catch-up`, gap warnings in summaries, destructive prune operations blocked when gaps remain, prune markers preserved in logs, and audit-aware observation recall.
@@ -247,7 +247,7 @@ Run fixture evaluation:
 cargo run -p aver-eval -- <fixture.json> [fixture.json ...]
 ```
 
-The eval crate also exposes deterministic data structures for ADR-0012 query-suite regression threshold checks, hallucination-rate memory-on/off reports, graph-stat drift snapshots with privacy-rejection counters, and typed prompt contracts. Prompt contracts validate rendered prompt text before a model call using deterministic checks such as required text, forbidden text, required sections, unresolved-template detection, and character budgets. These checks validate prompt generation code; live judge/provider integrations and output-quality evals should remain separate and feed recorded case results into the eval structures.
+The eval crate also exposes deterministic data structures for ADR-0012 query-suite regression threshold checks, hallucination-rate memory-on/off reports, and typed prompt contracts; aver-core adds graph-stat drift snapshots with privacy-rejection counters. Prompt contracts validate rendered prompt text before a model call using deterministic checks such as required text, forbidden text, required sections, unresolved-template detection, and character budgets. These checks validate prompt generation code; live judge/provider integrations and output-quality evals should remain separate and feed recorded case results into the eval structures.
 
 Run BEAM100K with local Ollama:
 
@@ -289,9 +289,10 @@ aver/
 ├── crates/
 │   ├── aver-core/       # Store, claims, events, privacy filter, vectors, recall, consolidation
 │   ├── aver-cli/        # `aver` command-line interface
-│   ├── aver-extractor/  # Tree-sitter Rust and prose fact extraction
+│   ├── aver-extractor/  # Tree-sitter (13 languages) and prose fact extraction
 │   ├── aver-server/     # MCP/OAuth HTTP server
-│   └── aver-eval/       # Fixture and BEAM100K evaluation runners
+│   ├── aver-eval/       # Fixture and BEAM100K evaluation runners
+│   └── aver-scope-shim/ # ADR-0022 per-workspace scope shim (X-Aver-Scope proxy)
 ├── doc/
 │   ├── adr/             # Architecture decision records
 │   └── how-it-works.md  # Current implementation walkthrough
@@ -333,7 +334,7 @@ Implemented today:
 - explicit contradiction records and confidence decay for contradicted active claims,
 - basic consolidation for duplicate/conflicting claims,
 - CLI `status`, `remember`, `recall`, `communities`, and observation continuity surfaces (`record-observation`, `recall-observation`, `observation-coverage`, `catch-up`, `compaction-summary`),
-- Tree-sitter Rust extraction,
+- Tree-sitter extraction across 13 languages (C, C++, C#, Go, Java, JavaScript, Kotlin, PHP, Python, Ruby, Rust, Swift, TypeScript),
 - structured prose fact parsing,
 - MCP/OAuth server with ADR-0008 recall/expand/add-triple/contradict/consolidate tools, staged candidate-claim workflow, and observation recall/compaction-summary tools,
 - ADR-0020 browser consent flow for `/oauth/authorize` (loopback Profile A) replacing the legacy `approval_token` gate,

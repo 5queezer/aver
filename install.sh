@@ -87,11 +87,11 @@ need() {
 
 ensure_path_hint() {
   case ":$PATH:" in
-    *":$HOME/.cargo/bin:"*) ;;
+    *":$INSTALL_DIR:"*) ;;
     *)
       echo
       echo "Add Aver to your PATH:"
-      echo '  export PATH="$HOME/.cargo/bin:$PATH"'
+      echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
       ;;
   esac
 }

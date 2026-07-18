@@ -20,7 +20,7 @@ CREATE INDEX IF NOT EXISTS observations_scope      ON observations(scope);
 CREATE INDEX IF NOT EXISTS candidate_claims_scope  ON candidate_claims(scope);
 
 -- Charset trigger pattern mirrors `claims_agent_id_charset_*` from
--- migration 0061: GLOB negation across the allowed character class.
+-- migration 0031: GLOB negation across the allowed character class.
 -- Allowed: A-Z a-z 0-9 underscore hyphen forward-slash.
 
 CREATE TRIGGER IF NOT EXISTS claims_scope_nonblank_insert

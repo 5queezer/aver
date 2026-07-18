@@ -49,11 +49,10 @@ release:
 # Build the release MCP/OAuth server binary
 release-server:
     cargo build --release --locked -p aver-server
-    tmp="$(mktemp)"; strip -o "${tmp}" "${PWD}/target/release/aver-server"; mv "${tmp}" "${PWD}/target/release/aver-server"
 
 # Create a local release tarball and checksum under target/dist
 dist: release
     mkdir -p target/dist
-    tar -C target/release -czf target/dist/aver-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m).tar.gz aver
+    arch="$(uname -m)"; case "$arch" in x86_64|amd64) arch="x86_64" ;; aarch64|arm64) arch="aarch64" ;; esac; tar -C target/release -czf "target/dist/aver-$(uname -s | tr '[:upper:]' '[:lower:]')-${arch}.tar.gz" aver
     sha256sum target/dist/aver-*.tar.gz > target/dist/SHA256SUMS
     @echo "Wrote target/dist/"

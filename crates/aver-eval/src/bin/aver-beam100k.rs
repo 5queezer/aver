@@ -7,7 +7,7 @@ use clap::Parser;
 struct Args {
     #[arg(long)]
     dataset: Option<PathBuf>,
-    #[arg(long, default_value = "openai")]
+    #[arg(long, default_value = "ollama")]
     provider: aver_eval::beam::BeamProvider,
     #[arg(long, default_value = "http://localhost:11434")]
     ollama_base_url: String,
