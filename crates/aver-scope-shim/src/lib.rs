@@ -9,13 +9,15 @@
 //!
 //! Layout:
 //! - [`derive_scope`] / [`scope_from_git`] — slug derivation rules.
-//! - The HTTP proxy lives in `main.rs`; this module exports the building
-//!   blocks for unit tests.
+//! - [`proxy`] — the streaming HTTP proxy (router, config, URL joining);
+//!   `main.rs` is only CLI parsing and startup wiring.
 
 use std::path::Path;
 use std::process::Command;
 
 use sha2::{Digest, Sha256};
+
+pub mod proxy;
 
 /// Per-startup scope decision: either a derived `proj/...` scope, an env-var
 /// override, or the hardcoded "global" fallback.
@@ -55,7 +57,8 @@ pub fn slug_hash(input: &str) -> String {
 /// Derive the scope a shim should inject for a given working directory.
 ///
 /// Precedence:
-/// 1. `cli_override` if supplied.
+/// 1. `cli_override` if supplied (empty/whitespace-only values are ignored,
+///    matching the `AVER_DEFAULT_SCOPE` handling below).
 /// 2. Git remote origin URL hash, if `cwd` is inside a git repo with origin.
 /// 3. Git toplevel absolute path hash (per ADR-0022 amendment / council
 ///    risk #3), if inside a git repo without origin.
@@ -66,7 +69,7 @@ pub fn derive_scope(
     cli_override: Option<&str>,
     env_default: Option<&str>,
 ) -> DerivedScope {
-    if let Some(s) = cli_override {
+    if let Some(s) = cli_override.filter(|v| !v.trim().is_empty()) {
         return DerivedScope {
             scope: s.to_string(),
             source: ScopeSource::CliOverride,
