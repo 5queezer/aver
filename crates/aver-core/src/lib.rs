@@ -30,7 +30,7 @@ use std::str::FromStr;
 use recall::{graph_score_for_query_claim, query_tokens_for_recall, recall_token_score};
 use rusqlite::{Connection, OptionalExtension, params, types::Type};
 use seed::seed_ontology;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use validation::{
     validate_agent_id, validate_candidate_status_filter, validate_claim_field,
     validate_contradiction_reason, validate_embedding_model, validate_embedding_vector,
@@ -414,6 +414,11 @@ impl Store {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         // ADR-0019 §1: raise wal_autocheckpoint from 1000 to 4000 pages.
         conn.pragma_update(None, "wal_autocheckpoint", 4_000)?;
+        // WAL allows one writer at a time; write paths now hold BEGIN
+        // IMMEDIATE across id allocation + log append + projection insert.
+        // A bounded busy timeout makes a concurrent second writer wait for
+        // the first to commit instead of failing with SQLITE_BUSY.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
 
         // ADR-0019 §6: gate migrations on PRAGMA user_version.
         let current: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -640,52 +645,7 @@ impl Store {
     }
 
     fn ensure_entity(&self, entity: &str, now: i64) -> Result<(), Error> {
-        let inferred_type = self.infer_entity_type_name(entity)?;
-        let type_id = self.entity_type_id(&inferred_type)?.unwrap_or_else(|| {
-            self.entity_type_id("Thing")
-                .expect("Thing lookup should not fail")
-                .expect("ontology bootstrap should seed Thing")
-        });
-        let thing_id = self
-            .entity_type_id("Thing")?
-            .expect("ontology bootstrap should seed Thing");
-        // ADR-0018 §"Subject/object policy": when the inferred type falls
-        // back to `Thing` (no `prefix:` and no synonym match), surface the
-        // entity for consolidation review instead of silently coercing.
-        let requires_review = if type_id == thing_id { 1_i64 } else { 0_i64 };
-        let current: Option<i64> = self
-            .conn
-            .query_row(
-                "SELECT type_id FROM entities WHERE name = ?1",
-                [entity],
-                |row| row.get(0),
-            )
-            .optional()?;
-        match current {
-            None => {
-                self.conn.execute(
-                    "INSERT INTO entities (name, type_id, requires_review, created_at, last_seen_at)
-                     VALUES (?1, ?2, ?3, ?4, ?4)",
-                    params![entity, type_id, requires_review, now],
-                )?;
-            }
-            Some(existing) if existing == thing_id && type_id != thing_id => {
-                // Promotion from Thing → real type clears the review flag.
-                self.conn.execute(
-                    "UPDATE entities
-                        SET type_id = ?2, requires_review = 0, last_seen_at = ?3
-                      WHERE name = ?1",
-                    params![entity, type_id, now],
-                )?;
-            }
-            Some(_) => {
-                self.conn.execute(
-                    "UPDATE entities SET last_seen_at = ?2 WHERE name = ?1",
-                    params![entity, now],
-                )?;
-            }
-        }
-        Ok(())
+        ensure_entity_on(&self.conn, entity, now)
     }
 
     /// ADR-0018: count of entities currently flagged `requires_review = 1`.
@@ -821,28 +781,8 @@ impl Store {
             .map_err(Error::Sqlite)
     }
 
-    fn infer_entity_type_name(&self, entity: &str) -> Result<String, Error> {
-        if let Some((prefix, _rest)) = entity.split_once(':')
-            && self.entity_type_id(prefix)?.is_some()
-        {
-            return Ok(prefix.to_string());
-        }
-        match entity {
-            "User" => Ok("Human".to_string()),
-            "Claude" | "Pi" => Ok("Bot".to_string()),
-            _ => Ok("Thing".to_string()),
-        }
-    }
-
     fn entity_type_id(&self, name: &str) -> Result<Option<i64>, Error> {
-        self.conn
-            .query_row(
-                "SELECT id FROM entity_types WHERE name = ?1",
-                [name],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(Error::Sqlite)
+        entity_type_id_on(&self.conn, name)
     }
 
     fn predicate_type_id(&self, name: &str) -> Result<Option<i64>, Error> {
@@ -1071,55 +1011,72 @@ impl Store {
         self.validate_claim_write(&write)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
-        // Pre-allocate the claim id. Single-writer assumption: rusqlite's
-        // Connection is !Sync, so within a process this is race-free; SQLite
-        // WAL serializes writers across processes.
-        let claim_id: i64 =
-            self.conn
-                .query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM claims", [], |r| {
-                    r.get(0)
-                })?;
+        // Pre-allocate the claim id inside a write transaction. The
+        // BEGIN IMMEDIATE serializes cross-process writers (WAL single
+        // writer), so two processes can no longer compute the same
+        // MAX(id)+1 and poison the log with duplicate claim ids. The log
+        // append stays strictly before the SQLite INSERT (ADR-0005).
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<i64, Error> {
+            let claim_id: i64 =
+                self.conn
+                    .query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM claims", [], |r| {
+                        r.get(0)
+                    })?;
 
-        let entry = LogEntry {
-            kind: "add_claim",
-            ts: now,
-            claim_id,
-            subject: write.subject,
-            predicate: write.predicate,
-            object: write.object,
-            source: write.source,
-            agent_id: write.agent_id,
-            agent_kind: write.agent_kind.as_str(),
-            confidence: write.confidence,
-        };
-        append_jsonl(&self.log_path, &entry)?;
-        append_jsonl(&self.agent_log_path(write.agent_id)?, &entry)?;
-
-        self.ensure_entity(write.subject, now)?;
-        self.ensure_entity(write.object, now)?;
-
-        let source_refs = serde_json::to_string(&[write.source])?;
-        self.conn.execute(
-            "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
-                                 status, source_refs, agent_id, agent_kind, write_ts,
-                                 created_at, last_seen_at, last_verified_at, scope)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7,
-                     ?8, ?9, ?10, ?10, ?10, ?10, ?11)",
-            params![
+            let entry = LogEntry {
+                kind: "add_claim",
+                ts: now,
                 claim_id,
-                write.subject,
-                write.predicate,
-                write.object,
-                write.provenance.as_str(),
-                write.confidence,
-                source_refs,
-                write.agent_id,
-                write.agent_kind.as_str(),
-                now,
-                write.scope,
-            ],
-        )?;
-        Ok(claim_id)
+                subject: write.subject,
+                predicate: write.predicate,
+                object: write.object,
+                source: write.source,
+                agent_id: write.agent_id,
+                agent_kind: write.agent_kind.as_str(),
+                confidence: write.confidence,
+                provenance: write.provenance.as_str(),
+                scope: write.scope,
+            };
+            append_jsonl(&self.log_path, &entry)?;
+            append_jsonl(&self.agent_log_path(write.agent_id)?, &entry)?;
+
+            self.ensure_entity(write.subject, now)?;
+            self.ensure_entity(write.object, now)?;
+
+            let source_refs = serde_json::to_string(&[write.source])?;
+            self.conn.execute(
+                "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
+                                     status, source_refs, agent_id, agent_kind, write_ts,
+                                     created_at, last_seen_at, last_verified_at, scope)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7,
+                         ?8, ?9, ?10, ?10, ?10, ?10, ?11)",
+                params![
+                    claim_id,
+                    write.subject,
+                    write.predicate,
+                    write.object,
+                    write.provenance.as_str(),
+                    write.confidence,
+                    source_refs,
+                    write.agent_id,
+                    write.agent_kind.as_str(),
+                    now,
+                    write.scope,
+                ],
+            )?;
+            Ok(claim_id)
+        })();
+        match result {
+            Ok(claim_id) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(claim_id)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
     }
 
     pub fn add_hyperedge(&self, input: HyperedgeInput) -> Result<i64, Error> {
@@ -1175,27 +1132,30 @@ impl Store {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         self.ontology_check(&input.predicate, input.provenance, "local", now)?;
 
-        let hyperedge_id: i64 = self.conn.query_row(
-            "SELECT COALESCE(MAX(id), 0) + 1 FROM hyperedges",
-            [],
-            |row| row.get(0),
-        )?;
-
-        let entry = HyperedgeLogEntry {
-            kind: "add_hyperedge",
-            ts: now,
-            hyperedge_id,
-            predicate: &input.predicate,
-            provenance: input.provenance.as_str(),
-            confidence: input.confidence,
-            source_refs: &input.source_refs,
-            participants: &input.participants,
-        };
-        append_jsonl(&self.log_path, &entry)?;
-
-        let source_refs_json = serde_json::to_string(&input.source_refs)?;
+        // BEGIN IMMEDIATE covers id allocation + log append + projection so
+        // concurrent processes cannot allocate duplicate hyperedge ids. The
+        // log append remains strictly before the SQLite INSERTs (ADR-0005).
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        let projection = (|| -> Result<(), Error> {
+        let result = (|| -> Result<i64, Error> {
+            let hyperedge_id: i64 = self.conn.query_row(
+                "SELECT COALESCE(MAX(id), 0) + 1 FROM hyperedges",
+                [],
+                |row| row.get(0),
+            )?;
+
+            let entry = HyperedgeLogEntry {
+                kind: "add_hyperedge",
+                ts: now,
+                hyperedge_id,
+                predicate: &input.predicate,
+                provenance: input.provenance.as_str(),
+                confidence: input.confidence,
+                source_refs: &input.source_refs,
+                participants: &input.participants,
+            };
+            append_jsonl(&self.log_path, &entry)?;
+
+            let source_refs_json = serde_json::to_string(&input.source_refs)?;
             self.conn.execute(
                 "INSERT INTO hyperedges (id, predicate, provenance, confidence, source_refs, status, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, 'ACTIVE', ?6, ?6)",
@@ -1216,14 +1176,18 @@ impl Store {
                     params![hyperedge_id, participant.role, participant.entity],
                 )?;
             }
-            Ok(())
+            Ok(hyperedge_id)
         })();
-        if let Err(err) = projection {
-            let _ = self.conn.execute_batch("ROLLBACK");
-            return Err(err);
+        match result {
+            Ok(hyperedge_id) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(hyperedge_id)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
         }
-        self.conn.execute_batch("COMMIT")?;
-        Ok(hyperedge_id)
     }
 
     pub fn get_hyperedge(&self, id: i64) -> Result<Hyperedge, Error> {
@@ -1466,39 +1430,55 @@ impl Store {
         ))?;
         self.privacy_filter_path_recording(source)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        let event_id: i64 = self.conn.query_row(
-            "SELECT COALESCE(MAX(id), 0) + 1 FROM episodic_events",
-            [],
-            |r| r.get(0),
-        )?;
-        let entry = EventLogEntry {
-            kind: "record_event",
-            ts: now,
-            event_id,
-            session_id,
-            event_kind: kind,
-            payload,
-            source,
-            agent_id,
-            agent_kind: agent_kind.as_str(),
-        };
-        append_jsonl(&self.event_log_path, &entry)?;
-        self.conn.execute(
-            "INSERT INTO episodic_events (id, session_id, kind, payload, source, agent_id, agent_kind, ts, scope)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
+        // BEGIN IMMEDIATE serializes id allocation across processes (same
+        // race class as insert_claim). Log append stays before the INSERT.
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<i64, Error> {
+            let event_id: i64 = self.conn.query_row(
+                "SELECT COALESCE(MAX(id), 0) + 1 FROM episodic_events",
+                [],
+                |r| r.get(0),
+            )?;
+            let entry = EventLogEntry {
+                kind: "record_event",
+                ts: now,
                 event_id,
                 session_id,
-                kind,
+                event_kind: kind,
                 payload,
                 source,
                 agent_id,
-                agent_kind.as_str(),
-                now,
+                agent_kind: agent_kind.as_str(),
                 scope,
-            ],
-        )?;
-        Ok(event_id)
+            };
+            append_jsonl(&self.event_log_path, &entry)?;
+            self.conn.execute(
+                "INSERT INTO episodic_events (id, session_id, kind, payload, source, agent_id, agent_kind, ts, scope)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    event_id,
+                    session_id,
+                    kind,
+                    payload,
+                    source,
+                    agent_id,
+                    agent_kind.as_str(),
+                    now,
+                    scope,
+                ],
+            )?;
+            Ok(event_id)
+        })();
+        match result {
+            Ok(event_id) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(event_id)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
     }
 
     pub fn get_event(&self, id: i64) -> Result<EpisodicEvent, Error> {
@@ -1667,6 +1647,7 @@ impl Store {
             agent_id: &first_event.agent_id,
             agent_kind: first_event.agent_kind.as_str(),
             derivation,
+            scope,
         };
         append_jsonl(&self.observation_log_path, &entry)?;
         self.conn.execute(
@@ -2184,12 +2165,47 @@ impl Store {
             self.privacy_filter_path_recording(possible_path)?;
         }
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        self.conn.execute(
-            "INSERT INTO candidate_claims (event_id, subject, predicate, object, created_at, scope)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![event_id, subject, predicate, object, now, scope],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        // The candidate id is pre-allocated inside a write transaction so the
+        // append-only log can pin it (ADR-0005) and cross-process writers
+        // cannot allocate the same id. Candidate records go to the episodic
+        // log: they FK-reference episodic_events, which replay in the same
+        // phase (ADR-0019 §4 input order replays events.jsonl after
+        // log.jsonl, so log.jsonl must not carry event-dependent records).
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<i64, Error> {
+            let candidate_id: i64 = self.conn.query_row(
+                "SELECT COALESCE(MAX(id), 0) + 1 FROM candidate_claims",
+                [],
+                |r| r.get(0),
+            )?;
+            let entry = CandidateClaimLogEntry {
+                kind: "propose_candidate_claim",
+                ts: now,
+                candidate_id,
+                event_id,
+                subject,
+                predicate,
+                object,
+                scope,
+            };
+            append_jsonl(&self.event_log_path, &entry)?;
+            self.conn.execute(
+                "INSERT INTO candidate_claims (id, event_id, subject, predicate, object, created_at, scope)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![candidate_id, event_id, subject, predicate, object, now, scope],
+            )?;
+            Ok(candidate_id)
+        })();
+        match result {
+            Ok(candidate_id) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(candidate_id)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
     }
 
     fn event_exists(&self, event_id: i64) -> Result<bool, Error> {
@@ -2217,56 +2233,99 @@ impl Store {
         let event = self.get_event(candidate.event_id)?;
         let source = format!("event:{}", event.id);
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        let claim_id: i64 =
-            self.conn
-                .query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM claims", [], |r| {
-                    r.get(0)
-                })?;
 
-        let entry = LogEntry {
-            kind: "add_claim",
-            ts: now,
-            claim_id,
-            subject: &candidate.subject,
-            predicate: &candidate.predicate,
-            object: &candidate.object,
-            source: &source,
-            agent_id: &event.agent_id,
-            agent_kind: event.agent_kind.as_str(),
-            confidence: candidate.confidence,
-        };
-        append_jsonl(&self.log_path, &entry)?;
-        append_jsonl(&self.agent_log_path(&event.agent_id)?, &entry)?;
-        self.ensure_entity(&candidate.subject, now)?;
-        self.ensure_entity(&candidate.object, now)?;
+        // ADR-0018: ontology check BEFORE any log append. Promoting an
+        // extractor candidate with an unknown predicate must fail cleanly;
+        // appending the add_claim line first would poison the log with a
+        // record whose projection INSERT later fails at the ontology
+        // trigger. (The candidate content was privacy-filtered at proposal
+        // time, so there is nothing new to filter here.)
+        self.ontology_check(
+            &candidate.predicate,
+            candidate.provenance,
+            &event.agent_id,
+            now,
+        )?;
 
-        let source_refs = serde_json::to_string(&[source])?;
-        self.conn.execute(
-            "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
-                                 status, source_refs, agent_id, agent_kind, write_ts,
-                                 created_at, last_seen_at, scope)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7, ?8, ?9, ?10, ?10, ?10, ?11)",
-            params![
+        // Id allocation, log appends, and projection updates in one write
+        // transaction (same race class as insert_claim). Log-first ordering
+        // is preserved: both log lines precede the SQLite writes.
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<i64, Error> {
+            let claim_id: i64 =
+                self.conn
+                    .query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM claims", [], |r| {
+                        r.get(0)
+                    })?;
+
+            let entry = LogEntry {
+                kind: "add_claim",
+                ts: now,
                 claim_id,
-                candidate.subject,
-                candidate.predicate,
-                candidate.object,
-                candidate.provenance.as_str(),
-                candidate.confidence,
-                source_refs,
-                event.agent_id,
-                event.agent_kind.as_str(),
-                now,
-                candidate.scope,
-            ],
-        )?;
-        self.conn.execute(
-            "UPDATE candidate_claims
-                SET status = 'PROMOTED', promoted_claim_id = ?1
-              WHERE id = ?2",
-            params![claim_id, candidate_id],
-        )?;
-        Ok(claim_id)
+                subject: &candidate.subject,
+                predicate: &candidate.predicate,
+                object: &candidate.object,
+                source: &source,
+                agent_id: &event.agent_id,
+                agent_kind: event.agent_kind.as_str(),
+                confidence: candidate.confidence,
+                provenance: candidate.provenance.as_str(),
+                scope: &candidate.scope,
+            };
+            append_jsonl(&self.log_path, &entry)?;
+            append_jsonl(&self.agent_log_path(&event.agent_id)?, &entry)?;
+            // The promotion marker joins the candidate in the episodic log
+            // (FK dependency on candidate_claims, which replays in the
+            // events phase; the paired add_claim line replays earlier).
+            let promote_entry = PromoteCandidateLogEntry {
+                kind: "promote_candidate_claim",
+                ts: now,
+                candidate_id,
+                claim_id,
+            };
+            append_jsonl(&self.event_log_path, &promote_entry)?;
+
+            self.ensure_entity(&candidate.subject, now)?;
+            self.ensure_entity(&candidate.object, now)?;
+
+            let source_refs = serde_json::to_string(&[source])?;
+            self.conn.execute(
+                "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
+                                     status, source_refs, agent_id, agent_kind, write_ts,
+                                     created_at, last_seen_at, scope)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7, ?8, ?9, ?10, ?10, ?10, ?11)",
+                params![
+                    claim_id,
+                    candidate.subject,
+                    candidate.predicate,
+                    candidate.object,
+                    candidate.provenance.as_str(),
+                    candidate.confidence,
+                    source_refs,
+                    event.agent_id,
+                    event.agent_kind.as_str(),
+                    now,
+                    candidate.scope,
+                ],
+            )?;
+            self.conn.execute(
+                "UPDATE candidate_claims
+                    SET status = 'PROMOTED', promoted_claim_id = ?1
+                  WHERE id = ?2",
+                params![claim_id, candidate_id],
+            )?;
+            Ok(claim_id)
+        })();
+        match result {
+            Ok(claim_id) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(claim_id)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
     }
 
     pub fn reject_candidate_claim(&self, candidate_id: i64, reason: &str) -> Result<(), Error> {
@@ -2285,16 +2344,39 @@ impl Store {
         }
         validate_rejection_reason(reason)?;
         self.privacy_filter_recording(reason)?;
-        let rows_changed = self.conn.execute(
-            "UPDATE candidate_claims
-                SET status = 'REJECTED', rejection_reason = ?1
-              WHERE id = ?2",
-            params![reason, candidate_id],
-        )?;
-        if rows_changed == 0 {
-            return Err(Error::MissingCandidate { candidate_id });
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<(), Error> {
+            // Candidate lifecycle records live in the episodic log so replay
+            // applies them in the same phase as the candidate proposal.
+            let entry = RejectCandidateLogEntry {
+                kind: "reject_candidate_claim",
+                ts: now,
+                candidate_id,
+                reason,
+            };
+            append_jsonl(&self.event_log_path, &entry)?;
+            let rows_changed = self.conn.execute(
+                "UPDATE candidate_claims
+                    SET status = 'REJECTED', rejection_reason = ?1
+                  WHERE id = ?2",
+                params![reason, candidate_id],
+            )?;
+            if rows_changed == 0 {
+                return Err(Error::MissingCandidate { candidate_id });
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
         }
-        Ok(())
     }
 
     pub fn list_candidate_claims(
@@ -2432,12 +2514,41 @@ impl Store {
         self.privacy_filter_recording(reason)?;
         self.ensure_claim_exists(claim_id)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        self.conn.execute(
-            "INSERT INTO contradictions (claim_id, reason, created_at)
-             VALUES (?1, ?2, ?3)",
-            params![claim_id, reason, now],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        // The contradiction id is pre-allocated inside a write transaction so
+        // the log record pins the same id the projection uses (ADR-0005).
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<i64, Error> {
+            let contradiction_id: i64 = self.conn.query_row(
+                "SELECT COALESCE(MAX(id), 0) + 1 FROM contradictions",
+                [],
+                |r| r.get(0),
+            )?;
+            let entry = ContradictionLogEntry {
+                kind: "add_contradiction",
+                ts: now,
+                contradiction_id,
+                claim_id,
+                reason,
+                new_claim_id: None,
+            };
+            append_jsonl(&self.log_path, &entry)?;
+            self.conn.execute(
+                "INSERT INTO contradictions (id, claim_id, reason, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![contradiction_id, claim_id, reason, now],
+            )?;
+            Ok(contradiction_id)
+        })();
+        match result {
+            Ok(contradiction_id) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(contradiction_id)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
     }
 
     pub fn get_candidate_claim(&self, id: i64) -> Result<CandidateClaim, Error> {
@@ -3511,12 +3622,41 @@ impl Store {
             None
         };
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        self.conn.execute(
-            "INSERT INTO contradictions (claim_id, reason, new_claim_id, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![claim_id, reason, new_claim_id, now],
-        )?;
-        let id = self.conn.last_insert_rowid();
+        // Pre-allocate the contradiction id inside a write transaction so the
+        // log record pins the same id the projection uses (ADR-0005).
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<i64, Error> {
+            let contradiction_id: i64 = self.conn.query_row(
+                "SELECT COALESCE(MAX(id), 0) + 1 FROM contradictions",
+                [],
+                |r| r.get(0),
+            )?;
+            let entry = ContradictionLogEntry {
+                kind: "add_contradiction",
+                ts: now,
+                contradiction_id,
+                claim_id,
+                reason,
+                new_claim_id,
+            };
+            append_jsonl(&self.log_path, &entry)?;
+            self.conn.execute(
+                "INSERT INTO contradictions (id, claim_id, reason, new_claim_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![contradiction_id, claim_id, reason, new_claim_id, now],
+            )?;
+            Ok(contradiction_id)
+        })();
+        let id = match result {
+            Ok(id) => {
+                self.conn.execute_batch("COMMIT")?;
+                id
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                return Err(err);
+            }
+        };
         self.get_contradiction(id)
     }
 
@@ -3568,18 +3708,67 @@ impl Store {
     }
 
     pub fn decay_contradicted_confidence(&self) -> Result<usize, Error> {
-        Ok(self.conn.execute(
-            "UPDATE claims
-                SET confidence = MAX(0.0, ROUND(confidence - 0.10, 2))
-              WHERE status = 'ACTIVE'
-                AND EXISTS (
-                    SELECT 1
-                      FROM contradictions
-                     WHERE contradictions.claim_id = claims.id
-                       AND contradictions.status = 'RECORDED'
-                )",
-            [],
-        )?)
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        // The concrete post-decay values are computed up front and logged
+        // before the projection UPDATEs (ADR-0005): the log records outcomes,
+        // not the decay formula, so replay reproduces the same state even if
+        // the decay policy changes later.
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<usize, Error> {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, confidence
+                   FROM claims
+                  WHERE status = 'ACTIVE'
+                    AND EXISTS (
+                        SELECT 1
+                          FROM contradictions
+                         WHERE contradictions.claim_id = claims.id
+                           AND contradictions.status = 'RECORDED'
+                    )
+                  ORDER BY id",
+            )?;
+            let rows = stmt
+                .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            drop(stmt);
+            // Mirrors SQL MAX(0.0, ROUND(confidence - 0.10, 2)).
+            let changes: Vec<ConfidenceChange> = rows
+                .into_iter()
+                .map(|(claim_id, confidence)| {
+                    let decayed = ((confidence - 0.10) * 100.0).round() / 100.0;
+                    ConfidenceChange {
+                        claim_id,
+                        confidence: decayed.max(0.0),
+                    }
+                })
+                .collect();
+            if changes.is_empty() {
+                return Ok(0);
+            }
+            let entry = DecayLogEntry {
+                kind: "decay_confidence",
+                ts: now,
+                changes: &changes,
+            };
+            append_jsonl(&self.log_path, &entry)?;
+            for change in &changes {
+                self.conn.execute(
+                    "UPDATE claims SET confidence = ?1 WHERE id = ?2",
+                    params![change.confidence, change.claim_id],
+                )?;
+            }
+            Ok(changes.len())
+        })();
+        match result {
+            Ok(changed) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(changed)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
     }
 
     pub fn decay_inferred_confidence_at(
@@ -3590,33 +3779,62 @@ impl Store {
         if tau_seconds <= 0.0 || !tau_seconds.is_finite() {
             return Err(Error::InvalidDecayTau { value: tau_seconds });
         }
-        let mut stmt = self.conn.prepare(
-            "SELECT id, confidence, last_seen_at
-               FROM claims
-              WHERE status = 'ACTIVE' AND provenance = 'INFERRED'",
-        )?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, f64>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        drop(stmt);
-
-        let mut changed = 0;
-        for (id, confidence, last_seen_at) in rows {
-            let delta = now_ts.saturating_sub(last_seen_at) as f64;
-            let decayed = confidence * (-delta / tau_seconds).exp();
-            self.conn.execute(
-                "UPDATE claims SET confidence = ?1 WHERE id = ?2",
-                params![decayed, id],
+        let log_ts = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<usize, Error> {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, confidence, last_seen_at
+                   FROM claims
+                  WHERE status = 'ACTIVE' AND provenance = 'INFERRED'
+                  ORDER BY id",
             )?;
-            changed += 1;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, f64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            drop(stmt);
+
+            let mut changes = Vec::with_capacity(rows.len());
+            for (id, confidence, last_seen_at) in rows {
+                let delta = now_ts.saturating_sub(last_seen_at) as f64;
+                let decayed = confidence * (-delta / tau_seconds).exp();
+                changes.push(ConfidenceChange {
+                    claim_id: id,
+                    confidence: decayed,
+                });
+            }
+            if changes.is_empty() {
+                return Ok(0);
+            }
+            let entry = DecayLogEntry {
+                kind: "decay_confidence",
+                ts: log_ts,
+                changes: &changes,
+            };
+            append_jsonl(&self.log_path, &entry)?;
+            for change in &changes {
+                self.conn.execute(
+                    "UPDATE claims SET confidence = ?1 WHERE id = ?2",
+                    params![change.confidence, change.claim_id],
+                )?;
+            }
+            Ok(changes.len())
+        })();
+        match result {
+            Ok(changed) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(changed)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
         }
-        Ok(changed)
     }
 
     pub fn consolidate(&self) -> Result<usize, Error> {
@@ -3626,36 +3844,83 @@ impl Store {
     pub fn consolidate_report(&self) -> Result<ConsolidationReport, Error> {
         let merged = self.merge_duplicate_source_refs()?;
         let decayed = self.decay_contradicted_confidence()?;
-        let duplicate_changed = self.conn.execute(
-            "UPDATE claims
-                SET status = 'SUPERSEDED'
-              WHERE id NOT IN (
-                    SELECT MIN(id)
-                      FROM claims
-                     GROUP BY subject, predicate, object
-              )
-                AND status = 'ACTIVE'",
-            [],
-        )?;
-        let conflict_changed = self.conn.execute(
-            "UPDATE claims
-                SET status = 'SUPERSEDED'
-              WHERE status = 'ACTIVE'
-                AND EXISTS (
-                    SELECT 1
-                      FROM claims newer
-                     WHERE newer.subject = claims.subject
-                       AND newer.predicate = claims.predicate
-                       AND newer.object <> claims.object
-                       AND newer.id > claims.id
-                )",
-            [],
-        )?;
-        Ok(ConsolidationReport {
-            merged,
-            superseded: duplicate_changed + conflict_changed,
-            decayed,
-        })
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        // Supersede outcomes are captured as explicit id lists and logged
+        // before the projection UPDATEs (ADR-0005), so replay asserts the
+        // same lifecycle transitions instead of recomputing them.
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<usize, Error> {
+            let duplicate_ids = self.claim_ids_matching(
+                "SELECT id
+                   FROM claims
+                  WHERE id NOT IN (
+                        SELECT MIN(id)
+                          FROM claims
+                         GROUP BY subject, predicate, object
+                    )
+                    AND status = 'ACTIVE'
+                  ORDER BY id",
+            )?;
+            let duplicate_changed = self.supersede_claim_ids(&duplicate_ids, now)?;
+            let conflict_ids = self.claim_ids_matching(
+                "SELECT id
+                   FROM claims
+                  WHERE status = 'ACTIVE'
+                    AND EXISTS (
+                        SELECT 1
+                          FROM claims newer
+                         WHERE newer.subject = claims.subject
+                           AND newer.predicate = claims.predicate
+                           AND newer.object <> claims.object
+                           AND newer.id > claims.id
+                    )
+                  ORDER BY id",
+            )?;
+            let conflict_changed = self.supersede_claim_ids(&conflict_ids, now)?;
+            Ok(duplicate_changed + conflict_changed)
+        })();
+        match result {
+            Ok(superseded) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(ConsolidationReport {
+                    merged,
+                    superseded,
+                    decayed,
+                })
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
+    }
+
+    fn claim_ids_matching(&self, sql: &str) -> Result<Vec<i64>, Error> {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Log a `supersede_claims` record and flip the given claims to
+    /// SUPERSEDED. Caller must hold a write transaction. Empty id lists are
+    /// neither logged nor updated.
+    fn supersede_claim_ids(&self, claim_ids: &[i64], now: i64) -> Result<usize, Error> {
+        if claim_ids.is_empty() {
+            return Ok(0);
+        }
+        let entry = SupersedeLogEntry {
+            kind: "supersede_claims",
+            ts: now,
+            claim_ids,
+        };
+        append_jsonl(&self.log_path, &entry)?;
+        for claim_id in claim_ids {
+            self.conn.execute(
+                "UPDATE claims SET status = 'SUPERSEDED' WHERE id = ?1",
+                [claim_id],
+            )?;
+        }
+        Ok(claim_ids.len())
     }
 
     fn merge_duplicate_source_refs(&self) -> Result<usize, Error> {
@@ -3675,46 +3940,73 @@ impl Store {
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+        if groups.is_empty() {
+            return Ok(0);
+        }
 
-        let mut merged_groups = 0;
-        for (subject, predicate, object, survivor_id) in groups {
-            let mut source_refs = Vec::new();
-            let mut refs_stmt = self.conn.prepare(
-                "SELECT source_refs
-                   FROM claims
-                  WHERE subject = ?1 AND predicate = ?2 AND object = ?3
-                  ORDER BY id",
-            )?;
-            let refs_rows = refs_stmt.query_map(params![subject, predicate, object], |row| {
-                row.get::<_, String>(0)
-            })?;
-            for refs_json in refs_rows {
-                for source_ref in serde_json::from_str::<Vec<String>>(&refs_json?)? {
-                    if !source_refs.contains(&source_ref) {
-                        source_refs.push(source_ref);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<usize, Error> {
+            let mut merged_groups = 0;
+            for (subject, predicate, object, survivor_id) in groups {
+                let mut source_refs = Vec::new();
+                let mut refs_stmt = self.conn.prepare(
+                    "SELECT source_refs
+                       FROM claims
+                      WHERE subject = ?1 AND predicate = ?2 AND object = ?3
+                      ORDER BY id",
+                )?;
+                let refs_rows = refs_stmt
+                    .query_map(params![subject, predicate, object], |row| {
+                        row.get::<_, String>(0)
+                    })?;
+                for refs_json in refs_rows {
+                    for source_ref in serde_json::from_str::<Vec<String>>(&refs_json?)? {
+                        if !source_refs.contains(&source_ref) {
+                            source_refs.push(source_ref);
+                        }
                     }
                 }
+                let merged = serde_json::to_string(&source_refs)?;
+                let survivor = self.get_claim(survivor_id)?;
+                let should_promote =
+                    survivor.provenance == Provenance::Inferred && source_refs.len() >= 2;
+                let entry = MergeSourceRefsLogEntry {
+                    kind: "merge_source_refs",
+                    ts: now,
+                    claim_id: survivor_id,
+                    source_refs: &source_refs,
+                    promote: should_promote,
+                };
+                append_jsonl(&self.log_path, &entry)?;
+                if should_promote {
+                    self.conn.execute(
+                        "UPDATE claims
+                            SET source_refs = ?1, provenance = 'EXTRACTED', confidence = MAX(confidence, 0.75)
+                          WHERE id = ?2",
+                        params![merged, survivor_id],
+                    )?;
+                } else {
+                    self.conn.execute(
+                        "UPDATE claims SET source_refs = ?1 WHERE id = ?2",
+                        params![merged, survivor_id],
+                    )?;
+                }
+                merged_groups += 1;
             }
-            let merged = serde_json::to_string(&source_refs)?;
-            let survivor = self.get_claim(survivor_id)?;
-            let should_promote =
-                survivor.provenance == Provenance::Inferred && source_refs.len() >= 2;
-            if should_promote {
-                self.conn.execute(
-                    "UPDATE claims
-                        SET source_refs = ?1, provenance = 'EXTRACTED', confidence = MAX(confidence, 0.75)
-                      WHERE id = ?2",
-                    params![merged, survivor_id],
-                )?;
-            } else {
-                self.conn.execute(
-                    "UPDATE claims SET source_refs = ?1 WHERE id = ?2",
-                    params![merged, survivor_id],
-                )?;
+            Ok(merged_groups)
+        })();
+        match result {
+            Ok(merged) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(merged)
             }
-            merged_groups += 1;
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
         }
-        Ok(merged_groups)
     }
 
     pub fn recall_text(&self, query: &str) -> Result<Vec<Claim>, Error> {
@@ -3944,38 +4236,63 @@ impl Store {
     /// ADR-0023: retire a claim by flipping its status to INVALIDATED.
     /// Refuses if the claim does not exist or is already retired. The
     /// reason is appended to `source_refs` as `"retired:<reason>"` so the
-    /// JSONL log + sqlite both retain provenance.
+    /// JSONL log + sqlite both retain provenance. The transition itself is
+    /// logged as a `retire_claim` record before the projection UPDATE so
+    /// replay does not resurrect retired claims as ACTIVE (ADR-0005).
     pub fn retire_claim(&self, claim_id: i64, reason: &str) -> Result<(), Error> {
         if reason.trim().is_empty() {
             return Err(Error::InvalidContradictionReason);
         }
-        let (status, source_refs_json): (String, String) = self
-            .conn
-            .query_row(
-                "SELECT status, source_refs FROM claims WHERE id = ?1",
-                [claim_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(|err| match err {
-                rusqlite::Error::QueryReturnedNoRows => Error::MissingClaim { claim_id },
-                other => Error::Sqlite(other),
-            })?;
-        if status == "INVALIDATED" {
-            return Err(Error::AlreadyRetired { claim_id });
-        }
-        let mut refs: Vec<String> = serde_json::from_str(&source_refs_json)?;
-        refs.push(format!("retired:{reason}"));
-        let new_refs = serde_json::to_string(&refs)?;
+        // The reason is written to the append-only log, so it must pass the
+        // same privacy gate as every other persisted string.
+        self.privacy_filter_recording(reason)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        self.conn.execute(
-            "UPDATE claims
-                SET status = 'INVALIDATED',
-                    source_refs = ?1,
-                    last_seen_at = ?2
-              WHERE id = ?3",
-            params![new_refs, now, claim_id],
-        )?;
-        Ok(())
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<(), Error> {
+            let (status, source_refs_json): (String, String) = self
+                .conn
+                .query_row(
+                    "SELECT status, source_refs FROM claims WHERE id = ?1",
+                    [claim_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(|err| match err {
+                    rusqlite::Error::QueryReturnedNoRows => Error::MissingClaim { claim_id },
+                    other => Error::Sqlite(other),
+                })?;
+            if status == "INVALIDATED" {
+                return Err(Error::AlreadyRetired { claim_id });
+            }
+            let entry = RetireClaimLogEntry {
+                kind: "retire_claim",
+                ts: now,
+                claim_id,
+                reason,
+            };
+            append_jsonl(&self.log_path, &entry)?;
+            let mut refs: Vec<String> = serde_json::from_str(&source_refs_json)?;
+            refs.push(format!("retired:{reason}"));
+            let new_refs = serde_json::to_string(&refs)?;
+            self.conn.execute(
+                "UPDATE claims
+                    SET status = 'INVALIDATED',
+                        source_refs = ?1,
+                        last_seen_at = ?2
+                  WHERE id = ?3",
+                params![new_refs, now, claim_id],
+            )?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
     }
 }
 
@@ -4010,6 +4327,9 @@ struct EventLogEntry<'a> {
     source: &'a str,
     agent_id: &'a str,
     agent_kind: &'a str,
+    /// ADR-0021: written since the scope-replay fix; replay defaults a
+    /// missing field to "global" so pre-fix log lines still parse.
+    scope: &'a str,
 }
 
 #[derive(Serialize)]
@@ -4024,6 +4344,8 @@ struct ObservationLogEntry<'a> {
     agent_id: &'a str,
     agent_kind: &'a str,
     derivation: &'a str,
+    /// ADR-0021: replay defaults a missing field to "global".
+    scope: &'a str,
 }
 
 #[derive(Serialize)]
@@ -4047,6 +4369,108 @@ struct LogEntry<'a> {
     agent_id: &'a str,
     agent_kind: &'a str,
     confidence: f64,
+    /// Explicit provenance: deriving it from `agent_kind` at replay time
+    /// misclassifies promoted candidates (an INFERRED candidate sourced by a
+    /// HUMAN event replayed as USER_ASSERTED). Replay falls back to the
+    /// agent_kind derivation for pre-fix log lines.
+    provenance: &'a str,
+    /// ADR-0021: replay defaults a missing field to "global".
+    scope: &'a str,
+}
+
+/// ADR-0005: lifecycle transition for a claim retirement (ADR-0023). The
+/// replay handler re-derives the `retired:<reason>` source_refs marker from
+/// the replayed claim state, so the log only needs the reason.
+#[derive(Serialize)]
+struct RetireClaimLogEntry<'a> {
+    kind: &'a str,
+    ts: i64,
+    claim_id: i64,
+    reason: &'a str,
+}
+
+/// ADR-0003/0005: a contradiction audit record. The contradiction id is
+/// pre-allocated like claim ids so replay can pin it explicitly.
+#[derive(Serialize)]
+struct ContradictionLogEntry<'a> {
+    kind: &'a str,
+    ts: i64,
+    contradiction_id: i64,
+    claim_id: i64,
+    reason: &'a str,
+    new_claim_id: Option<i64>,
+}
+
+/// ADR-0005: a staged candidate claim. Provenance and confidence are not
+/// logged: proposal always uses the schema defaults (INFERRED, 0.45).
+#[derive(Serialize)]
+struct CandidateClaimLogEntry<'a> {
+    kind: &'a str,
+    ts: i64,
+    candidate_id: i64,
+    event_id: i64,
+    subject: &'a str,
+    predicate: &'a str,
+    object: &'a str,
+    /// ADR-0021: replay defaults a missing field to "global".
+    scope: &'a str,
+}
+
+/// ADR-0005: candidate promotion status flip. The promoted claim itself is
+/// recorded by the paired `add_claim` line appended immediately before this
+/// one in `promote_candidate_claim`.
+#[derive(Serialize)]
+struct PromoteCandidateLogEntry {
+    kind: &'static str,
+    ts: i64,
+    candidate_id: i64,
+    claim_id: i64,
+}
+
+#[derive(Serialize)]
+struct RejectCandidateLogEntry<'a> {
+    kind: &'a str,
+    ts: i64,
+    candidate_id: i64,
+    reason: &'a str,
+}
+
+/// ADR-0005: consolidation supersede outcome. Ids are captured before the
+/// projection UPDATE so replay asserts the same lifecycle transition rather
+/// than recomputing it from possibly-drifted state.
+#[derive(Serialize)]
+struct SupersedeLogEntry<'a> {
+    kind: &'a str,
+    ts: i64,
+    claim_ids: &'a [i64],
+}
+
+/// One (claim_id, confidence) pair inside a `decay_confidence` record.
+#[derive(Serialize, Deserialize)]
+struct ConfidenceChange {
+    claim_id: i64,
+    confidence: f64,
+}
+
+/// ADR-0005: confidence-decay outcome. Concrete post-decay values are logged
+/// (not the decay formula) so the log stays the source of truth even if the
+/// decay policy changes in a future binary.
+#[derive(Serialize)]
+struct DecayLogEntry<'a> {
+    kind: &'a str,
+    ts: i64,
+    changes: &'a [ConfidenceChange],
+}
+
+/// ADR-0005: source_refs merge outcome for one duplicate group. `promote`
+/// mirrors the live merge's INFERRED->EXTRACTED promotion branch.
+#[derive(Serialize)]
+struct MergeSourceRefsLogEntry<'a> {
+    kind: &'a str,
+    ts: i64,
+    claim_id: i64,
+    source_refs: &'a [String],
+    promote: bool,
 }
 
 #[derive(Serialize)]
@@ -4507,6 +4931,33 @@ pub struct ReplayReport {
     pub events: u64,
     pub observations: u64,
     pub files_walked: u64,
+    /// Lifecycle records applied (retire/contradiction/candidate/supersede/
+    /// decay/merge transitions).
+    pub lifecycle: u64,
+    /// Lines quarantined in lenient mode. Always empty in strict mode: the
+    /// first bad line aborts the run instead.
+    pub quarantined: Vec<ReplayQuarantine>,
+}
+
+/// A log line that failed to apply in lenient replay mode, kept with enough
+/// context to locate and repair it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayQuarantine {
+    pub path: String,
+    pub line: usize,
+    pub error: String,
+}
+
+/// How `replay` handles a log line that fails to apply. ADR-0019 §4 pins
+/// strict mode as the default; lenient mode exists for disaster recovery,
+/// where one poisoned line must not block rebuilding every other projection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReplayMode {
+    /// Abort on the first invalid line (default, historical behavior).
+    #[default]
+    Strict,
+    /// Collect invalid lines into [`ReplayReport::quarantined`] and continue.
+    Lenient,
 }
 
 /// Replay logs in the deterministic order specified by ADR-0019 §4:
@@ -4518,7 +4969,22 @@ pub struct ReplayReport {
 ///
 /// Replay BYPASSES the privacy filter — the log is presumed already filtered
 /// at write time (ADR-0019 §4).
+///
+/// Strict mode: the first line that fails to apply aborts the run. Use
+/// [`replay_with_mode`] with [`ReplayMode::Lenient`] to quarantine bad lines
+/// instead (disaster recovery).
 pub fn replay(memory_dir: &Path, force: bool) -> Result<ReplayReport, Error> {
+    replay_with_mode(memory_dir, force, ReplayMode::Strict)
+}
+
+/// `replay` with an explicit strictness mode. In lenient mode, lines that
+/// fail to apply are collected into [`ReplayReport::quarantined`] with
+/// path/line/error diagnostics and replay continues with the next line.
+pub fn replay_with_mode(
+    memory_dir: &Path,
+    force: bool,
+    mode: ReplayMode,
+) -> Result<ReplayReport, Error> {
     use std::io::BufRead;
 
     // ADR-0017: replay creates a fresh DB and re-runs migrations, including
@@ -4570,13 +5036,23 @@ pub fn replay(memory_dir: &Path, force: bool) -> Result<ReplayReport, Error> {
                 if line.trim().is_empty() {
                     continue;
                 }
-                apply_log_line(
+                let result = apply_log_line(
                     &conn,
                     &line,
                     &input.to_string_lossy(),
                     lineno + 1,
                     &mut report,
-                )?;
+                );
+                if let Err(err) = result {
+                    match mode {
+                        ReplayMode::Strict => return Err(err),
+                        ReplayMode::Lenient => report.quarantined.push(ReplayQuarantine {
+                            path: input.to_string_lossy().into_owned(),
+                            line: lineno + 1,
+                            error: err.to_string(),
+                        }),
+                    }
+                }
             }
         }
 
@@ -4697,6 +5173,20 @@ fn apply_log_line(
         "record_event" => apply_record_event(conn, &value, path, lineno, report),
         "record_observation" => apply_record_observation(conn, &value, path, lineno, report),
         "prune_observations" => apply_prune_observations(conn, &value, path, lineno, report),
+        "retire_claim" => apply_retire_claim(conn, &value, path, lineno, report),
+        "add_contradiction" => apply_add_contradiction(conn, &value, path, lineno, report),
+        "propose_candidate_claim" => {
+            apply_propose_candidate_claim(conn, &value, path, lineno, report)
+        }
+        "promote_candidate_claim" => {
+            apply_promote_candidate_claim(conn, &value, path, lineno, report)
+        }
+        "reject_candidate_claim" => {
+            apply_reject_candidate_claim(conn, &value, path, lineno, report)
+        }
+        "supersede_claims" => apply_supersede_claims(conn, &value, path, lineno, report),
+        "decay_confidence" => apply_decay_confidence(conn, &value, path, lineno, report),
+        "merge_source_refs" => apply_merge_source_refs(conn, &value, path, lineno, report),
         other => Err(Error::ReplayUnknownKind {
             kind: other.to_string(),
         }),
@@ -4761,6 +5251,54 @@ fn replay_f64(
         })
 }
 
+/// ADR-0021: scope is optional in the log for backward compatibility —
+/// lines written before the field existed replay as 'global', matching the
+/// migration-0085 column default.
+fn replay_scope<'a>(
+    value: &'a serde_json::Value,
+    path: &str,
+    lineno: usize,
+) -> Result<&'a str, Error> {
+    match value.get("scope") {
+        None => Ok("global"),
+        Some(raw) => raw.as_str().ok_or_else(|| Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: "'scope' is not a string".to_string(),
+        }),
+    }
+}
+
+fn replay_i64_list(
+    value: &serde_json::Value,
+    field: &str,
+    path: &str,
+    lineno: usize,
+) -> Result<Vec<i64>, Error> {
+    serde_json::from_value(replay_field(value, field, path, lineno)?.clone()).map_err(|err| {
+        Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("'{field}' is not an integer array: {err}"),
+        }
+    })
+}
+
+fn replay_string_list(
+    value: &serde_json::Value,
+    field: &str,
+    path: &str,
+    lineno: usize,
+) -> Result<Vec<String>, Error> {
+    serde_json::from_value(replay_field(value, field, path, lineno)?.clone()).map_err(|err| {
+        Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("'{field}' is not a string array: {err}"),
+        }
+    })
+}
+
 fn apply_add_claim(
     conn: &Connection,
     value: &serde_json::Value,
@@ -4778,16 +5316,33 @@ fn apply_add_claim(
     let agent_kind_str = replay_str(value, "agent_kind", path, lineno)?;
     let confidence = replay_f64(value, "confidence", path, lineno)?;
     let agent_kind: AgentKind = agent_kind_str.parse()?;
-    // Provenance is not in the log; derive from agent_kind. This is correct
-    // for `insert_claim` writes; for promoted candidates it can diverge from
-    // the original (candidate.provenance defaulted to INFERRED).
-    let provenance = provenance_for_agent_kind(agent_kind);
+    // Provenance is explicit in current log lines; fall back to the
+    // agent_kind derivation for lines written before the field existed.
+    let provenance = match value.get("provenance") {
+        None => provenance_for_agent_kind(agent_kind),
+        Some(_) => {
+            let raw = replay_str(value, "provenance", path, lineno)?;
+            raw.parse::<Provenance>()
+                .map_err(|_| Error::ReplayMalformed {
+                    path: path.to_string(),
+                    line: lineno,
+                    detail: format!("unknown 'provenance' value: {raw}"),
+                })?
+        }
+    };
+    // Scope is explicit in current log lines; pre-scope lines replay as
+    // 'global', matching the migration-0085 column default (ADR-0021).
+    let scope = replay_scope(value, path, lineno)?;
 
     // Idempotency: if claim already exists, accept identical content,
-    // otherwise fail loudly with E_REPLAY_DUPLICATE_ID.
-    let existing: Option<(String, String, String, String, f64, String, String)> = conn
+    // otherwise fail loudly with E_REPLAY_DUPLICATE_ID. Only write-time
+    // immutable fields are compared: lifecycle records (decay, merge,
+    // retire) legitimately change provenance/confidence/source_refs/status
+    // after the add_claim line, and per-agent log duplicates of the line
+    // replay after those mutations.
+    let existing: Option<(String, String, String, String, String, String)> = conn
         .query_row(
-            "SELECT subject, predicate, object, provenance, confidence, agent_id, agent_kind
+            "SELECT subject, predicate, object, agent_id, agent_kind, scope
                FROM claims WHERE id = ?1",
             [claim_id],
             |row| {
@@ -4798,7 +5353,6 @@ fn apply_add_claim(
                     row.get(3)?,
                     row.get(4)?,
                     row.get(5)?,
-                    row.get(6)?,
                 ))
             },
         )
@@ -4807,10 +5361,9 @@ fn apply_add_claim(
         let matches = existing.0 == subject
             && existing.1 == predicate
             && existing.2 == object
-            && existing.3 == provenance.as_str()
-            && (existing.4 - confidence).abs() < 1e-9
-            && existing.5 == agent_id
-            && existing.6 == agent_kind.as_str();
+            && existing.3 == agent_id
+            && existing.4 == agent_kind.as_str()
+            && existing.5 == scope;
         if !matches {
             return Err(Error::ReplayDuplicateId {
                 detail: format!("claim_id={claim_id} content mismatch at {path}:{lineno}"),
@@ -4819,10 +5372,10 @@ fn apply_add_claim(
         return Ok(());
     }
 
-    // Ensure entities exist (mirrors insert_claim's behavior). Use a tiny
-    // inline ensure: insert if missing with the only-known type "Thing".
-    ensure_entity_for_replay(conn, subject, ts)?;
-    ensure_entity_for_replay(conn, object, ts)?;
+    // Ensure entities exist, mirroring insert_claim's behavior through the
+    // shared ensure_entity implementation (type inference + requires_review).
+    ensure_entity_on(conn, subject, ts)?;
+    ensure_entity_on(conn, object, ts)?;
 
     // ADR-0018: replay must rebuild the same `predicate_types` rows the
     // original write produced. USER_ASSERTED writes auto-extended the
@@ -4836,9 +5389,9 @@ fn apply_add_claim(
     conn.execute(
         "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
                              status, source_refs, agent_id, agent_kind, write_ts,
-                             created_at, last_seen_at, last_verified_at)
+                             created_at, last_seen_at, last_verified_at, scope)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7,
-                 ?8, ?9, ?10, ?10, ?10, ?10)",
+                 ?8, ?9, ?10, ?10, ?10, ?10, ?11)",
         params![
             claim_id,
             subject,
@@ -4849,7 +5402,8 @@ fn apply_add_claim(
             source_refs,
             agent_id,
             agent_kind.as_str(),
-            ts
+            ts,
+            scope
         ],
     )?;
     report.claims += 1;
@@ -4926,7 +5480,7 @@ fn apply_add_hyperedge(
             ],
         )?;
         for participant in &participants {
-            ensure_entity_for_replay(conn, &participant.entity, ts)?;
+            ensure_entity_on(conn, &participant.entity, ts)?;
             conn.execute(
                 "INSERT INTO hyperedge_participants (hyperedge_id, role, entity)
                  VALUES (?1, ?2, ?3)",
@@ -5017,21 +5571,77 @@ fn ontology_check_for_replay(
     Ok(())
 }
 
-fn ensure_entity_for_replay(conn: &Connection, name: &str, ts: i64) -> Result<(), Error> {
-    // Look up the default "Thing" type; entities table requires type_id.
-    let type_id: i64 = conn
+fn entity_type_id_on(conn: &Connection, name: &str) -> Result<Option<i64>, Error> {
+    conn.query_row(
+        "SELECT id FROM entity_types WHERE name = ?1",
+        [name],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Error::Sqlite)
+}
+
+fn infer_entity_type_name_on(conn: &Connection, entity: &str) -> Result<String, Error> {
+    if let Some((prefix, _rest)) = entity.split_once(':')
+        && entity_type_id_on(conn, prefix)?.is_some()
+    {
+        return Ok(prefix.to_string());
+    }
+    match entity {
+        "User" => Ok("Human".to_string()),
+        "Claude" | "Pi" => Ok("Bot".to_string()),
+        _ => Ok("Thing".to_string()),
+    }
+}
+
+/// Single `ensure_entity` implementation shared by `Store` writes and log
+/// replay (ADR-0018 §"Subject/object policy"). Replay must reproduce the
+/// same entity classifications (`prefix:` inference, Thing fallback,
+/// requires_review flag) as the live write path; a replayed DB that typed
+/// every entity as Thing would silently lose that information.
+fn ensure_entity_on(conn: &Connection, entity: &str, now: i64) -> Result<(), Error> {
+    let inferred_type = infer_entity_type_name_on(conn, entity)?;
+    let type_id = entity_type_id_on(conn, &inferred_type)?.unwrap_or_else(|| {
+        entity_type_id_on(conn, "Thing")
+            .expect("Thing lookup should not fail")
+            .expect("ontology bootstrap should seed Thing")
+    });
+    let thing_id = entity_type_id_on(conn, "Thing")?.expect("ontology bootstrap should seed Thing");
+    // When the inferred type falls back to `Thing` (no `prefix:` and no
+    // synonym match), surface the entity for consolidation review instead of
+    // silently coercing.
+    let requires_review = if type_id == thing_id { 1_i64 } else { 0_i64 };
+    let current: Option<i64> = conn
         .query_row(
-            "SELECT id FROM entity_types WHERE name = 'Thing'",
-            [],
-            |r| r.get(0),
+            "SELECT type_id FROM entities WHERE name = ?1",
+            [entity],
+            |row| row.get(0),
         )
-        .optional()?
-        .unwrap_or(1);
-    conn.execute(
-        "INSERT OR IGNORE INTO entities (name, type_id, created_at, last_seen_at)
-         VALUES (?1, ?2, ?3, ?3)",
-        params![name, type_id, ts],
-    )?;
+        .optional()?;
+    match current {
+        None => {
+            conn.execute(
+                "INSERT INTO entities (name, type_id, requires_review, created_at, last_seen_at)
+                 VALUES (?1, ?2, ?3, ?4, ?4)",
+                params![entity, type_id, requires_review, now],
+            )?;
+        }
+        Some(existing) if existing == thing_id && type_id != thing_id => {
+            // Promotion from Thing → real type clears the review flag.
+            conn.execute(
+                "UPDATE entities
+                    SET type_id = ?2, requires_review = 0, last_seen_at = ?3
+                  WHERE name = ?1",
+                params![entity, type_id, now],
+            )?;
+        }
+        Some(_) => {
+            conn.execute(
+                "UPDATE entities SET last_seen_at = ?2 WHERE name = ?1",
+                params![entity, now],
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -5050,6 +5660,7 @@ fn apply_record_event(
     let source = replay_str(value, "source", path, lineno)?;
     let agent_id = replay_str(value, "agent_id", path, lineno)?;
     let agent_kind = replay_str(value, "agent_kind", path, lineno)?;
+    let scope = replay_scope(value, path, lineno)?;
 
     let existing: Option<(String, String, String, String, String, String)> = conn
         .query_row(
@@ -5083,8 +5694,8 @@ fn apply_record_event(
         return Ok(());
     }
     conn.execute(
-        "INSERT INTO episodic_events (id, session_id, kind, payload, source, agent_id, agent_kind, ts)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO episodic_events (id, session_id, kind, payload, source, agent_id, agent_kind, ts, scope)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             event_id,
             session_id,
@@ -5093,7 +5704,8 @@ fn apply_record_event(
             source,
             agent_id,
             agent_kind,
-            ts
+            ts,
+            scope
         ],
     )?;
     report.events += 1;
@@ -5117,6 +5729,7 @@ fn apply_record_observation(
     let agent_id = replay_str(value, "agent_id", path, lineno)?;
     let agent_kind = replay_str(value, "agent_kind", path, lineno)?;
     let derivation = replay_str(value, "derivation", path, lineno)?;
+    let scope = replay_scope(value, path, lineno)?;
 
     let existing: Option<(String, String, String, String, String, String, String)> = conn
         .query_row(
@@ -5143,8 +5756,8 @@ fn apply_record_observation(
     }
     conn.execute(
         "INSERT INTO observations
-         (id, session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation, ts)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+         (id, session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation, ts, scope)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             id,
             session_id,
@@ -5154,7 +5767,8 @@ fn apply_record_observation(
             agent_id,
             agent_kind,
             derivation,
-            ts
+            ts,
+            scope
         ],
     )?;
     report.observations += 1;
@@ -5199,5 +5813,350 @@ fn apply_prune_observations(
          VALUES (?1, ?2, ?3, ?4)",
         params![marker_id, session_id, pruned_observation_ids_json, ts],
     )?;
+    Ok(())
+}
+
+/// Replay a `retire_claim` record (ADR-0023): reproduce the live path's
+/// source_refs marker append + INVALIDATED flip against the already-replayed
+/// claim state.
+fn apply_retire_claim(
+    conn: &Connection,
+    value: &serde_json::Value,
+    path: &str,
+    lineno: usize,
+    report: &mut ReplayReport,
+) -> Result<(), Error> {
+    let claim_id = replay_i64(value, "claim_id", path, lineno)?;
+    let ts = replay_i64(value, "ts", path, lineno)?;
+    let reason = replay_str(value, "reason", path, lineno)?;
+
+    let existing: Option<(String, String)> = conn
+        .query_row(
+            "SELECT status, source_refs FROM claims WHERE id = ?1",
+            [claim_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((status, source_refs_json)) = existing else {
+        return Err(Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("retire_claim references missing claim {claim_id}"),
+        });
+    };
+    let marker = format!("retired:{reason}");
+    if status == "INVALIDATED" {
+        // Idempotency: the same retirement is only valid once.
+        let refs: Vec<String> = serde_json::from_str(&source_refs_json)?;
+        if refs.iter().any(|source_ref| source_ref == &marker) {
+            return Ok(());
+        }
+        return Err(Error::ReplayDuplicateId {
+            detail: format!("claim_id={claim_id} already INVALIDATED at {path}:{lineno}"),
+        });
+    }
+    let mut refs: Vec<String> = serde_json::from_str(&source_refs_json)?;
+    refs.push(marker);
+    conn.execute(
+        "UPDATE claims
+            SET status = 'INVALIDATED',
+                source_refs = ?1,
+                last_seen_at = ?2
+          WHERE id = ?3",
+        params![serde_json::to_string(&refs)?, ts, claim_id],
+    )?;
+    report.lifecycle += 1;
+    Ok(())
+}
+
+fn apply_add_contradiction(
+    conn: &Connection,
+    value: &serde_json::Value,
+    path: &str,
+    lineno: usize,
+    report: &mut ReplayReport,
+) -> Result<(), Error> {
+    let contradiction_id = replay_i64(value, "contradiction_id", path, lineno)?;
+    let ts = replay_i64(value, "ts", path, lineno)?;
+    let claim_id = replay_i64(value, "claim_id", path, lineno)?;
+    let reason = replay_str(value, "reason", path, lineno)?;
+    let new_claim_id: Option<i64> = match value.get("new_claim_id") {
+        None => {
+            return Err(Error::ReplayMalformed {
+                path: path.to_string(),
+                line: lineno,
+                detail: "missing 'new_claim_id'".to_string(),
+            });
+        }
+        Some(raw) if raw.is_null() => None,
+        Some(raw) => Some(raw.as_i64().ok_or_else(|| Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: "'new_claim_id' is not an integer".to_string(),
+        })?),
+    };
+
+    let existing: Option<(i64, String, Option<i64>)> = conn
+        .query_row(
+            "SELECT claim_id, reason, new_claim_id FROM contradictions WHERE id = ?1",
+            [contradiction_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    if let Some(existing) = existing {
+        let matches = existing.0 == claim_id && existing.1 == reason && existing.2 == new_claim_id;
+        if !matches {
+            return Err(Error::ReplayDuplicateId {
+                detail: format!(
+                    "contradiction_id={contradiction_id} content mismatch at {path}:{lineno}"
+                ),
+            });
+        }
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO contradictions (id, claim_id, reason, new_claim_id, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![contradiction_id, claim_id, reason, new_claim_id, ts],
+    )?;
+    report.lifecycle += 1;
+    Ok(())
+}
+
+fn apply_propose_candidate_claim(
+    conn: &Connection,
+    value: &serde_json::Value,
+    path: &str,
+    lineno: usize,
+    report: &mut ReplayReport,
+) -> Result<(), Error> {
+    let candidate_id = replay_i64(value, "candidate_id", path, lineno)?;
+    let ts = replay_i64(value, "ts", path, lineno)?;
+    let event_id = replay_i64(value, "event_id", path, lineno)?;
+    let subject = replay_str(value, "subject", path, lineno)?;
+    let predicate = replay_str(value, "predicate", path, lineno)?;
+    let object = replay_str(value, "object", path, lineno)?;
+    let scope = replay_scope(value, path, lineno)?;
+
+    let existing: Option<(i64, String, String, String, String)> = conn
+        .query_row(
+            "SELECT event_id, subject, predicate, object, scope
+               FROM candidate_claims WHERE id = ?1",
+            [candidate_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    if let Some(existing) = existing {
+        let matches = existing.0 == event_id
+            && existing.1 == subject
+            && existing.2 == predicate
+            && existing.3 == object
+            && existing.4 == scope;
+        if !matches {
+            return Err(Error::ReplayDuplicateId {
+                detail: format!("candidate_id={candidate_id} content mismatch at {path}:{lineno}"),
+            });
+        }
+        return Ok(());
+    }
+    // provenance/confidence/status stay at the schema defaults (INFERRED,
+    // 0.45, PENDING) — the live proposal path never overrides them.
+    conn.execute(
+        "INSERT INTO candidate_claims (id, event_id, subject, predicate, object, created_at, scope)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            candidate_id,
+            event_id,
+            subject,
+            predicate,
+            object,
+            ts,
+            scope
+        ],
+    )?;
+    report.lifecycle += 1;
+    Ok(())
+}
+
+fn apply_promote_candidate_claim(
+    conn: &Connection,
+    value: &serde_json::Value,
+    path: &str,
+    lineno: usize,
+    report: &mut ReplayReport,
+) -> Result<(), Error> {
+    let candidate_id = replay_i64(value, "candidate_id", path, lineno)?;
+    let _ts = replay_i64(value, "ts", path, lineno)?;
+    let claim_id = replay_i64(value, "claim_id", path, lineno)?;
+
+    let existing: Option<(String, Option<i64>)> = conn
+        .query_row(
+            "SELECT status, promoted_claim_id FROM candidate_claims WHERE id = ?1",
+            [candidate_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((status, promoted_claim_id)) = existing else {
+        return Err(Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("promote_candidate_claim references missing candidate {candidate_id}"),
+        });
+    };
+    if status == "PROMOTED" {
+        if promoted_claim_id == Some(claim_id) {
+            return Ok(());
+        }
+        return Err(Error::ReplayDuplicateId {
+            detail: format!(
+                "candidate_id={candidate_id} already PROMOTED to a different claim at {path}:{lineno}"
+            ),
+        });
+    }
+    conn.execute(
+        "UPDATE candidate_claims
+            SET status = 'PROMOTED', promoted_claim_id = ?1
+          WHERE id = ?2",
+        params![claim_id, candidate_id],
+    )?;
+    report.lifecycle += 1;
+    Ok(())
+}
+
+fn apply_reject_candidate_claim(
+    conn: &Connection,
+    value: &serde_json::Value,
+    path: &str,
+    lineno: usize,
+    report: &mut ReplayReport,
+) -> Result<(), Error> {
+    let candidate_id = replay_i64(value, "candidate_id", path, lineno)?;
+    let _ts = replay_i64(value, "ts", path, lineno)?;
+    let reason = replay_str(value, "reason", path, lineno)?;
+
+    let existing: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT status, rejection_reason FROM candidate_claims WHERE id = ?1",
+            [candidate_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((status, rejection_reason)) = existing else {
+        return Err(Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("reject_candidate_claim references missing candidate {candidate_id}"),
+        });
+    };
+    if status == "REJECTED" {
+        if rejection_reason.as_deref() == Some(reason) {
+            return Ok(());
+        }
+        return Err(Error::ReplayDuplicateId {
+            detail: format!(
+                "candidate_id={candidate_id} already REJECTED with a different reason at {path}:{lineno}"
+            ),
+        });
+    }
+    conn.execute(
+        "UPDATE candidate_claims
+            SET status = 'REJECTED', rejection_reason = ?1
+          WHERE id = ?2",
+        params![reason, candidate_id],
+    )?;
+    report.lifecycle += 1;
+    Ok(())
+}
+
+/// Replay a `supersede_claims` record: assert the logged lifecycle
+/// transitions. Naturally idempotent (the UPDATE is a no-op once the claim
+/// is SUPERSEDED) and tolerant of claims quarantined in lenient mode.
+fn apply_supersede_claims(
+    conn: &Connection,
+    value: &serde_json::Value,
+    path: &str,
+    lineno: usize,
+    report: &mut ReplayReport,
+) -> Result<(), Error> {
+    let _ts = replay_i64(value, "ts", path, lineno)?;
+    let claim_ids = replay_i64_list(value, "claim_ids", path, lineno)?;
+    for claim_id in &claim_ids {
+        conn.execute(
+            "UPDATE claims SET status = 'SUPERSEDED' WHERE id = ?1",
+            [claim_id],
+        )?;
+    }
+    report.lifecycle += 1;
+    Ok(())
+}
+
+/// Replay a `decay_confidence` record: apply the logged post-decay values
+/// verbatim — the log records outcomes, not formulas.
+fn apply_decay_confidence(
+    conn: &Connection,
+    value: &serde_json::Value,
+    path: &str,
+    lineno: usize,
+    report: &mut ReplayReport,
+) -> Result<(), Error> {
+    let _ts = replay_i64(value, "ts", path, lineno)?;
+    let changes: Vec<ConfidenceChange> = serde_json::from_value(
+        replay_field(value, "changes", path, lineno)?.clone(),
+    )
+    .map_err(|err| Error::ReplayMalformed {
+        path: path.to_string(),
+        line: lineno,
+        detail: format!("'changes' is not a confidence-change array: {err}"),
+    })?;
+    for change in &changes {
+        conn.execute(
+            "UPDATE claims SET confidence = ?1 WHERE id = ?2",
+            params![change.confidence, change.claim_id],
+        )?;
+    }
+    report.lifecycle += 1;
+    Ok(())
+}
+
+fn apply_merge_source_refs(
+    conn: &Connection,
+    value: &serde_json::Value,
+    path: &str,
+    lineno: usize,
+    report: &mut ReplayReport,
+) -> Result<(), Error> {
+    let _ts = replay_i64(value, "ts", path, lineno)?;
+    let claim_id = replay_i64(value, "claim_id", path, lineno)?;
+    let source_refs = replay_string_list(value, "source_refs", path, lineno)?;
+    let promote = replay_field(value, "promote", path, lineno)?
+        .as_bool()
+        .ok_or_else(|| Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: "'promote' is not a boolean".to_string(),
+        })?;
+    let merged = serde_json::to_string(&source_refs)?;
+    if promote {
+        conn.execute(
+            "UPDATE claims
+                SET source_refs = ?1, provenance = 'EXTRACTED', confidence = MAX(confidence, 0.75)
+              WHERE id = ?2",
+            params![merged, claim_id],
+        )?;
+    } else {
+        conn.execute(
+            "UPDATE claims SET source_refs = ?1 WHERE id = ?2",
+            params![merged, claim_id],
+        )?;
+    }
+    report.lifecycle += 1;
     Ok(())
 }
