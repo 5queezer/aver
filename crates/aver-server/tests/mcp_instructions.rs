@@ -24,6 +24,12 @@ fn mcp_instructions_are_a_progressive_discovery_card() {
         "unknown-predicate errors include fuzzy/semantic suggestions, accepted aliases, and a retry hint"
     ));
     assert!(instructions.contains(
+        "Scope policy: pass `scope` only for an explicit per-call override; otherwise the request's resolved scope applies."
+    ));
+    assert!(instructions.contains(
+        "For scoped reads, use `scope_walk=ancestors` for normal project memory, `exact` for isolation, `descendants` for subtree audits, and `any` only for cross-scope search."
+    ));
+    assert!(instructions.contains(
         "Progressively load graph navigation tools only after recall returns an entity or you already know an anchor: expand; use add_triple instead of remember_claim only when confidence/source control is required."
     ));
     assert!(instructions.contains(

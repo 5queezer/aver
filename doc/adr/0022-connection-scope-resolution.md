@@ -8,11 +8,11 @@ Proposed
 
 ## Context
 
-ADR-0021 introduces `scope` as a first-class column on `claims`, `events`, and
-`observations`, with a hierarchical path convention (`global`, `proj/<slug>`,
-`proj/<slug>/branch/<name>`, `session/<id>`). It deliberately defers the
-question of *how a client picks the scope* to a follow-on ADR. This is that
-ADR.
+ADR-0021 introduces `scope` as a first-class column on `claims`,
+`episodic_events`, `observations`, and `candidate_claims`, with a hierarchical
+path convention (`global`, `proj/<slug>`, `proj/<slug>/branch/<name>`,
+`session/<id>`). It deliberately defers the question of *how a client picks the
+scope* to a follow-on ADR. This is that ADR.
 
 The motivating asymmetry is between two kinds of clients:
 
@@ -98,9 +98,9 @@ headers via HTTP 400 — failing fast rather than silently writing under
 `'global'`. `X-Aver-Scope-Default` follows the same validation but is only
 consulted when the request has neither a tool parameter nor `X-Aver-Scope`.
 
-The header is recorded on every write into `events.source` (or analogous
-provenance fields) so that scope decisions are auditable from the JSONL log
-alone, independent of the SQLite materialization.
+The header is recorded on every event write into `episodic_events.source` (or
+analogous provenance fields) so that scope decisions are auditable from the
+JSONL log alone, independent of the SQLite materialization.
 
 ### `aver-scope-shim`
 
@@ -196,7 +196,7 @@ manually passing parameters.
   use, not just Claude Code. Hermes, Pi, and Codex harnesses get the same
   isolation the day they switch their MCP URL to the shim.
 - (+) Resolution is fully observable: `X-Aver-Scope` recorded in
-  `events.source`, scope value persisted on every row. ADR-0019's
+  `episodic_events.source`, scope value persisted on every row. ADR-0019's
   JSONL-as-source-of-truth invariant survives — the log can be replayed and
   every row's scope reconstructed.
 - (+) Backwards compatibility is bounded and explicit. A pre-Layer-2 client
@@ -211,10 +211,10 @@ manually passing parameters.
   negligible, but there is a startup-time cost on first MCP call. Mitigation:
   the shim is a single static Rust binary; cold start is sub-100ms.
 - (−) The shim derives scope from `git config remote.origin.url`. Repositories
-  without an origin (fresh clones, local-only experiments) fall back to the
-  worktree basename, which is brittle if two projects share the same dir
-  name in different parents. Mitigation: `AVER_DEFAULT_SCOPE` override; explicit
-  `--scope` flag on the shim.
+  without an origin (fresh clones, local-only experiments) fall back to hashing
+  the absolute worktree root. That avoids basename collisions but means moving a
+  local-only repository changes its derived scope. Mitigation:
+  `AVER_DEFAULT_SCOPE` override; explicit `--scope` flag on the shim.
 - (−) The read-default flip is observable to clients who happened to depend
   on cross-project bleed. ADR-0021 documented this as a forthcoming change;
   this ADR is where the change actually ships. Anyone whose workflow relied

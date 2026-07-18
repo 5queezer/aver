@@ -75,24 +75,26 @@ the existing two ACTIVE claims valid.
 
 ### Schema change
 
-A new migration `migrations/00NN_scope_column.sql` adds:
+Migration `migrations/0085_scope_column.sql` adds:
 
 ```sql
-ALTER TABLE claims      ADD COLUMN scope TEXT NOT NULL DEFAULT 'global';
-ALTER TABLE events      ADD COLUMN scope TEXT NOT NULL DEFAULT 'global';
-ALTER TABLE observations ADD COLUMN scope TEXT NOT NULL DEFAULT 'global';
+ALTER TABLE claims           ADD COLUMN scope TEXT NOT NULL DEFAULT 'global';
+ALTER TABLE episodic_events  ADD COLUMN scope TEXT NOT NULL DEFAULT 'global';
+ALTER TABLE observations     ADD COLUMN scope TEXT NOT NULL DEFAULT 'global';
+ALTER TABLE candidate_claims ADD COLUMN scope TEXT NOT NULL DEFAULT 'global';
 
-CREATE INDEX claims_scope       ON claims(scope);
-CREATE INDEX events_scope       ON events(scope);
-CREATE INDEX observations_scope ON observations(scope);
+CREATE INDEX claims_scope           ON claims(scope);
+CREATE INDEX episodic_events_scope  ON episodic_events(scope);
+CREATE INDEX observations_scope     ON observations(scope);
+CREATE INDEX candidate_claims_scope ON candidate_claims(scope);
 ```
 
 Triggers analogous to `claims_agent_id_*_insert/update`
 (`migrations/0060`–`0061`) enforce `scope` non-blank and a charset of
 `[A-Za-z0-9_/-]` (note the `/` — paths are first-class).
 
-The candidate-claim staging table inherits a `scope` column on the same
-migration so candidates carry the writer's intended scope through promotion.
+The candidate-claim staging table carries the writer's intended scope through
+promotion.
 
 ### Path convention
 
@@ -129,11 +131,12 @@ this one.
 
 ### Write-path semantics
 
-`add_triple`, `remember_claim`, `record_event`, `record_observation`,
-`propose_candidate_claim`, and `add_vector_chunk` accept an optional `scope`.
-When omitted: `'global'` (preserves today's behavior). `promote_candidate_claim`
-copies the candidate's `scope` onto the durable claim; it is not a separate
-parameter on promote.
+`add_triple`, `remember_claim`, `record_event`, `record_observation`, and
+`propose_candidate_claim` accept an optional `scope`. When omitted: `'global'`
+(preserves today's behavior). `promote_candidate_claim` copies the candidate's
+`scope` onto the durable claim; it is not a separate parameter on promote.
+`add_vector_chunk` does not accept a separate scope because vector chunks attach
+to a claim and inherit the claim's effective scope.
 
 ### Migration
 
