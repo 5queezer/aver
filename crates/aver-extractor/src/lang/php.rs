@@ -2,7 +2,7 @@ use tree_sitter::Node;
 
 use crate::{
     Error, ExtractedFact, collect_names_from_kinds, definition_facts,
-    first_named_descendant_of_kind, parse_with_language,
+    first_named_descendant_of_kind, named_child_of_kind, parse_with_language,
 };
 
 pub fn extract_php_functions(source: &str) -> Result<Vec<String>, Error> {
@@ -48,48 +48,43 @@ pub fn extract_php_namespaces(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_php_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut facts = definition_facts(path, "Function", extract_php_functions(source)?);
+    let tree = parse_with_language(source, tree_sitter_php::language_php())?;
+    let root = tree.root_node();
+    let source = source.as_bytes();
+
+    let mut facts = definition_facts(
+        path,
+        "Function",
+        collect_names_from_kinds(root, source, &["function_definition", "method_declaration"])?,
+    );
     facts.extend(definition_facts(
         path,
         "Class",
-        extract_php_classes(source)?,
+        collect_names_from_kinds(root, source, &["class_declaration"])?,
     ));
     facts.extend(definition_facts(
         path,
         "Interface",
-        extract_php_interfaces(source)?,
+        collect_names_from_kinds(root, source, &["interface_declaration"])?,
     ));
-    facts.extend(definition_facts(path, "Enum", extract_php_enums(source)?));
-    facts.extend(definition_facts(path, "Trait", extract_php_traits(source)?));
+    facts.extend(definition_facts(
+        path,
+        "Enum",
+        collect_names_from_kinds(root, source, &["enum_declaration"])?,
+    ));
+    facts.extend(definition_facts(
+        path,
+        "Trait",
+        collect_names_from_kinds(root, source, &["trait_declaration"])?,
+    ));
     facts.extend(definition_facts(
         path,
         "Namespace",
-        extract_php_namespaces(source)?,
+        collect_names_from_kinds(root, source, &["namespace_definition"])?,
     ));
-    facts.extend(extract_php_extends_facts(source)?);
-    facts.extend(extract_php_implements_facts(source)?);
-    facts.extend(extract_php_trait_use_facts(source)?);
-    Ok(facts)
-}
-
-fn extract_php_trait_use_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let tree = parse_with_language(source, tree_sitter_php::language_php())?;
-    let mut facts = Vec::new();
-    collect_php_trait_use_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_php_implements_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let tree = parse_with_language(source, tree_sitter_php::language_php())?;
-    let mut facts = Vec::new();
-    collect_php_implements_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_php_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let tree = parse_with_language(source, tree_sitter_php::language_php())?;
-    let mut facts = Vec::new();
-    collect_php_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
+    collect_php_extends_facts(root, source, &mut facts)?;
+    collect_php_implements_facts(root, source, &mut facts)?;
+    collect_php_trait_use_facts(root, source, &mut facts)?;
     Ok(facts)
 }
 
@@ -131,15 +126,16 @@ fn collect_php_implements_facts(
 ) -> Result<(), Error> {
     if node.kind() == "class_declaration"
         && let Some(class_name) = node.child_by_field_name("name")
-        && let Some(interfaces) = first_named_descendant_of_kind(node, "class_interface_clause")
+        && let Some(interfaces) = named_child_of_kind(node, "class_interface_clause")
     {
         let mut interface_names = Vec::new();
         collect_php_reference_names(interfaces, source, &mut interface_names)?;
+        let class_name = class_name.utf8_text(source)?;
         facts.extend(
             interface_names
                 .into_iter()
                 .map(|interface_name| ExtractedFact {
-                    subject: format!("Class:{}", class_name.utf8_text(source).unwrap_or_default()),
+                    subject: format!("Class:{class_name}"),
                     predicate: "implements".to_string(),
                     object: format!("Interface:{interface_name}"),
                 }),
@@ -181,7 +177,7 @@ fn collect_php_extends_facts(
 ) -> Result<(), Error> {
     if node.kind() == "class_declaration"
         && let Some(class_name) = node.child_by_field_name("name")
-        && let Some(base_clause) = first_named_descendant_of_kind(node, "base_clause")
+        && let Some(base_clause) = named_child_of_kind(node, "base_clause")
         && let Some(base_name) = first_named_descendant_of_kind(base_clause, "qualified_name")
             .or_else(|| first_named_descendant_of_kind(base_clause, "name"))
     {
@@ -194,7 +190,7 @@ fn collect_php_extends_facts(
 
     if node.kind() == "interface_declaration"
         && let Some(interface_name) = node.child_by_field_name("name")
-        && let Some(base_clause) = first_named_descendant_of_kind(node, "base_clause")
+        && let Some(base_clause) = named_child_of_kind(node, "base_clause")
     {
         let mut base_names = Vec::new();
         collect_php_reference_names(base_clause, source, &mut base_names)?;

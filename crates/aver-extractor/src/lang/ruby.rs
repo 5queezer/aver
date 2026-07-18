@@ -27,36 +27,26 @@ pub fn extract_ruby_modules(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_ruby_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut facts = definition_facts(path, "Function", extract_ruby_functions(source)?);
+    let tree = parse_with_language(source, tree_sitter_ruby::language())?;
+    let root = tree.root_node();
+    let source = source.as_bytes();
+
+    let mut facts = definition_facts(
+        path,
+        "Function",
+        collect_names_from_kinds(root, source, &["method", "singleton_method"])?,
+    );
     facts.extend(definition_facts(
         path,
         "Class",
-        extract_ruby_classes(source)?,
+        collect_names_from_kinds(root, source, &["class"])?,
     ));
-    facts.extend(definition_facts(
-        path,
-        "Module",
-        extract_ruby_modules(source)?,
-    ));
-    facts.extend(extract_ruby_extends_facts(source)?);
-    facts.extend(extract_ruby_implements_facts(source)?);
-    Ok(facts)
-}
+    let modules = collect_names_from_kinds(root, source, &["module"])?;
+    facts.extend(definition_facts(path, "Module", modules.clone()));
 
-fn extract_ruby_implements_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let modules = extract_ruby_modules(source)?
-        .into_iter()
-        .collect::<HashSet<_>>();
-    let tree = parse_with_language(source, tree_sitter_ruby::language())?;
-    let mut facts = Vec::new();
-    collect_ruby_implements_facts(tree.root_node(), source.as_bytes(), &modules, &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_ruby_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let tree = parse_with_language(source, tree_sitter_ruby::language())?;
-    let mut facts = Vec::new();
-    collect_ruby_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
+    collect_ruby_extends_facts(root, source, &mut facts)?;
+    let modules = modules.into_iter().collect::<HashSet<_>>();
+    collect_ruby_implements_facts(root, source, &modules, &mut facts)?;
     Ok(facts)
 }
 
@@ -71,12 +61,13 @@ fn collect_ruby_implements_facts(
     {
         let mut included = Vec::new();
         collect_ruby_include_names(node, source, &mut included)?;
+        let class_name = class_name.utf8_text(source)?;
         facts.extend(
             included
                 .into_iter()
                 .filter(|name| modules.contains(name))
                 .map(|module_name| ExtractedFact {
-                    subject: format!("Class:{}", class_name.utf8_text(source).unwrap_or_default()),
+                    subject: format!("Class:{class_name}"),
                     predicate: "implements".to_string(),
                     object: format!("Module:{module_name}"),
                 }),

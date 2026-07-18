@@ -1,6 +1,6 @@
 //! Structured-output parsing for prose extraction (ADR-0007).
 
-use crate::{Error, ExtractedFact};
+use crate::{Error, ExtractedFact, validate_facts};
 
 #[derive(serde::Deserialize)]
 struct ProseExtraction {
@@ -9,16 +9,6 @@ struct ProseExtraction {
 
 pub fn parse_prose_facts(output: &str) -> Result<Vec<ExtractedFact>, Error> {
     let extraction = serde_json::from_str::<ProseExtraction>(output)?;
-    for fact in &extraction.facts {
-        if fact.subject.trim().is_empty() {
-            return Err(Error::InvalidFact("subject"));
-        }
-        if fact.predicate.trim().is_empty() {
-            return Err(Error::InvalidFact("predicate"));
-        }
-        if fact.object.trim().is_empty() {
-            return Err(Error::InvalidFact("object"));
-        }
-    }
+    validate_facts(&extraction.facts)?;
     Ok(extraction.facts)
 }

@@ -9,14 +9,23 @@ use crate::{
 pub fn extract_typescript_functions(source: &str) -> Result<Vec<String>, Error> {
     let tree = parse_with_language(source, tree_sitter_typescript::language_typescript())?;
     let mut functions = Vec::new();
-    collect_named_nodes(
-        tree.root_node(),
-        source.as_bytes(),
-        &["function_declaration", "method_definition"],
-        &mut functions,
-    )?;
-    collect_function_variable_names(tree.root_node(), source.as_bytes(), &mut functions)?;
+    collect_typescript_function_names(tree.root_node(), source.as_bytes(), &mut functions)?;
     Ok(functions)
+}
+
+fn collect_typescript_function_names(
+    node: Node<'_>,
+    source: &[u8],
+    functions: &mut Vec<String>,
+) -> Result<(), Error> {
+    collect_named_nodes(
+        node,
+        source,
+        &["function_declaration", "method_definition"],
+        functions,
+    )?;
+    collect_function_variable_names(node, source, functions)?;
+    Ok(())
 }
 
 pub fn extract_typescript_classes(source: &str) -> Result<Vec<String>, Error> {
@@ -55,35 +64,34 @@ pub fn extract_typescript_enums(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_typescript_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut facts = definition_facts(path, "Function", extract_typescript_functions(source)?);
+    let tree = parse_with_language(source, tree_sitter_typescript::language_typescript())?;
+    let root = tree.root_node();
+    let source = source.as_bytes();
+
+    let mut functions = Vec::new();
+    collect_typescript_function_names(root, source, &mut functions)?;
+    let mut facts = definition_facts(path, "Function", functions);
     facts.extend(definition_facts(
         path,
         "Class",
-        extract_typescript_classes(source)?,
+        collect_names_from_kinds(root, source, &["class_declaration"])?,
     ));
     facts.extend(definition_facts(
         path,
         "Interface",
-        extract_typescript_interfaces(source)?,
+        collect_names_from_kinds(root, source, &["interface_declaration"])?,
     ));
     facts.extend(definition_facts(
         path,
         "TypeAlias",
-        extract_typescript_type_aliases(source)?,
+        collect_names_from_kinds(root, source, &["type_alias_declaration"])?,
     ));
     facts.extend(definition_facts(
         path,
         "Enum",
-        extract_typescript_enums(source)?,
+        collect_names_from_kinds(root, source, &["enum_declaration"])?,
     ));
-    facts.extend(extract_typescript_extends_facts(source)?);
-    Ok(facts)
-}
-
-fn extract_typescript_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let tree = parse_with_language(source, tree_sitter_typescript::language_typescript())?;
-    let mut facts = Vec::new();
-    collect_typescript_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
+    collect_typescript_extends_facts(root, source, &mut facts)?;
     Ok(facts)
 }
 
