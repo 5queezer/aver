@@ -573,3 +573,19 @@ fn add_embedded_vector_chunk_for_claim_requires_existing_claim() {
 
     assert!(err.to_string().contains("claim"));
 }
+
+#[test]
+fn recall_text_with_embedding_propagates_recall_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let client = MockEmbeddingClient::new(vec![1.0, 0.0, 0.0]);
+    // Blank query: recall_text rejects it, and the error must propagate
+    // rather than being swallowed into an empty result set.
+    let err = store
+        .recall_text_with_embedding("", &client)
+        .expect_err("blank query should error");
+    assert!(
+        matches!(err, Error::InvalidRecallQuery),
+        "unexpected error: {err:?}"
+    );
+}

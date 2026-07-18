@@ -102,13 +102,18 @@ fn migration_backfills_existing_vector_chunks_rows() {
         conn.execute_batch(
             "DROP TRIGGER IF EXISTS claims_predicate_in_ontology_insert;
              DROP TRIGGER IF EXISTS claims_predicate_in_ontology_update;
+             -- The 0119 hyperedge trigger versions reference predicate_alias;
+             -- drop them before the table or the ALTERs below fail when
+             -- SQLite re-parses schema triggers on DROP COLUMN.
+             DROP TRIGGER IF EXISTS hyperedges_predicate_type_insert;
+             DROP TRIGGER IF EXISTS hyperedges_predicate_type_update;
              DROP TABLE IF EXISTS vector_index;
              DROP TABLE IF EXISTS predicate_alias;
              DROP TABLE IF EXISTS ontology_extension_log;
              ALTER TABLE entities DROP COLUMN requires_review;
              ALTER TABLE predicate_types DROP COLUMN created_via;
              ALTER TABLE predicate_types DROP COLUMN created_at;
-             -- ADR-0021 migration 0084 adds non-idempotent ALTER TABLE ADD COLUMN
+             -- ADR-0021 migration 0085 adds non-idempotent ALTER TABLE ADD COLUMN
              -- statements + indexes + triggers that reference the new column.
              -- Drop indexes and triggers first; SQLite refuses to drop a column
              -- that is still referenced by an index.

@@ -155,7 +155,7 @@ Current CLI commands:
 | `contradict` | Record a contradiction for a claim id and optional replacement claim. |
 | `consolidate` | Consolidate active duplicates/conflicts and apply confidence decay. |
 | `vacuum` | Run `VACUUM` (and optional analysis). |
-| `replay` | Rebuild SQLite from the append-only logs (strict by default; `--lenient` quarantines invalid lines and continues). |
+| `replay` | Rebuild SQLite from the append-only logs (strict by default; `--lenient` quarantines invalid lines and continues). Holds the advisory `.lock` for the whole run so it cannot race a live store. |
 
 ## Server and MCP Usage
 

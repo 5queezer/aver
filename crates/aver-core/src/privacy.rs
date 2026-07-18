@@ -118,7 +118,13 @@ pub fn privacy_filter_path(path: impl AsRef<Path>) -> Result<(), PrivacyRejectio
     {
         return Err(PrivacyRejection::SecretsPath);
     }
-    if path == ".env" || path == ".envrc" || path.starts_with(".env.") || path.contains("/.env") {
+    // Match `.env`, `.envrc`, and `.env.*` as full path segments only:
+    // `config/.env.local` is sensitive, but `/.environment` is benign and
+    // must not trip the filter.
+    if path
+        .split('/')
+        .any(|segment| segment == ".env" || segment == ".envrc" || segment.starts_with(".env."))
+    {
         return Err(PrivacyRejection::EnvPath);
     }
     if path.starts_with(".ssh/") || path.contains("/.ssh/") {
@@ -178,91 +184,90 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
         return Err(PrivacyRejection::AwsAccessKey);
     }
     if content
-        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .split(secret_token_boundary)
         .any(|token| token.starts_with("ghp_") && token.len() >= 40)
     {
         return Err(PrivacyRejection::GitHubPat);
     }
     if content
-        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .split(secret_token_boundary)
         .any(|token| token.starts_with("gho_") && token.len() >= 30)
     {
         return Err(PrivacyRejection::GitHubPat);
     }
     if content
-        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .split(secret_token_boundary)
         .any(|token| token.starts_with("ghu_") && token.len() >= 30)
     {
         return Err(PrivacyRejection::GitHubPat);
     }
     if content
-        .split_whitespace()
+        .split(secret_token_boundary)
         .any(|token| token.starts_with("github_pat_") && token.len() >= 40)
     {
         return Err(PrivacyRejection::GitHubFineGrainedPat);
     }
     if content
-        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .split(secret_token_boundary)
         .any(|token| token.starts_with("glpat-") && token.len() >= 20)
     {
         return Err(PrivacyRejection::HighEntropy);
     }
     if content
-        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .split(secret_token_boundary)
         .any(|token| token.starts_with("hf_") && token.len() >= 30)
     {
         return Err(PrivacyRejection::HighEntropy);
     }
     if content
-        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .split(secret_token_boundary)
         .any(|token| token.starts_with("lin_api_") && token.len() >= 30)
     {
         return Err(PrivacyRejection::HighEntropy);
     }
     if content
-        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .split(secret_token_boundary)
         .any(|token| token.starts_with("npm_") && token.len() >= 30)
     {
         return Err(PrivacyRejection::HighEntropy);
     }
     if content
-        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .split(secret_token_boundary)
         .any(|token| token.starts_with("tskey-auth-") && token.len() >= 30)
     {
         return Err(PrivacyRejection::HighEntropy);
     }
     if content
-        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .split(secret_token_boundary)
         .any(|token| token.starts_with("tskey-api-") && token.len() >= 30)
     {
         return Err(PrivacyRejection::HighEntropy);
     }
-    if content.split_whitespace().any(is_jwt) {
+    // JWTs contain `.` segment separators, so they tokenize on a slightly
+    // wider charset than the prefix detectors above.
+    if content.split(jwt_token_boundary).any(is_jwt) {
         return Err(PrivacyRejection::Jwt);
     }
     if content
-        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .split(secret_token_boundary)
         .any(|token| token.starts_with("sk-ant-") && token.len() >= 30)
     {
         return Err(PrivacyRejection::AnthropicKey);
     }
     if content
-        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .split(secret_token_boundary)
         .any(|token| token.starts_with("sk_live_") && token.len() >= 30)
     {
         return Err(PrivacyRejection::StripeLiveKey);
     }
-    if content
-        .split(|ch: char| ch.is_whitespace() || ch == '=')
-        .any(|token| {
-            (token.starts_with("xoxb-") || token.starts_with("xoxp-") || token.starts_with("xapp-"))
-                && token.len() >= 20
-        })
-    {
+    if content.split(secret_token_boundary).any(|token| {
+        (token.starts_with("xoxb-") || token.starts_with("xoxp-") || token.starts_with("xapp-"))
+            && token.len() >= 20
+    }) {
         return Err(PrivacyRejection::HighEntropy);
     }
     if content
-        .split(|ch: char| ch.is_whitespace() || ch == '=')
+        .split(secret_token_boundary)
         .any(|token| token.starts_with("sk-") && token.len() >= 30)
     {
         return Err(PrivacyRejection::OpenAiKey);
@@ -274,6 +279,22 @@ pub fn privacy_filter(content: &str) -> Result<(), PrivacyRejection> {
         return Err(PrivacyRejection::HighEntropy);
     }
     Ok(())
+}
+
+/// Boundary for splitting content into candidate secret tokens. Token
+/// characters are alphanumerics plus `_` and `-` (the charset of the
+/// detected prefixes); everything else — whitespace, `=`, quotes, JSON
+/// punctuation — is a boundary. Splitting only on whitespace/`=` let
+/// JSON-quoted values like `{"key":"ghp_..."}` slip through with the
+/// opening quote attached to the token.
+fn secret_token_boundary(ch: char) -> bool {
+    !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+}
+
+/// Like [`secret_token_boundary`] but keeps `.` inside tokens so JWT
+/// segments stay in one piece for [`is_jwt`].
+fn jwt_token_boundary(ch: char) -> bool {
+    !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.')
 }
 
 fn shannon_entropy(token: &str) -> f64 {

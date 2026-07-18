@@ -1042,3 +1042,50 @@ fn migration_0009_rejects_out_of_range_confidence_and_invalid_status() {
         .expect_err("status 'BOGUS' should be rejected by trigger");
     assert!(err.to_string().contains("status must be"));
 }
+
+#[test]
+fn promote_candidate_claim_records_last_verified_at_like_add_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event_id = store
+        .record_event("session-1", "message", "payload", "test")
+        .unwrap();
+    let candidate_id = store
+        .propose_candidate_claim(event_id, "project", "uses", "rust")
+        .unwrap();
+    let claim_id = store.promote_candidate_claim(candidate_id).unwrap();
+
+    let claim = store.get_claim(claim_id).unwrap();
+    // Live promote must match add_claim and replay's apply_add_claim, which
+    // both set last_verified_at at creation.
+    assert!(claim.last_verified_at.is_some());
+    assert_eq!(claim.last_verified_at, Some(claim.write_ts));
+    let live_last_verified_at = claim.last_verified_at;
+    drop(store);
+
+    // Live projection and replayed projection must agree on the field.
+    aver_core::replay(dir.path(), true).unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let replayed = store.get_claim(claim_id).unwrap();
+    assert_eq!(replayed.last_verified_at, live_last_verified_at);
+}
+
+#[test]
+fn add_claim_on_seedless_database_errors_instead_of_panicking() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    // Simulate a corrupt DB: the ontology seed row `Thing` is gone.
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+    conn.execute("DELETE FROM entity_types WHERE name = 'Thing'", [])
+        .unwrap();
+    drop(conn);
+
+    let err = store
+        .add_claim("alpha", "uses", "beta", "test")
+        .expect_err("missing ontology seed must be a typed error, not a panic");
+    assert!(
+        matches!(err, aver_core::Error::MissingEntityType { name: "Thing" }),
+        "unexpected error: {err:?}"
+    );
+}

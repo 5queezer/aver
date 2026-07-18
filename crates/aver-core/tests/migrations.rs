@@ -2663,3 +2663,61 @@ fn hyperedge_predicate_must_exist_in_predicate_types() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn hyperedge_predicate_may_be_an_ontology_alias() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).expect("open should succeed");
+
+    // `has-module` is a seeded alias for `has_module` (migration 0011). The
+    // claims trigger consults predicate_alias; migration 0119 mirrors that
+    // clause into the hyperedges trigger so raw-SQL writes behave the same.
+    let id = store
+        .add_hyperedge(aver_core::HyperedgeInput {
+            predicate: "has-module".to_string(),
+            provenance: aver_core::Provenance::Extracted,
+            confidence: 0.9,
+            source_refs: vec!["parser".to_string()],
+            participants: vec![
+                aver_core::HyperedgeParticipantInput {
+                    role: "crate".to_string(),
+                    entity: "aver_core".to_string(),
+                },
+                aver_core::HyperedgeParticipantInput {
+                    role: "module".to_string(),
+                    entity: "privacy".to_string(),
+                },
+            ],
+        })
+        .expect("aliased predicate should be accepted for hyperedges");
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let predicate: String = conn
+        .query_row(
+            "SELECT predicate FROM hyperedges WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(predicate, "has-module");
+
+    // The UPDATE trigger must accept aliases too, and still reject
+    // predicates that are neither canonical nor aliased.
+    conn.execute(
+        "UPDATE hyperedges SET predicate = 'binary-name' WHERE id = ?1",
+        [id],
+    )
+    .expect("update to another alias should succeed");
+    let err = conn
+        .execute(
+            "UPDATE hyperedges SET predicate = 'unknown_predicate' WHERE id = ?1",
+            [id],
+        )
+        .expect_err("update to an unknown predicate should still be rejected");
+    assert!(
+        err.to_string()
+            .contains("hyperedges.predicate not in predicate_types"),
+        "unexpected error: {err}"
+    );
+}

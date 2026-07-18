@@ -108,6 +108,58 @@ fn recall_text_with_scope_descendants_includes_subpaths() {
 }
 
 #[test]
+fn recall_text_with_scope_descendants_does_not_confuse_underscore_with_slash() {
+    let (_dir, store) = open_store();
+    store
+        .add_claim_with_scope("aver", "uses", "rmcp", "test", "proj_aver")
+        .unwrap();
+    store
+        .add_claim_with_scope("aver", "uses", "sqlx", "test", "proj_aver/branch")
+        .unwrap();
+    store
+        .add_claim_with_scope("slash", "uses", "torch", "test", "proj/aver")
+        .unwrap();
+    // `_` is a LIKE metachar: unescaped, "proj_aver" would also match rows
+    // scoped "proj/aver" (ADR-0021 allows `_` in the scope charset).
+    let claims = store
+        .recall_text_with_scope("uses", "proj_aver", ScopeWalk::Descendants)
+        .unwrap();
+    let scopes: Vec<String> = claims.iter().map(|c| c.scope.clone()).collect();
+    assert!(scopes.contains(&"proj_aver".to_string()));
+    assert!(scopes.contains(&"proj_aver/branch".to_string()));
+    assert!(
+        !scopes.contains(&"proj/aver".to_string()),
+        "`_` must not act as a LIKE wildcard matching `/`; got {scopes:?}"
+    );
+}
+
+#[test]
+fn recall_text_with_scope_ancestors_does_not_confuse_underscore_with_slash() {
+    let (_dir, store) = open_store();
+    store
+        .add_claim_with_scope("root", "uses", "x", "test", "proj")
+        .unwrap();
+    store
+        .add_claim_with_scope("mid", "uses", "y", "test", "proj/aver")
+        .unwrap();
+    store
+        .add_claim_with_scope("under", "uses", "z", "test", "proj_aver")
+        .unwrap();
+    // Symmetric hazard: the ancestors pattern is built from the row's scope,
+    // so a row scoped "proj_aver" must not match the input "proj/aver/deep".
+    let claims = store
+        .recall_text_with_scope("uses", "proj/aver/deep", ScopeWalk::Ancestors)
+        .unwrap();
+    let scopes: Vec<String> = claims.iter().map(|c| c.scope.clone()).collect();
+    assert!(scopes.contains(&"proj".to_string()));
+    assert!(scopes.contains(&"proj/aver".to_string()));
+    assert!(
+        !scopes.contains(&"proj_aver".to_string()),
+        "row-scope `_` must not act as a LIKE wildcard matching `/`; got {scopes:?}"
+    );
+}
+
+#[test]
 fn recall_text_with_scope_any_returns_everything() {
     let (_dir, store) = open_store();
     seed_corpus(&store);
