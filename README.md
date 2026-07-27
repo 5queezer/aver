@@ -39,7 +39,7 @@ The goal is a trustworthy substrate for coding agents that can:
 - **Candidate claim workflow** — episodic events can produce staged claims that are promoted or rejected explicitly.
 - **Observation continuity surfaces** — episodic events can produce privacy-checked, source-backed observations that are recallable by ID, summarized by compaction, and coverage-accounted across full session event ranges.
 - **Continuity reliability controls** — coverage accounting, deterministic `catch-up`, gap warnings in summaries, destructive prune operations blocked when gaps remain, prune markers preserved in logs, and audit-aware observation recall.
-- **MCP/OAuth server** — `aver-server` exposes memory tools over Streamable HTTP MCP behind a local OAuth-style token flow, including the ADR-0008 five-tool surface with validated recall/write/event/extraction-trigger parameters, observation projection tools, explicit unsupported-scope errors, persisted confidence overrides, and recall subgraphs with confidence floors.
+- **MCP/OAuth server** — `aver-server` exposes memory tools over Streamable HTTP MCP behind a local OAuth-style token flow, including the ADR-0008 five-tool surface with validated recall/write/event/extraction-trigger parameters, observation projection tools, ADR-0021/0022 scoped memory parameters and connection defaults, persisted confidence overrides, and recall subgraphs with confidence floors.
 - **Evaluation harnesses** — fixture evaluation plus a BEAM100K runner using local Ollama for embeddings, answer generation, and judging.
 
 ## Quick Start
@@ -218,6 +218,8 @@ MCP currently exposes 18 tools through a progressive discovery card so agents ke
 - **Maintenance/repair:** keep `contradict`, `retire_claim`, `consolidate`, `add_vector_chunk` hidden until there is an explicit repair or retrieval-tuning need
 
 Aver's MCP guide is intentionally proactive but selective: agents should recall first, then record durable user-shared preferences, project facts, and long-lived working context even when the user does not say "remember this" explicitly. Identity details should be recorded only when they are necessary, user-shared, and not sensitive personal data. When durability is uncertain, agents should prefer `record_event` over `remember_claim`, and they must not store secrets, credentials, sensitive personal data, transient chat, or facts they cannot explain with provenance.
+
+Scope is a first-class memory dimension. Write tools such as `remember_claim`, `add_triple`, `record_event`, `record_observation`, and `propose_candidate_claim` accept an optional `scope`; when omitted through MCP, the request's ADR-0022 resolved scope applies. Clients that send no per-call or connection scope signal use `AVER_DEFAULT_SCOPE` when configured, then fall back to `global`. Read tools (`recall`, `expand`) accept `scope` plus `scope_walk`: use `ancestors` for normal project memory, `exact` for isolation, `descendants` for subtree audits, and `any` only for intentional cross-scope search. Vector chunks do not carry their own scope; they attach to a claim and inherit the claim's effective scope.
 
 CLI-only continuity and maintenance surfaces (`catch-up`, `compaction-summary`) are implemented in `aver-cli`; MCP exposes `record_observation`, `assemble_compaction_summary`, and the observation audit tools above, while claim-maintenance tasks stay available through the four advanced tools when agents explicitly need them.
 

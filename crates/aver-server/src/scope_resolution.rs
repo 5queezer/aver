@@ -37,7 +37,7 @@ impl ResolvedScope {
 }
 
 /// Validate a scope candidate without going through sqlite. Mirrors the
-/// `[A-Za-z0-9_/-]` charset enforced by migration 0084.
+/// `[A-Za-z0-9_/-]` charset enforced by migration 0085.
 fn validate(scope: &str, source: &'static str) -> anyhow::Result<()> {
     if scope.trim().is_empty() {
         anyhow::bail!("{source}: scope must not be blank");

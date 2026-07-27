@@ -4,7 +4,7 @@ Date: 2026-05-10
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -75,24 +75,26 @@ the existing two ACTIVE claims valid.
 
 ### Schema change
 
-A new migration `migrations/00NN_scope_column.sql` adds:
+Migration `migrations/0085_scope_column.sql` adds:
 
 ```sql
-ALTER TABLE claims      ADD COLUMN scope TEXT NOT NULL DEFAULT 'global';
-ALTER TABLE events      ADD COLUMN scope TEXT NOT NULL DEFAULT 'global';
-ALTER TABLE observations ADD COLUMN scope TEXT NOT NULL DEFAULT 'global';
+ALTER TABLE claims           ADD COLUMN scope TEXT NOT NULL DEFAULT 'global';
+ALTER TABLE episodic_events  ADD COLUMN scope TEXT NOT NULL DEFAULT 'global';
+ALTER TABLE observations     ADD COLUMN scope TEXT NOT NULL DEFAULT 'global';
+ALTER TABLE candidate_claims ADD COLUMN scope TEXT NOT NULL DEFAULT 'global';
 
-CREATE INDEX claims_scope       ON claims(scope);
-CREATE INDEX events_scope       ON events(scope);
-CREATE INDEX observations_scope ON observations(scope);
+CREATE INDEX claims_scope           ON claims(scope);
+CREATE INDEX episodic_events_scope  ON episodic_events(scope);
+CREATE INDEX observations_scope     ON observations(scope);
+CREATE INDEX candidate_claims_scope ON candidate_claims(scope);
 ```
 
 Triggers analogous to `claims_agent_id_*_insert/update`
 (`migrations/0060`–`0061`) enforce `scope` non-blank and a charset of
 `[A-Za-z0-9_/-]` (note the `/` — paths are first-class).
 
-The candidate-claim staging table inherits a `scope` column on the same
-migration so candidates carry the writer's intended scope through promotion.
+The candidate-claim staging table carries the writer's intended scope through
+promotion.
 
 ### Path convention
 
@@ -104,7 +106,9 @@ session/<session_id>                    transient, never auto-promoted to global
 ```
 
 `<slug>` is a stable identifier: `git config remote.origin.url` hashed to
-12 hex chars when origin exists, else the basename of the worktree root.
+12 hex chars when origin exists, else the absolute worktree root hashed to the
+same 12-hex-character form. Moving an origin-less worktree therefore changes
+its derived scope unless the operator configures an explicit default.
 Branch and session paths exist for completeness; this ADR does not require
 clients to use them, but specifies the shape so later ADRs do not collide.
 
@@ -129,11 +133,12 @@ this one.
 
 ### Write-path semantics
 
-`add_triple`, `remember_claim`, `record_event`, `record_observation`,
-`propose_candidate_claim`, and `add_vector_chunk` accept an optional `scope`.
-When omitted: `'global'` (preserves today's behavior). `promote_candidate_claim`
-copies the candidate's `scope` onto the durable claim; it is not a separate
-parameter on promote.
+`add_triple`, `remember_claim`, `record_event`, `record_observation`, and
+`propose_candidate_claim` accept an optional `scope`. When omitted: `'global'`
+(preserves today's behavior). `promote_candidate_claim` copies the candidate's
+`scope` onto the durable claim; it is not a separate parameter on promote.
+`add_vector_chunk` does not accept a separate scope because vector chunks attach
+to a claim and inherit the claim's effective scope.
 
 ### Migration
 
@@ -164,7 +169,7 @@ ADR-0010.
 - (+) Cross-repo pollution becomes opt-in instead of the default: a
   scope-aware client can ask "claims relevant to *this* project" and
   receive exactly that, plus inherited globals.
-- (+) Schema cost is one column, three indexes, one migration. ADR-0019's
+- (+) Schema cost is one column, four indexes, one migration. ADR-0019's
   replay invariant (JSONL is the source of truth) absorbs the change because
   every JSONL writer can default to `scope='global'` until clients adopt.
 - (+) The decision is reversible: dropping the column reverts behavior. The
