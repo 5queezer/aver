@@ -488,10 +488,11 @@ pub async fn handle_loopback_get_authorize(
             );
         }
         Err(err) => {
+            eprintln!("failed to authenticate OAuth browser user: {err:#}");
             return html_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Server error",
-                &format!("Failed to authenticate the user: {err}"),
+                "Authentication failed.",
             );
         }
     };
@@ -731,10 +732,11 @@ pub async fn handle_authorize_decision(
             );
         }
         Err(err) => {
+            eprintln!("failed to authenticate OAuth browser user: {err:#}");
             return html_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Server error",
-                &format!("Failed to authenticate the user: {err}"),
+                "Authentication failed.",
             );
         }
     };
@@ -915,10 +917,11 @@ pub async fn handle_revoke_consent(
             );
         }
         Err(err) => {
+            eprintln!("failed to authenticate OAuth browser user: {err:#}");
             return html_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Server error",
-                &format!("Failed to authenticate the user: {err}"),
+                "Authentication failed.",
             );
         }
     };

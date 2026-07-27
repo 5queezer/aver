@@ -167,6 +167,7 @@ fn apply_column_migration(conn: &Connection, statement: &str) -> anyhow::Result<
 struct RefreshTokenRow {
     user_id: String,
     client_id: Option<String>,
+    family_id: String,
     granted_scopes: String,
     revoked_at: Option<i64>,
     expires_at: i64,
@@ -187,6 +188,7 @@ impl AuthDb {
                 token_hash     TEXT PRIMARY KEY,
                 user_id        TEXT NOT NULL,
                 client_id      TEXT,
+                family_id      TEXT NOT NULL DEFAULT '',
                 created_at     INTEGER NOT NULL,
                 expires_at     INTEGER NOT NULL DEFAULT 0,
                 revoked_at     INTEGER,
@@ -216,6 +218,7 @@ impl AuthDb {
                 token_hash     TEXT PRIMARY KEY,
                 user_id        TEXT NOT NULL,
                 client_id      TEXT,
+                family_id      TEXT NOT NULL DEFAULT '',
                 created_at     INTEGER NOT NULL,
                 expires_at     INTEGER NOT NULL DEFAULT 0,
                 revoked_at     INTEGER,
@@ -279,9 +282,11 @@ impl AuthDb {
         )?;
         for statement in [
             "ALTER TABLE access_tokens ADD COLUMN client_id TEXT;",
+            "ALTER TABLE access_tokens ADD COLUMN family_id TEXT NOT NULL DEFAULT '';",
             "ALTER TABLE access_tokens ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0;",
             "ALTER TABLE access_tokens ADD COLUMN revoked_at INTEGER;",
             "ALTER TABLE refresh_tokens ADD COLUMN client_id TEXT;",
+            "ALTER TABLE refresh_tokens ADD COLUMN family_id TEXT NOT NULL DEFAULT '';",
             "ALTER TABLE refresh_tokens ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0;",
             "ALTER TABLE refresh_tokens ADD COLUMN revoked_at INTEGER;",
         ] {
@@ -384,7 +389,13 @@ impl AuthDb {
         user_id: &str,
         granted_scopes: &[String],
     ) -> anyhow::Result<()> {
-        self.store_access_token_hash_for_client(token_hash, user_id, None, granted_scopes)
+        self.store_access_token_hash_for_client(
+            token_hash,
+            user_id,
+            None,
+            &random_session_id(),
+            granted_scopes,
+        )
     }
 
     fn store_access_token_hash_for_client(
@@ -392,18 +403,20 @@ impl AuthDb {
         token_hash: &str,
         user_id: &str,
         client_id: Option<&str>,
+        family_id: &str,
         granted_scopes: &[String],
     ) -> anyhow::Result<()> {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let scopes = encode_scopes(granted_scopes);
         self.conn.execute(
             "INSERT OR REPLACE INTO access_tokens
-                (token_hash, user_id, client_id, created_at, expires_at, revoked_at, granted_scopes)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+                (token_hash, user_id, client_id, family_id, created_at, expires_at, revoked_at, granted_scopes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
             params![
                 token_hash,
                 user_id,
                 client_id,
+                family_id,
                 now,
                 now + ACCESS_TOKEN_TTL_SECS,
                 scopes
@@ -521,27 +534,55 @@ impl AuthDb {
         client_id: Option<&str>,
         granted_scopes: &[String],
     ) -> anyhow::Result<TokenPair> {
-        let access_token = random_session_id();
-        self.store_access_token_hash_for_client(
-            &hash_token(&access_token),
+        let tx = self.conn.unchecked_transaction()?;
+        let tokens = Self::issue_token_pair_in(
+            &tx,
             user_id,
             client_id,
+            &random_session_id(),
             granted_scopes,
         )?;
+        tx.commit()?;
+        Ok(tokens)
+    }
+
+    fn issue_token_pair_in(
+        conn: &Connection,
+        user_id: &str,
+        client_id: Option<&str>,
+        family_id: &str,
+        granted_scopes: &[String],
+    ) -> anyhow::Result<TokenPair> {
+        let access_token = random_session_id();
         let refresh_token = random_session_id();
-        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let now = now_unix();
         let scopes = encode_scopes(granted_scopes);
-        self.conn.execute(
+        conn.execute(
+            "INSERT OR REPLACE INTO access_tokens
+                (token_hash, user_id, client_id, family_id, created_at, expires_at, revoked_at, granted_scopes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
+            params![
+                hash_token(&access_token),
+                user_id,
+                client_id,
+                family_id,
+                now,
+                now + ACCESS_TOKEN_TTL_SECS,
+                scopes,
+            ],
+        )?;
+        conn.execute(
             "INSERT OR REPLACE INTO refresh_tokens
-                (token_hash, user_id, client_id, created_at, expires_at, revoked_at, granted_scopes)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+                (token_hash, user_id, client_id, family_id, created_at, expires_at, revoked_at, granted_scopes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
             params![
                 hash_token(&refresh_token),
                 user_id,
                 client_id,
+                family_id,
                 now,
                 now + REFRESH_TOKEN_TTL_SECS,
-                scopes
+                scopes,
             ],
         )?;
         Ok(TokenPair {
@@ -556,7 +597,7 @@ impl AuthDb {
         let row: Option<RefreshTokenRow> = self
             .conn
             .query_row(
-                "SELECT user_id, client_id, granted_scopes, revoked_at, expires_at
+                "SELECT user_id, client_id, family_id, granted_scopes, revoked_at, expires_at
                    FROM refresh_tokens
                   WHERE token_hash = ?1",
                 params![token_hash],
@@ -564,9 +605,10 @@ impl AuthDb {
                     Ok(RefreshTokenRow {
                         user_id: row.get(0)?,
                         client_id: row.get(1)?,
-                        granted_scopes: row.get(2)?,
-                        revoked_at: row.get(3)?,
-                        expires_at: row.get(4)?,
+                        family_id: row.get(2)?,
+                        granted_scopes: row.get(3)?,
+                        revoked_at: row.get(4)?,
+                        expires_at: row.get(5)?,
                     })
                 },
             )
@@ -575,40 +617,50 @@ impl AuthDb {
             anyhow::bail!("unknown refresh token");
         };
         if row.revoked_at.is_some() {
-            // Reuse of an already-rotated (or revoked) refresh token: treat
-            // as potential token theft and kill the whole family for this
-            // (user, client), RFC 6819 §5.2.2.3 style.
-            self.revoke_token_family(&row.user_id, row.client_id.as_deref())?;
+            // Reuse of an already-rotated (or revoked) refresh token signals
+            // potential theft. Revoke only this login's inherited lineage.
+            self.revoke_token_family(&row.family_id)?;
             anyhow::bail!("refresh token reuse detected; token family revoked");
         }
         anyhow::ensure!(now < row.expires_at, "refresh token expired");
 
-        // Rotate: retire the presented token, mint a fresh pair. The old
-        // refresh token is invalid from this point on.
-        self.conn.execute(
-            "UPDATE refresh_tokens SET revoked_at = ?2 WHERE token_hash = ?1",
+        // Rotation is all-or-nothing: the presented token remains usable if
+        // either replacement insert fails.
+        let tx = self.conn.unchecked_transaction()?;
+        let affected = tx.execute(
+            "UPDATE refresh_tokens
+                SET revoked_at = ?2
+              WHERE token_hash = ?1 AND revoked_at IS NULL",
             params![token_hash, now],
         )?;
+        anyhow::ensure!(affected == 1, "refresh token was already rotated");
         let scopes = decode_scopes(&row.granted_scopes);
-        self.issue_token_pair(&row.user_id, row.client_id.as_deref(), &scopes)
+        let tokens = Self::issue_token_pair_in(
+            &tx,
+            &row.user_id,
+            row.client_id.as_deref(),
+            &row.family_id,
+            &scopes,
+        )?;
+        tx.commit()?;
+        Ok(tokens)
     }
 
-    /// Revokes every live access and refresh token for a `(user, client)`
-    /// pair. Used when a rotated refresh token is presented again.
-    fn revoke_token_family(&self, user_id: &str, client_id: Option<&str>) -> anyhow::Result<()> {
+    /// Revokes every live access and refresh token in one refresh-token lineage.
+    fn revoke_token_family(&self, family_id: &str) -> anyhow::Result<()> {
         let now = now_unix();
+        let tx = self.conn.unchecked_transaction()?;
         for table in ["access_tokens", "refresh_tokens"] {
-            self.conn.execute(
+            tx.execute(
                 &format!(
                     "UPDATE {table}
-                        SET revoked_at = ?3
-                      WHERE user_id = ?1
-                        AND revoked_at IS NULL
-                        AND (client_id = ?2 OR (client_id IS NULL AND ?2 IS NULL))"
+                        SET revoked_at = ?2
+                      WHERE family_id = ?1 AND revoked_at IS NULL"
                 ),
-                params![user_id, client_id, now],
+                params![family_id, now],
             )?;
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -764,24 +816,26 @@ impl AuthDb {
     /// `(user, client)` pair has never been granted.
     pub fn revoke_consent(&self, user_id: &str, client_id: &str) -> anyhow::Result<()> {
         let now = now_unix();
-        self.conn.execute(
+        let transaction = self.conn.unchecked_transaction()?;
+        transaction.execute(
             "UPDATE client_consents
                 SET revoked_at = ?3
               WHERE user_id = ?1 AND client_id = ?2",
             params![user_id, client_id, now],
         )?;
-        self.conn.execute(
+        transaction.execute(
             "UPDATE access_tokens
                 SET revoked_at = ?3
               WHERE user_id = ?1 AND client_id = ?2 AND revoked_at IS NULL",
             params![user_id, client_id, now],
         )?;
-        self.conn.execute(
+        transaction.execute(
             "UPDATE refresh_tokens
                 SET revoked_at = ?3
               WHERE user_id = ?1 AND client_id = ?2 AND revoked_at IS NULL",
             params![user_id, client_id, now],
         )?;
+        transaction.commit()?;
         Ok(())
     }
 

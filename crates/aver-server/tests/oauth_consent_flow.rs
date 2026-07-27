@@ -122,6 +122,41 @@ async fn loopback_get_authorize_renders_consent_screen() {
 }
 
 #[tokio::test]
+async fn browser_auth_database_failures_return_generic_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let _ = AuthDb::open(&auth_db_path).unwrap();
+    let redirect = "http://127.0.0.1:3917/callback";
+    let client_id = register_client(&auth_db_path, redirect);
+    let app = build_router(base_config(&dir, &auth_db_path)).unwrap();
+    rusqlite::Connection::open(&auth_db_path)
+        .unwrap()
+        .execute("DROP TABLE users", [])
+        .unwrap();
+    let challenge = pkce_s256_challenge("verifier-abc-1234567890");
+    let uri = format!(
+        "/oauth/authorize?response_type=code&client_id={client_id}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={challenge}&code_challenge_method=S256"
+    );
+    let mut request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(loopback_addr()));
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = std::str::from_utf8(&body).unwrap();
+    assert!(html.contains("Authentication failed."));
+    assert!(
+        !html.contains("no such table"),
+        "database detail leaked: {html}"
+    );
+    assert!(!html.contains("users"), "schema detail leaked: {html}");
+}
+
+#[tokio::test]
 async fn loopback_get_authorize_unknown_client_yields_html_error() {
     let dir = tempfile::tempdir().unwrap();
     let auth_db_path = dir.path().join("auth.db");

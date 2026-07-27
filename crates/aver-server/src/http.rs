@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use axum::{
     Form, Json, Router,
     body::Body,
-    extract::{ConnectInfo, Query},
+    extract::{ConnectInfo, Query, rejection::FormRejection},
     http::{HeaderValue, Request, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -413,8 +413,10 @@ fn token_error(status: StatusCode, error: &'static str) -> (StatusCode, Json<ser
 
 async fn oauth_token(
     axum::extract::State(state): axum::extract::State<HttpState>,
-    Form(request): Form<TokenRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    request: Result<Form<TokenRequest>, FormRejection>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let Form(request) =
+        request.map_err(|_| token_error(StatusCode::BAD_REQUEST, "invalid_request"))?;
     let db = state
         .auth_db
         .lock()
@@ -424,6 +426,7 @@ async fn oauth_token(
             if request.code.is_empty()
                 || request.client_id.is_empty()
                 || request.code_verifier.is_empty()
+                || request.redirect_uri.is_empty()
             {
                 return Err(token_error(StatusCode::BAD_REQUEST, "invalid_request"));
             }
@@ -449,10 +452,16 @@ async fn oauth_token(
             ));
         }
     };
-    Ok(Json(serde_json::json!({
-        "access_token": tokens.access_token,
-        "refresh_token": tokens.refresh_token,
-        "token_type": "Bearer",
-        "expires_in": ACCESS_TOKEN_TTL_SECS,
-    })))
+    Ok((
+        [
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (header::PRAGMA, HeaderValue::from_static("no-cache")),
+        ],
+        Json(serde_json::json!({
+            "access_token": tokens.access_token,
+            "refresh_token": tokens.refresh_token,
+            "token_type": "Bearer",
+            "expires_in": ACCESS_TOKEN_TTL_SECS,
+        })),
+    ))
 }

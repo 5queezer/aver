@@ -87,6 +87,14 @@ async fn oauth_token_route_exchanges_authorization_code_with_pkce() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL),
+        Some(&header::HeaderValue::from_static("no-store")),
+    );
+    assert_eq!(
+        response.headers().get(header::PRAGMA),
+        Some(&header::HeaderValue::from_static("no-cache")),
+    );
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
@@ -161,6 +169,84 @@ async fn oauth_token_route_returns_rfc6749_json_errors() {
     assert_eq!(json["error"], "invalid_request");
     let (status, json) = token_request(&app, "grant_type=authorization_code&code=abc").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json["error"], "invalid_request");
+}
+
+#[tokio::test]
+async fn oauth_token_route_maps_malformed_forms_to_invalid_request_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = ServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 3317,
+        base_url: "https://aver.example.com".to_string(),
+        memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
+        auth_db_path: dir.path().join("auth.db").to_string_lossy().to_string(),
+        cors_origins: Vec::new(),
+        trusted_auth_header: None,
+    };
+    let app = build_router(config).unwrap();
+
+    for (content_type, body) in [
+        (
+            "application/x-www-form-urlencoded",
+            "grant_type=refresh_token&grant_type=authorization_code",
+        ),
+        ("application/json", "{}"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/oauth/token")
+                    .header(header::CONTENT_TYPE, content_type)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body)
+            .unwrap_or_else(|err| panic!("token error body must be JSON: {err}"));
+        assert_eq!(json["error"], "invalid_request");
+    }
+}
+
+#[tokio::test]
+async fn oauth_token_route_rejects_missing_redirect_uri_as_invalid_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = ServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 3317,
+        base_url: "https://aver.example.com".to_string(),
+        memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
+        auth_db_path: dir.path().join("auth.db").to_string_lossy().to_string(),
+        cors_origins: Vec::new(),
+        trusted_auth_header: None,
+    };
+    let app = build_router(config).unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/oauth/token")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "grant_type=authorization_code&code=abc&client_id=client&code_verifier=verifier",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"], "invalid_request");
 }
 
