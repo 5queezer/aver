@@ -27,7 +27,7 @@ The goal is a trustworthy substrate for coding agents that can:
 ## Features
 
 - **Local-first storage** — SQLite plus `log.jsonl` under a configurable memory directory.
-- **Append-first writes** — durable claims and hyperedges are appended to JSONL before SQLite insertion.
+- **Append-first writes** — durable claims and hyperedges are appended to JSONL before SQLite insertion, and lifecycle transitions (retire, contradict, candidate staging, consolidation supersede/decay/merge) are logged the same way so replay reconstructs them.
 - **Structured claims** — memories are stored as `(subject, predicate, object)` claims with source references, confidence, status, and agent provenance.
 - **First-class hyperedges** — n-ary memories can be stored with predicate, provenance, confidence, source references, status, timestamps, and role/entity participants.
 - **Privacy gate** — token/path/entropy checks run before writes; rejected content is not persisted.
@@ -155,7 +155,7 @@ Current CLI commands:
 | `contradict` | Record a contradiction for a claim id and optional replacement claim. |
 | `consolidate` | Consolidate active duplicates/conflicts and apply confidence decay. |
 | `vacuum` | Run `VACUUM` (and optional analysis). |
-| `replay` | Rebuild SQLite from the append-only logs. |
+| `replay` | Rebuild SQLite from the append-only logs (strict by default; `--lenient` quarantines invalid lines and continues). |
 
 ## Server and MCP Usage
 

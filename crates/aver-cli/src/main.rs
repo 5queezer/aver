@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use aver_core::{AgentKind, ObservationRelevance, ScopeWalk, Store, replay, vacuum};
+use aver_core::{
+    AgentKind, ObservationRelevance, ReplayMode, ScopeWalk, Store, replay_with_mode, vacuum,
+};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -192,6 +194,10 @@ enum Command {
         /// Allow overwriting an existing populated db.sqlite.
         #[arg(long)]
         force: bool,
+        /// Quarantine invalid log lines and continue instead of aborting
+        /// (disaster recovery; strict by default).
+        #[arg(long)]
+        lenient: bool,
     },
 }
 
@@ -216,16 +222,29 @@ fn main() -> anyhow::Result<()> {
             }
             return Ok(());
         }
-        Command::Replay { force } => {
-            let report = replay(&cli.memory_dir, *force)?;
+        Command::Replay { force, lenient } => {
+            let mode = if *lenient {
+                ReplayMode::Lenient
+            } else {
+                ReplayMode::Strict
+            };
+            let report = replay_with_mode(&cli.memory_dir, *force, mode)?;
             println!(
-                "replay: claims={} hyperedges={} events={} observations={} files={}",
+                "replay: claims={} hyperedges={} events={} observations={} lifecycle={} files={} quarantined={}",
                 report.claims,
                 report.hyperedges,
                 report.events,
                 report.observations,
-                report.files_walked
+                report.lifecycle,
+                report.files_walked,
+                report.quarantined.len()
             );
+            for quarantined in &report.quarantined {
+                eprintln!(
+                    "quarantined: {}:{}: {}",
+                    quarantined.path, quarantined.line, quarantined.error
+                );
+            }
             return Ok(());
         }
         _ => {}
