@@ -33,6 +33,25 @@ fn cli_override_short_circuits() {
 }
 
 #[test]
+fn empty_cli_override_falls_through_like_empty_env() {
+    let dir = tempfile::tempdir().unwrap();
+    // An empty/whitespace `--scope` must be ignored, matching the env-var
+    // path — otherwise an empty `X-Aver-Scope` header would be injected.
+    for empty in ["", "   ", "\t"] {
+        let derived = derive_scope(dir.path(), Some(empty), Some("proj/env"));
+        if scope_from_git(dir.path()).is_none() {
+            assert_eq!(derived.source, ScopeSource::EnvDefault, "input {empty:?}");
+            assert_eq!(derived.scope, "proj/env");
+        }
+        let derived = derive_scope(dir.path(), Some(empty), None);
+        if scope_from_git(dir.path()).is_none() {
+            assert_eq!(derived.source, ScopeSource::HardcodedGlobal);
+            assert_eq!(derived.scope, "global");
+        }
+    }
+}
+
+#[test]
 fn git_origin_drives_scope_when_present() {
     let dir = tempfile::tempdir().unwrap();
     git_init(dir.path());
