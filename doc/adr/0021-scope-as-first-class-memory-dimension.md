@@ -106,7 +106,9 @@ session/<session_id>                    transient, never auto-promoted to global
 ```
 
 `<slug>` is a stable identifier: `git config remote.origin.url` hashed to
-12 hex chars when origin exists, else the basename of the worktree root.
+12 hex chars when origin exists, else the absolute worktree root hashed to the
+same 12-hex-character form. Moving an origin-less worktree therefore changes
+its derived scope unless the operator configures an explicit default.
 Branch and session paths exist for completeness; this ADR does not require
 clients to use them, but specifies the shape so later ADRs do not collide.
 
@@ -167,7 +169,7 @@ ADR-0010.
 - (+) Cross-repo pollution becomes opt-in instead of the default: a
   scope-aware client can ask "claims relevant to *this* project" and
   receive exactly that, plus inherited globals.
-- (+) Schema cost is one column, three indexes, one migration. ADR-0019's
+- (+) Schema cost is one column, four indexes, one migration. ADR-0019's
   replay invariant (JSONL is the source of truth) absorbs the change because
   every JSONL writer can default to `scope='global'` until clients adopt.
 - (+) The decision is reversible: dropping the column reverts behavior. The
