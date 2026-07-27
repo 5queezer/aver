@@ -204,7 +204,6 @@ pub(crate) fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), E
 /// Acquire the advisory `<memory_dir>/.lock` file (ADR-0019 §2/§5).
 /// The OS lock is held by the retained file handle for the guard's lifetime.
 pub struct AverLock {
-    path: PathBuf,
     file: Option<File>,
 }
 
@@ -231,19 +230,15 @@ impl AverLock {
         file.set_len(0)?;
         writeln!(file, "{}", std::process::id())?;
         file.sync_data()?;
-        Ok(Self {
-            path,
-            file: Some(file),
-        })
+        Ok(Self { file: Some(file) })
     }
 }
 
 impl Drop for AverLock {
     fn drop(&mut self) {
-        // Close the locked handle before removing the marker path. Advisory
-        // locks are released automatically when the handle closes.
+        // Closing the handle releases the advisory lock. Leave the marker path
+        // in place so every contender locks the same inode.
         drop(self.file.take());
-        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -415,25 +410,32 @@ pub(crate) fn gzip_file(src: &Path, dst: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// Return whether an active JSONL series currently exceeds a rotation limit.
+fn log_rotation_needed(log_path: &Path) -> Result<bool, Error> {
+    let metadata = match std::fs::metadata(log_path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(Error::Io(err)),
+    };
+    if metadata.len() >= LOG_ROTATE_MAX_BYTES {
+        return Ok(true);
+    }
+    Ok(count_lines(log_path)? >= LOG_ROTATE_MAX_LINES)
+}
+
 /// Rotate `{series}.jsonl` if it exceeds either size or line threshold.
 /// Runs only at session boundaries (called from `Store::open`). ADR-0019 §5.
 pub(crate) fn maybe_rotate_log(memory_dir: &Path, series: &str) -> Result<(), Error> {
     let log_path = memory_dir.join(format!("{series}.jsonl"));
-    let metadata = match std::fs::metadata(&log_path) {
-        Ok(m) => m,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(Error::Io(err)),
-    };
-    let size_over = metadata.len() >= LOG_ROTATE_MAX_BYTES;
-    let line_over = if size_over {
-        true
-    } else {
-        count_lines(&log_path)? >= LOG_ROTATE_MAX_LINES
-    };
-    if !(size_over || line_over) {
+    if !log_rotation_needed(&log_path)? {
         return Ok(());
     }
     let _lock = AverLock::acquire(memory_dir)?;
+    // Another process may have rotated after the optimistic check but before
+    // this process acquired the lock. Recheck before renaming the active log.
+    if !log_rotation_needed(&log_path)? {
+        return Ok(());
+    }
     let n = next_rotation_index(memory_dir, series)?;
     let intermediate = memory_dir.join(format!("{series}.{n}.jsonl"));
     std::fs::rename(&log_path, &intermediate)?;

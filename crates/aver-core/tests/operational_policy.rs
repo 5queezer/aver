@@ -533,6 +533,17 @@ fn unlocked_stale_lock_file_does_not_block_acquisition() {
 }
 
 #[test]
+fn advisory_lock_keeps_a_stable_inode_after_release() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let _guard = aver_core::AverLock::acquire(dir.path()).unwrap();
+    }
+
+    assert!(dir.path().join(".lock").exists());
+    let _next = aver_core::AverLock::acquire(dir.path()).unwrap();
+}
+
+#[test]
 fn replay_refuses_while_advisory_lock_is_held() {
     let dir = tempfile::tempdir().unwrap();
     let _guard = aver_core::AverLock::acquire(dir.path()).unwrap();
