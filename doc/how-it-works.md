@@ -83,10 +83,11 @@ quarantines invalid lines instead — each is reported with path, line number,
 and error — and continues with the next line, so one poisoned record cannot
 block rebuilding every other projection.
 
-**Derived projections are not logged.** Vector chunks (embedding vectors and
-the `vec0` ANN index) are re-derivable from claim text with the same
-embedding model, so they are deliberately absent from the log: replay
-rebuilds claims and leaves `vector_chunks` empty rather than bloating the
-append-only log with large derived arrays. Rebuild them after a restore with
-`Store::add_embedded_vector_chunk_for_claim` /
-`Store::backfill_vector_embeddings`.
+**Derived projections are not logged.** Vector chunks (chunk text plus
+embedding vectors and the `vec0` ANN index) are deliberately absent from the
+log, so replay rebuilds claims and leaves `vector_chunks` empty. A restore must
+first regenerate chunk rows from claim text (for example with
+`Store::add_embedded_vector_chunk_for_claim`, which creates a chunk and its
+embedding). `Store::backfill_vector_embeddings` is not a standalone restore
+path: it only fills embeddings for chunk rows that already exist but have no
+embedding.

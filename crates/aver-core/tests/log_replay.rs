@@ -8,8 +8,8 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use aver_core::{
-    AgentKind, ClaimStatus, ObservationRelevance, Provenance, ReplayMode, Store, replay,
-    replay_with_mode, vector::MockEmbeddingClient,
+    AgentKind, ClaimStatus, HyperedgeInput, HyperedgeParticipantInput, ObservationRelevance,
+    Provenance, ReplayMode, Store, replay, replay_with_mode, vector::MockEmbeddingClient,
 };
 use rusqlite::Connection;
 
@@ -477,10 +477,11 @@ fn lenient_replay_quarantines_bad_lines() {
     )
     .unwrap();
     writeln!(log, r#"{{"kind":"no_such_kind","ts":1}}"#).unwrap();
-    // Confidence outside the 0..=1 CHECK range: projection INSERT fails.
+    // Confidence outside the 0..=1 CHECK range: projection INSERT fails
+    // after entity and ontology helpers have run.
     writeln!(
         log,
-        r#"{{"kind":"add_claim","ts":1,"claim_id":2,"subject":"bad","predicate":"depends_on","object":"o","source":"s","agent_id":"local","agent_kind":"HUMAN","confidence":5.0}}"#
+        r#"{{"kind":"add_claim","ts":1,"claim_id":2,"subject":"bad","predicate":"quarantined_predicate","object":"o","source":"s","agent_id":"local","agent_kind":"HUMAN","confidence":5.0}}"#
     )
     .unwrap();
     // Lifecycle record referencing a claim that does not exist.
@@ -514,6 +515,23 @@ fn lenient_replay_quarantines_bad_lines() {
     let store = Store::open(dir.path()).unwrap();
     assert_eq!(store.get_claim(1).unwrap().subject, "good-one");
     assert_eq!(store.get_claim(3).unwrap().subject, "good-two");
+    let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let entity_debris: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM entities WHERE name = 'bad'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(entity_debris, 0, "quarantined line left entity debris");
+    let ontology_debris: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM predicate_types WHERE name = 'quarantined_predicate'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(ontology_debris, 0, "quarantined line left ontology debris");
 }
 
 #[test]
@@ -581,4 +599,161 @@ fn old_log_lines_without_scope_and_provenance_still_replay() {
     let claim = store.get_claim(1).unwrap();
     assert_eq!(claim.scope, "global");
     assert_eq!(claim.provenance, Provenance::UserAsserted);
+}
+
+#[test]
+fn failed_claim_append_does_not_extend_ontology() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    std::fs::create_dir(dir.path().join("log.jsonl")).unwrap();
+    store
+        .add_claim("alpha", "new_claim_predicate", "beta", "src")
+        .expect_err("a directory at log.jsonl must make append fail");
+
+    let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let predicate_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM predicate_types WHERE name = 'new_claim_predicate'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(predicate_count, 0, "failed append mutated predicate_types");
+    let audit_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM ontology_extension_log WHERE predicate = 'new_claim_predicate'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(audit_count, 0, "failed append emitted ontology audit state");
+}
+
+#[test]
+fn failed_hyperedge_append_does_not_extend_ontology() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    std::fs::create_dir(dir.path().join("log.jsonl")).unwrap();
+    store
+        .add_hyperedge(HyperedgeInput {
+            predicate: "new_hyperedge_predicate".to_string(),
+            provenance: Provenance::UserAsserted,
+            confidence: 0.9,
+            source_refs: vec!["src".to_string()],
+            participants: vec![HyperedgeParticipantInput {
+                role: "member".to_string(),
+                entity: "alpha".to_string(),
+            }],
+        })
+        .expect_err("a directory at log.jsonl must make append fail");
+
+    let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let predicate_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM predicate_types WHERE name = 'new_hyperedge_predicate'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(predicate_count, 0, "failed append mutated predicate_types");
+}
+
+#[test]
+fn rejecting_candidate_twice_with_same_reason_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event_id = store.record_event("s1", "note", "payload", "src").unwrap();
+    let candidate_id = store
+        .propose_candidate_claim(event_id, "alpha", "depends_on", "beta")
+        .unwrap();
+    store
+        .reject_candidate_claim(candidate_id, "duplicate")
+        .unwrap();
+    store
+        .reject_candidate_claim(candidate_id, "duplicate")
+        .unwrap();
+
+    let log = std::fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
+    let rejection_count = log
+        .lines()
+        .filter(|line| line.contains("\"kind\":\"reject_candidate_claim\""))
+        .count();
+    assert_eq!(
+        rejection_count, 1,
+        "identical retry appended another record"
+    );
+}
+
+#[test]
+fn rejecting_candidate_twice_with_different_reason_is_rejected_without_logging() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event_id = store.record_event("s1", "note", "payload", "src").unwrap();
+    let candidate_id = store
+        .propose_candidate_claim(event_id, "alpha", "depends_on", "beta")
+        .unwrap();
+    store
+        .reject_candidate_claim(candidate_id, "duplicate")
+        .unwrap();
+    store
+        .reject_candidate_claim(candidate_id, "unsupported")
+        .expect_err("a conflicting rejection must fail");
+
+    let candidate = store.get_candidate_claim(candidate_id).unwrap();
+    assert_eq!(candidate.rejection_reason.as_deref(), Some("duplicate"));
+    let log = std::fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
+    assert!(
+        !log.contains("unsupported"),
+        "conflicting retry poisoned log"
+    );
+}
+
+#[test]
+fn strict_replay_rejects_conflicting_candidate_terminal_transitions() {
+    let cases = [
+        (
+            "reject-then-promote",
+            r#"{"kind":"reject_candidate_claim","ts":3,"candidate_id":1,"reason":"no"}
+{"kind":"promote_candidate_claim","ts":4,"candidate_id":1,"claim_id":1}"#,
+        ),
+        (
+            "promote-then-reject",
+            r#"{"kind":"promote_candidate_claim","ts":3,"candidate_id":1,"claim_id":1}
+{"kind":"reject_candidate_claim","ts":4,"candidate_id":1,"reason":"no"}"#,
+        ),
+    ];
+    for (name, transitions) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("log.jsonl"),
+            r#"{"kind":"add_claim","ts":1,"claim_id":1,"subject":"alpha","predicate":"depends_on","object":"beta","source":"s","agent_id":"local","agent_kind":"HUMAN","confidence":0.95}
+"#,
+        )
+        .unwrap();
+        let events = format!(
+            r#"{{"kind":"record_event","ts":1,"event_id":1,"session_id":"s","event_kind":"note","payload":"p","source":"s","agent_id":"local","agent_kind":"HUMAN"}}
+{{"kind":"propose_candidate_claim","ts":2,"candidate_id":1,"event_id":1,"subject":"alpha","predicate":"depends_on","object":"beta"}}
+{transitions}
+"#
+        );
+        std::fs::write(dir.path().join("events.jsonl"), events).unwrap();
+        assert!(
+            replay(dir.path(), false).is_err(),
+            "{name} must fail strict replay"
+        );
+    }
+}
+
+#[test]
+fn strict_replay_rejects_lifecycle_records_with_missing_claims() {
+    let records = [
+        r#"{"kind":"supersede_claims","ts":2,"claim_ids":[999]}"#,
+        r#"{"kind":"decay_confidence","ts":2,"changes":[{"claim_id":999,"confidence":0.4}]}"#,
+        r#"{"kind":"merge_source_refs","ts":2,"claim_id":999,"source_refs":["s"],"promote":false}"#,
+    ];
+    for record in records {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("log.jsonl"), format!("{record}\n")).unwrap();
+        replay(dir.path(), false).expect_err("missing lifecycle reference must fail strict replay");
+    }
 }

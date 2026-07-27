@@ -674,20 +674,14 @@ impl Store {
     /// ADR-0018: resolve a predicate against `predicate_types.name` and the
     /// `predicate_alias` table.
     ///
-    /// Returns `Ok(true)` if the predicate is canonical or aliased; on miss
-    /// the policy diverges by provenance:
-    ///   * `USER_ASSERTED` — auto-extend `predicate_types` with parent
-    ///     `relates_to`, log to `ontology_extension_log`, return `Ok(true)`.
-    ///   * everything else — return `Err(Error::UnknownPredicate)`.
-    fn ontology_check(
-        &self,
-        predicate: &str,
-        provenance: Provenance,
-        agent_id: &str,
-        now: i64,
-    ) -> Result<(), Error> {
+    /// Returns `Ok(false)` if the predicate is canonical or aliased. On a
+    /// `USER_ASSERTED` miss, returns `Ok(true)` so the caller can append first
+    /// and then extend `predicate_types` with parent `relates_to` plus an
+    /// `ontology_extension_log` record. Every other miss returns
+    /// `Err(Error::UnknownPredicate)`.
+    fn validate_ontology(&self, predicate: &str, provenance: Provenance) -> Result<bool, Error> {
         if self.predicate_type_id(predicate)?.is_some() {
-            return Ok(());
+            return Ok(false);
         }
         let alias_hit: Option<i64> = self
             .conn
@@ -698,36 +692,40 @@ impl Store {
             )
             .optional()?;
         if alias_hit.is_some() {
-            return Ok(());
+            return Ok(false);
         }
         match provenance {
-            Provenance::UserAsserted => {
-                let parent_id = self
-                    .predicate_type_id("relates_to")?
-                    .expect("ontology bootstrap should seed relates_to");
-                self.conn.execute(
-                    "INSERT INTO predicate_types (name, parent_id, created_via, created_at)
-                     VALUES (?1, ?2, 'user_assertion', ?3)",
-                    params![predicate, parent_id, now],
-                )?;
-                // Closure rebuild covers the new id incrementally; the
-                // rebuild is cheap (small ontology) and matches the
-                // pattern in `seed_ontology`.
-                seed::rebuild_closure(&self.conn, "predicate_types", "predicate_closure")?;
-                self.conn.execute(
-                    "INSERT INTO ontology_extension_log
-                       (predicate, parent, agent_id, created_at)
-                     VALUES (?1, 'relates_to', ?2, ?3)",
-                    params![predicate, agent_id, now],
-                )?;
-                Ok(())
-            }
+            Provenance::UserAsserted => Ok(true),
             Provenance::Extracted | Provenance::Inferred | Provenance::Ambiguous => {
                 Err(Error::UnknownPredicate {
                     name: predicate.to_string(),
                 })
             }
         }
+    }
+
+    fn apply_ontology_extension(
+        &self,
+        predicate: &str,
+        agent_id: &str,
+        now: i64,
+    ) -> Result<(), Error> {
+        let parent_id = self
+            .predicate_type_id("relates_to")?
+            .expect("ontology bootstrap should seed relates_to");
+        self.conn.execute(
+            "INSERT INTO predicate_types (name, parent_id, created_via, created_at)
+             VALUES (?1, ?2, 'user_assertion', ?3)",
+            params![predicate, parent_id, now],
+        )?;
+        seed::rebuild_closure(&self.conn, "predicate_types", "predicate_closure")?;
+        self.conn.execute(
+            "INSERT INTO ontology_extension_log
+               (predicate, parent, agent_id, created_at)
+             VALUES (?1, 'relates_to', ?2, ?3)",
+            params![predicate, agent_id, now],
+        )?;
+        Ok(())
     }
 
     fn predicate_vocabulary(&self) -> Result<PredicateVocabulary, Error> {
@@ -997,18 +995,13 @@ impl Store {
             self.privacy_filter_path_recording(possible_path)?;
         }
 
-        let now = time::OffsetDateTime::now_utc().unix_timestamp();
-
-        // ADR-0018: ontology check. USER_ASSERTED writes auto-extend the
-        // ontology with audit trail; EXTRACTED/INFERRED/AMBIGUOUS writes
-        // reject unknown predicates. Runs after the privacy filter so a
-        // secret-bearing predicate is quarantined first (see ADR-0018
-        // §"Telemetry").
-        self.ontology_check(write.predicate, write.provenance, write.agent_id, now)
+        self.validate_ontology(write.predicate, write.provenance)
+            .map(|_| ())
     }
 
     fn insert_claim(&self, write: ClaimWrite<'_>) -> Result<i64, Error> {
         self.validate_claim_write(&write)?;
+        let extend_ontology = self.validate_ontology(write.predicate, write.provenance)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
         // Pre-allocate the claim id inside a write transaction. The
@@ -1040,6 +1033,10 @@ impl Store {
             };
             append_jsonl(&self.log_path, &entry)?;
             append_jsonl(&self.agent_log_path(write.agent_id)?, &entry)?;
+
+            if extend_ontology {
+                self.apply_ontology_extension(write.predicate, write.agent_id, now)?;
+            }
 
             self.ensure_entity(write.subject, now)?;
             self.ensure_entity(write.object, now)?;
@@ -1130,7 +1127,7 @@ impl Store {
         }
 
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        self.ontology_check(&input.predicate, input.provenance, "local", now)?;
+        let extend_ontology = self.validate_ontology(&input.predicate, input.provenance)?;
 
         // BEGIN IMMEDIATE covers id allocation + log append + projection so
         // concurrent processes cannot allocate duplicate hyperedge ids. The
@@ -1154,6 +1151,10 @@ impl Store {
                 participants: &input.participants,
             };
             append_jsonl(&self.log_path, &entry)?;
+
+            if extend_ontology {
+                self.apply_ontology_extension(&input.predicate, "local", now)?;
+            }
 
             let source_refs_json = serde_json::to_string(&input.source_refs)?;
             self.conn.execute(
@@ -2240,12 +2241,7 @@ impl Store {
         // record whose projection INSERT later fails at the ontology
         // trigger. (The candidate content was privacy-filtered at proposal
         // time, so there is nothing new to filter here.)
-        self.ontology_check(
-            &candidate.predicate,
-            candidate.provenance,
-            &event.agent_id,
-            now,
-        )?;
+        let extend_ontology = self.validate_ontology(&candidate.predicate, candidate.provenance)?;
 
         // Id allocation, log appends, and projection updates in one write
         // transaction (same race class as insert_claim). Log-first ordering
@@ -2284,6 +2280,10 @@ impl Store {
                 claim_id,
             };
             append_jsonl(&self.event_log_path, &promote_entry)?;
+
+            if extend_ontology {
+                self.apply_ontology_extension(&candidate.predicate, &event.agent_id, now)?;
+            }
 
             self.ensure_entity(&candidate.subject, now)?;
             self.ensure_entity(&candidate.object, now)?;
@@ -2347,6 +2347,35 @@ impl Store {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<(), Error> {
+            // Re-read under the write lock so racing callers cannot both
+            // observe PENDING and append conflicting terminal transitions.
+            let current: Option<(String, Option<String>)> = self
+                .conn
+                .query_row(
+                    "SELECT status, rejection_reason FROM candidate_claims WHERE id = ?1",
+                    [candidate_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let Some((status, rejection_reason)) = current else {
+                return Err(Error::MissingCandidate { candidate_id });
+            };
+            if status == "REJECTED" {
+                if rejection_reason.as_deref() == Some(reason) {
+                    return Ok(());
+                }
+                return Err(Error::InvalidCandidateStatus {
+                    candidate_id,
+                    status,
+                });
+            }
+            if status != "PENDING" {
+                return Err(Error::InvalidCandidateStatus {
+                    candidate_id,
+                    status,
+                });
+            }
+
             // Candidate lifecycle records live in the episodic log so replay
             // applies them in the same phase as the candidate proposal.
             let entry = RejectCandidateLogEntry {
@@ -5036,6 +5065,8 @@ pub fn replay_with_mode(
                 if line.trim().is_empty() {
                     continue;
                 }
+                conn.execute_batch("SAVEPOINT replay_line")?;
+                let report_before = report.clone();
                 let result = apply_log_line(
                     &conn,
                     &line,
@@ -5043,14 +5074,19 @@ pub fn replay_with_mode(
                     lineno + 1,
                     &mut report,
                 );
-                if let Err(err) = result {
-                    match mode {
-                        ReplayMode::Strict => return Err(err),
-                        ReplayMode::Lenient => report.quarantined.push(ReplayQuarantine {
-                            path: input.to_string_lossy().into_owned(),
-                            line: lineno + 1,
-                            error: err.to_string(),
-                        }),
+                match result {
+                    Ok(()) => conn.execute_batch("RELEASE replay_line")?,
+                    Err(err) => {
+                        conn.execute_batch("ROLLBACK TO replay_line; RELEASE replay_line")?;
+                        report = report_before;
+                        match mode {
+                            ReplayMode::Strict => return Err(err),
+                            ReplayMode::Lenient => report.quarantined.push(ReplayQuarantine {
+                                path: input.to_string_lossy().into_owned(),
+                                line: lineno + 1,
+                                error: err.to_string(),
+                            }),
+                        }
                     }
                 }
             }
@@ -5465,9 +5501,7 @@ fn apply_add_hyperedge(
 
     ontology_check_for_replay(conn, predicate, provenance, "local", ts)?;
     let source_refs_json = serde_json::to_string(&source_refs)?;
-    conn.execute_batch("BEGIN IMMEDIATE")?;
-    let projection = (|| -> Result<(), Error> {
-        conn.execute(
+    conn.execute(
             "INSERT INTO hyperedges (id, predicate, provenance, confidence, source_refs, status, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, 'ACTIVE', ?6, ?6)",
             params![
@@ -5479,21 +5513,14 @@ fn apply_add_hyperedge(
                 ts,
             ],
         )?;
-        for participant in &participants {
-            ensure_entity_on(conn, &participant.entity, ts)?;
-            conn.execute(
-                "INSERT INTO hyperedge_participants (hyperedge_id, role, entity)
+    for participant in &participants {
+        ensure_entity_on(conn, &participant.entity, ts)?;
+        conn.execute(
+            "INSERT INTO hyperedge_participants (hyperedge_id, role, entity)
                  VALUES (?1, ?2, ?3)",
-                params![hyperedge_id, participant.role, participant.entity],
-            )?;
-        }
-        Ok(())
-    })();
-    if let Err(err) = projection {
-        let _ = conn.execute_batch("ROLLBACK");
-        return Err(err);
+            params![hyperedge_id, participant.role, participant.entity],
+        )?;
     }
-    conn.execute_batch("COMMIT")?;
     report.hyperedges += 1;
     Ok(())
 }
@@ -6021,12 +6048,37 @@ fn apply_promote_candidate_claim(
             ),
         });
     }
-    conn.execute(
+    if status != "PENDING" {
+        return Err(Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("cannot promote candidate {candidate_id} from status {status}"),
+        });
+    }
+    let claim_exists = conn
+        .query_row("SELECT 1 FROM claims WHERE id = ?1", [claim_id], |_| Ok(()))
+        .optional()?
+        .is_some();
+    if !claim_exists {
+        return Err(Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("promotion references missing claim {claim_id}"),
+        });
+    }
+    let rows_changed = conn.execute(
         "UPDATE candidate_claims
             SET status = 'PROMOTED', promoted_claim_id = ?1
-          WHERE id = ?2",
+          WHERE id = ?2 AND status = 'PENDING'",
         params![claim_id, candidate_id],
     )?;
+    if rows_changed != 1 {
+        return Err(Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("promotion changed {rows_changed} rows for candidate {candidate_id}"),
+        });
+    }
     report.lifecycle += 1;
     Ok(())
 }
@@ -6066,12 +6118,26 @@ fn apply_reject_candidate_claim(
             ),
         });
     }
-    conn.execute(
+    if status != "PENDING" {
+        return Err(Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("cannot reject candidate {candidate_id} from status {status}"),
+        });
+    }
+    let rows_changed = conn.execute(
         "UPDATE candidate_claims
             SET status = 'REJECTED', rejection_reason = ?1
-          WHERE id = ?2",
+          WHERE id = ?2 AND status = 'PENDING'",
         params![reason, candidate_id],
     )?;
+    if rows_changed != 1 {
+        return Err(Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("rejection changed {rows_changed} rows for candidate {candidate_id}"),
+        });
+    }
     report.lifecycle += 1;
     Ok(())
 }
@@ -6089,10 +6155,34 @@ fn apply_supersede_claims(
     let _ts = replay_i64(value, "ts", path, lineno)?;
     let claim_ids = replay_i64_list(value, "claim_ids", path, lineno)?;
     for claim_id in &claim_ids {
-        conn.execute(
+        let status: Option<String> = conn
+            .query_row(
+                "SELECT status FROM claims WHERE id = ?1",
+                [claim_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(status) = status else {
+            return Err(Error::ReplayMalformed {
+                path: path.to_string(),
+                line: lineno,
+                detail: format!("supersede_claims references missing claim {claim_id}"),
+            });
+        };
+        if status == "SUPERSEDED" {
+            continue;
+        }
+        let rows_changed = conn.execute(
             "UPDATE claims SET status = 'SUPERSEDED' WHERE id = ?1",
             [claim_id],
         )?;
+        if rows_changed != 1 {
+            return Err(Error::ReplayMalformed {
+                path: path.to_string(),
+                line: lineno,
+                detail: format!("supersede changed {rows_changed} rows for claim {claim_id}"),
+            });
+        }
     }
     report.lifecycle += 1;
     Ok(())
@@ -6117,10 +6207,20 @@ fn apply_decay_confidence(
         detail: format!("'changes' is not a confidence-change array: {err}"),
     })?;
     for change in &changes {
-        conn.execute(
+        let rows_changed = conn.execute(
             "UPDATE claims SET confidence = ?1 WHERE id = ?2",
             params![change.confidence, change.claim_id],
         )?;
+        if rows_changed != 1 {
+            return Err(Error::ReplayMalformed {
+                path: path.to_string(),
+                line: lineno,
+                detail: format!(
+                    "decay_confidence references missing claim {}",
+                    change.claim_id
+                ),
+            });
+        }
     }
     report.lifecycle += 1;
     Ok(())
@@ -6144,18 +6244,25 @@ fn apply_merge_source_refs(
             detail: "'promote' is not a boolean".to_string(),
         })?;
     let merged = serde_json::to_string(&source_refs)?;
-    if promote {
+    let rows_changed = if promote {
         conn.execute(
             "UPDATE claims
                 SET source_refs = ?1, provenance = 'EXTRACTED', confidence = MAX(confidence, 0.75)
               WHERE id = ?2",
             params![merged, claim_id],
-        )?;
+        )?
     } else {
         conn.execute(
             "UPDATE claims SET source_refs = ?1 WHERE id = ?2",
             params![merged, claim_id],
-        )?;
+        )?
+    };
+    if rows_changed != 1 {
+        return Err(Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("merge_source_refs references missing claim {claim_id}"),
+        });
     }
     report.lifecycle += 1;
     Ok(())
