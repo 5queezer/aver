@@ -1,4 +1,19 @@
-use aver_core::{Store, vector::MockEmbeddingClient};
+use aver_core::{
+    Store,
+    vector::{EmbeddingClient, EmbeddingError, MockEmbeddingClient},
+};
+
+struct FailsFirstEmbeddingClient(std::sync::atomic::AtomicUsize);
+
+impl EmbeddingClient for FailsFirstEmbeddingClient {
+    fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            Err(EmbeddingError::Http("transient".to_string()))
+        } else {
+            Ok(vec![1.0, 0.0, 0.0])
+        }
+    }
+}
 
 fn open_store() -> (Store, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
@@ -42,6 +57,44 @@ fn backfill_fills_embeddings_with_mock_client() {
     let (indexed, total) = store.vector_chunk_embedding_status().unwrap();
     assert_eq!(indexed, 1);
     assert_eq!(total, 1);
+}
+
+#[test]
+fn backfill_processes_at_most_the_requested_chunk_limit() {
+    let (store, _dir) = open_store();
+    let claim_id = store.add_claim("Aver", "uses", "SQLite", "test").unwrap();
+    for text in ["chunk one", "chunk two", "chunk three"] {
+        store
+            .add_vector_chunk(claim_id, text, "nomic-embed-text")
+            .unwrap();
+    }
+    let client = MockEmbeddingClient::new(vec![1.0, 0.0, 0.0]);
+
+    let filled = store
+        .backfill_vector_embeddings_with_limit(&client, 2)
+        .unwrap();
+
+    assert_eq!(filled, 2);
+    assert_eq!(store.vector_chunk_embedding_status().unwrap(), (2, 3));
+}
+
+#[test]
+fn backfill_keeps_progress_when_one_embedding_fails() {
+    let (store, _dir) = open_store();
+    let claim_id = store.add_claim("Aver", "uses", "SQLite", "test").unwrap();
+    for text in ["fails first", "succeeds second"] {
+        store
+            .add_vector_chunk(claim_id, text, "nomic-embed-text")
+            .unwrap();
+    }
+    let client = FailsFirstEmbeddingClient(std::sync::atomic::AtomicUsize::new(0));
+
+    let filled = store
+        .backfill_vector_embeddings_with_limit(&client, 2)
+        .unwrap();
+
+    assert_eq!(filled, 1);
+    assert_eq!(store.vector_chunk_embedding_status().unwrap(), (1, 2));
 }
 
 #[test]

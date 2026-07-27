@@ -589,3 +589,28 @@ fn recall_text_with_embedding_propagates_recall_errors() {
         "unexpected error: {err:?}"
     );
 }
+
+#[test]
+fn recall_text_with_embedding_propagates_claim_hydration_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let client = MockEmbeddingClient::new(vec![1.0, 0.0, 0.0]);
+    let claim_id = store.add_claim("Aver", "uses", "Rust", "test").unwrap();
+    store
+        .add_embedded_vector_chunk_for_claim(claim_id, "test-model", &client)
+        .unwrap();
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.execute_batch("DROP TRIGGER claims_status_enum_update")
+        .unwrap();
+    conn.execute(
+        "UPDATE claims SET status = 'BROKEN' WHERE id = ?1",
+        [claim_id],
+    )
+    .unwrap();
+
+    let err = store
+        .recall_text_with_embedding("unrelated query", &client)
+        .expect_err("claim hydration errors must not be silently filtered out");
+
+    assert!(matches!(err, Error::EnumParse { .. }));
+}

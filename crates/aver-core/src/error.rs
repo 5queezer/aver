@@ -81,6 +81,8 @@ pub enum Error {
     UnknownPredicate { name: String },
     #[error("missing claim: claim {claim_id} does not exist")]
     MissingClaim { claim_id: i64 },
+    #[error("missing hyperedge: hyperedge {hyperedge_id} does not exist")]
+    MissingHyperedge { hyperedge_id: i64 },
     #[error("missing vector chunk: vector chunk {chunk_id} does not exist")]
     MissingVectorChunk { chunk_id: i64 },
     #[error(

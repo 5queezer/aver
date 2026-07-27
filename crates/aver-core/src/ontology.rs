@@ -457,7 +457,7 @@ impl Store {
     ) -> Result<(), Error> {
         let parent_id = self
             .predicate_type_id("relates_to")?
-            .expect("ontology bootstrap should seed relates_to");
+            .ok_or(Error::MissingEntityType { name: "relates_to" })?;
         self.conn.execute(
             "INSERT INTO predicate_types (name, parent_id, created_via, created_at)
              VALUES (?1, ?2, 'user_assertion', ?3)",

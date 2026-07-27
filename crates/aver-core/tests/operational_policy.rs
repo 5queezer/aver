@@ -119,6 +119,26 @@ fn vacuum_runs_against_test_db() {
 }
 
 #[test]
+fn vacuum_waits_for_concurrent_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    store.add_claim("alpha", "uses", "beta", "test").unwrap();
+    store.close().unwrap();
+
+    let writer = Connection::open(dir.path().join("db.sqlite")).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let handle = std::thread::spawn(move || vacuum(&memory_dir, None, false));
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    writer.execute_batch("COMMIT").unwrap();
+
+    handle
+        .join()
+        .unwrap()
+        .expect("vacuum should wait for the active writer");
+}
+
+#[test]
 fn vacuum_into_writes_a_copy() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
@@ -183,7 +203,7 @@ fn replay_rebuilds_hyperedges_from_append_only_log() {
 }
 
 #[test]
-fn replay_rolls_back_hyperedge_projection_when_participant_insert_fails() {
+fn failed_hyperedge_replay_does_not_promote_partial_projection() {
     let dir = tempfile::tempdir().unwrap();
     let log_line = serde_json::json!({
         "kind": "add_hyperedge",
@@ -203,17 +223,14 @@ fn replay_rolls_back_hyperedge_projection_when_participant_insert_fails() {
     let err = replay(dir.path(), false).expect_err("invalid participant should fail replay");
     assert!(err.to_string().contains("CHECK constraint failed"));
 
-    let conn = Connection::open(dir.path().join("db.sqlite.partial")).unwrap();
-    let hyperedge_rows: i64 = conn
-        .query_row("SELECT COUNT(*) FROM hyperedges", [], |row| row.get(0))
-        .unwrap();
-    let participant_rows: i64 = conn
-        .query_row("SELECT COUNT(*) FROM hyperedge_participants", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    assert_eq!(hyperedge_rows, 0);
-    assert_eq!(participant_rows, 0);
+    assert!(!dir.path().join("db.sqlite").exists());
+    for suffix in ["", "-wal", "-shm"] {
+        assert!(
+            !dir.path()
+                .join(format!("db.sqlite.partial{suffix}"))
+                .exists()
+        );
+    }
 }
 
 #[test]
@@ -503,20 +520,16 @@ fn replay_walks_rotated_event_and_observation_logs() {
 }
 
 #[test]
-fn lock_is_not_stolen_from_live_foreign_owned_process() {
+fn unlocked_stale_lock_file_does_not_block_acquisition() {
     let dir = tempfile::tempdir().unwrap();
-    // PID 1 (init) always exists, but for a non-root test runner it is owned
-    // by another UID: kill(pid, 0) fails with EPERM, which must count as
-    // "alive" — never as a stale lock to steal.
-    std::fs::write(dir.path().join(".lock"), "1\n").unwrap();
-    let err = match aver_core::AverLock::acquire(dir.path()) {
-        Ok(_guard) => panic!("PID 1 is alive; the lock must not be treated as stale"),
-        Err(err) => err,
-    };
-    assert!(
-        matches!(err, aver_core::Error::LockHeld { .. }),
-        "unexpected error: {err:?}"
-    );
+    std::fs::write(
+        dir.path().join(".lock"),
+        format!("{}\n", std::process::id()),
+    )
+    .unwrap();
+
+    let _guard = aver_core::AverLock::acquire(dir.path())
+        .expect("only an active OS lock, not stale PID text, should block");
 }
 
 #[test]
@@ -529,4 +542,27 @@ fn replay_refuses_while_advisory_lock_is_held() {
         matches!(err, aver_core::Error::LockHeld { .. }),
         "unexpected error: {err:?}"
     );
+}
+
+#[test]
+fn failed_replay_removes_partial_database_artifacts() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("log.jsonl"), "not-json\n").unwrap();
+    for suffix in ["", "-wal", "-shm"] {
+        std::fs::write(
+            dir.path().join(format!("db.sqlite.partial{suffix}")),
+            b"stale",
+        )
+        .unwrap();
+    }
+
+    replay(dir.path(), false).expect_err("invalid log should fail replay");
+
+    for suffix in ["", "-wal", "-shm"] {
+        assert!(
+            !dir.path()
+                .join(format!("db.sqlite.partial{suffix}"))
+                .exists()
+        );
+    }
 }

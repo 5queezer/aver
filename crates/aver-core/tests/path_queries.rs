@@ -57,6 +57,32 @@ fn shortest_path_prefers_higher_confidence_when_hop_count_ties() {
 }
 
 #[test]
+fn visited_depth_pruning_keeps_higher_confidence_equal_depth_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    store
+        .add_claim_with_confidence("A", "depends_on", "Low", "s-low", 0.5)
+        .unwrap();
+    store
+        .add_claim_with_confidence("Low", "depends_on", "Merge", "s-low", 0.5)
+        .unwrap();
+    store
+        .add_claim_with_confidence("A", "depends_on", "High", "s-high", 0.9)
+        .unwrap();
+    store
+        .add_claim_with_confidence("High", "depends_on", "Merge", "s-high", 0.9)
+        .unwrap();
+    store
+        .add_claim_with_confidence("Merge", "depends_on", "D", "s-final", 0.8)
+        .unwrap();
+
+    let path = store.graph_path(user_query("A", "D")).unwrap().unwrap();
+
+    assert_eq!(path.entities(), vec!["A", "High", "Merge", "D"]);
+    assert!((path.confidence - 0.648).abs() < 1e-9);
+}
+
+#[test]
 fn multi_hop_path_confidence_decays_multiplicatively() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

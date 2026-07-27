@@ -220,6 +220,8 @@ impl Store {
                 }
             })
             .collect::<Vec<_>>();
+        // Fail the batch before any per-claim log append/commit. insert_claim
+        // deliberately revalidates each write at its own append boundary.
         for write in &writes {
             self.validate_claim_write(write)?;
         }
@@ -514,6 +516,9 @@ impl Store {
         validate_contradiction_reason(reason)?;
         self.privacy_filter_recording(reason)?;
         let new_claim_id = if let Some(claim) = new_claim {
+            // This is an intentional transaction boundary: add_claim commits
+            // and logs independently. A later contradiction failure therefore
+            // leaves the replacement claim durable; retrying may create another.
             Some(self.add_claim(claim.subject, claim.predicate, claim.object, claim.source)?)
         } else {
             None
@@ -692,7 +697,7 @@ impl Store {
 
             let mut changes = Vec::with_capacity(rows.len());
             for (id, confidence, last_seen_at) in rows {
-                let delta = now_ts.saturating_sub(last_seen_at) as f64;
+                let delta = now_ts.saturating_sub(last_seen_at).max(0) as f64;
                 let decayed = confidence * (-delta / tau_seconds).exp();
                 changes.push(ConfidenceChange {
                     claim_id: id,
@@ -952,61 +957,59 @@ impl Store {
         }
 
         let mut where_parts: Vec<String> = Vec::new();
-        let mut bind: Vec<String> = Vec::new();
-        let mut bind_f: Vec<f64> = Vec::new();
+        let mut query_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
-        // Status filter (default ACTIVE; None = any).
+        // Build each clause and its bind together so placeholder order remains
+        // structural as filters evolve.
         if let Some(status) = filters.status {
             where_parts.push("status = ?".to_string());
-            bind.push(status.as_str().to_string());
+            query_params.push(Box::new(status.as_str().to_string()));
         }
-        // Scope filter via the same helper as scope-only recall.
         let (scope_clause, scope_params) = scope_filter_sql(&filters.scope, filters.scope_walk);
         where_parts.push(scope_clause);
-        bind.extend(scope_params);
-        // Agent filters.
+        query_params.extend(
+            scope_params
+                .into_iter()
+                .map(|value| Box::new(value) as Box<dyn rusqlite::ToSql>),
+        );
         if let Some(agent_id) = &filters.agent_id {
             where_parts.push("agent_id = ?".to_string());
-            bind.push(agent_id.clone());
+            query_params.push(Box::new(agent_id.clone()));
         }
         if let Some(agent_kind) = filters.agent_kind {
             where_parts.push("agent_kind = ?".to_string());
-            bind.push(agent_kind.as_str().to_string());
+            query_params.push(Box::new(agent_kind.as_str().to_string()));
         }
-        // Predicate filter, optionally walking ADR-0010's closure.
         if let Some(predicate) = &filters.predicate {
             match filters.predicate_walk {
                 PredicateWalk::Exact => {
                     where_parts.push("predicate = ?".to_string());
-                    bind.push(predicate.clone());
+                    query_params.push(Box::new(predicate.clone()));
                 }
                 PredicateWalk::Descendants => {
                     let allowed = self.expand_predicate_filter(&[predicate.as_str()])?;
                     if allowed.is_empty() {
                         return Ok(Vec::new());
                     }
+                    let mut allowed: Vec<String> = allowed.into_iter().collect();
+                    allowed.sort();
                     let placeholders = std::iter::repeat_n("?", allowed.len())
                         .collect::<Vec<_>>()
                         .join(",");
                     where_parts.push(format!("predicate IN ({placeholders})"));
-                    let mut allowed: Vec<String> = allowed.into_iter().collect();
-                    allowed.sort();
-                    bind.extend(allowed);
+                    query_params.extend(
+                        allowed
+                            .into_iter()
+                            .map(|value| Box::new(value) as Box<dyn rusqlite::ToSql>),
+                    );
                 }
             }
         }
-        // Min confidence (separate from string binds because rusqlite types).
-        let confidence_clause = filters
-            .min_confidence
-            .map(|_| "confidence >= ?".to_string());
-        if let Some(c) = filters.min_confidence {
-            bind_f.push(c);
+        if let Some(confidence) = filters.min_confidence {
+            where_parts.push("confidence >= ?".to_string());
+            query_params.push(Box::new(confidence));
         }
-        let mut where_sql = where_parts.join(" AND ");
-        if let Some(c) = confidence_clause {
-            where_sql.push_str(" AND ");
-            where_sql.push_str(&c);
-        }
+        let where_sql = where_parts.join(" AND ");
 
         let sql = format!(
             "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs,
@@ -1016,17 +1019,8 @@ impl Store {
               ORDER BY id"
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        // Build a mixed-type param list. rusqlite::params_from_iter requires
-        // a uniform type, so we collect into Box<dyn ToSql> values.
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        for s in bind {
-            params.push(Box::new(s));
-        }
-        for f in bind_f {
-            params.push(Box::new(f));
-        }
         let rows = stmt.query_map(
-            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            rusqlite::params_from_iter(query_params.iter().map(|value| value.as_ref())),
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,

@@ -102,7 +102,6 @@ impl Store {
         claim_id: i64,
         embedding_model: &str,
     ) -> Result<i64, Error> {
-        self.ensure_claim_exists(claim_id)?;
         let claim = self.get_claim(claim_id)?;
         self.add_vector_chunk(claim_id, &claim.text(), embedding_model)
     }
@@ -114,7 +113,6 @@ impl Store {
         embedding_model: &str,
         client: &impl vector::EmbeddingClient,
     ) -> Result<i64, Error> {
-        self.ensure_claim_exists(claim_id)?;
         let claim = self.get_claim(claim_id)?;
         let text = claim.text();
         let embedding = client.embed(&text)?;
@@ -184,22 +182,43 @@ impl Store {
         Ok((indexed, total))
     }
 
-    /// Backfill stored embeddings for any vector_chunks that have no embedding yet,
-    /// using the provided EmbeddingClient. Returns how many were backfilled.
+    /// Backfill a bounded batch of stored embeddings. The default batch keeps
+    /// maintenance calls resumable instead of loading the whole backlog.
     pub fn backfill_vector_embeddings(
         &self,
         client: &dyn crate::vector::EmbeddingClient,
     ) -> Result<usize, Error> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, text FROM vector_chunks WHERE embedding_json IS NULL")?;
+        self.backfill_vector_embeddings_with_limit(client, 100)
+    }
+
+    /// Backfill at most `limit` chunks with missing embeddings. Individual
+    /// provider failures are skipped so successful rows remain durable and the
+    /// next invocation can resume from the remaining NULL rows.
+    pub fn backfill_vector_embeddings_with_limit(
+        &self,
+        client: &dyn crate::vector::EmbeddingClient,
+        limit: usize,
+    ) -> Result<usize, Error> {
+        if limit == 0 {
+            return Ok(0);
+        }
+        let sql_limit = limit.min(i64::MAX as usize) as i64;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, text
+               FROM vector_chunks
+              WHERE embedding_json IS NULL
+              ORDER BY id
+              LIMIT ?1",
+        )?;
         let rows: Vec<(i64, String)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .query_map([sql_limit], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<Result<_, _>>()?;
         let mut count = 0;
         let index_present = self.has_table("vector_index");
         for (id, text) in rows {
-            let embedding = client.embed(&text)?;
+            let Ok(embedding) = client.embed(&text) else {
+                continue;
+            };
             let embedding_json = serde_json::to_string(&embedding)?;
             self.conn.execute(
                 "UPDATE vector_chunks SET embedding_json = ?1 WHERE id = ?2",
@@ -262,16 +281,13 @@ impl Store {
                 .or_insert(text_score_base);
         }
 
-        let mut candidates: Vec<(f64, Claim)> = scores
-            .keys()
-            .copied()
-            .filter_map(|claim_id| {
-                self.get_claim(claim_id)
-                    .ok()
-                    .filter(|c| c.status == ClaimStatus::Active)
-                    .map(|c| (scores[&claim_id], c))
-            })
-            .collect();
+        let mut candidates = Vec::with_capacity(scores.len());
+        for claim_id in scores.keys().copied() {
+            let claim = self.get_claim(claim_id)?;
+            if claim.status == ClaimStatus::Active {
+                candidates.push((scores[&claim_id], claim));
+            }
+        }
         candidates.sort_by(|(a_score, a_claim), (b_score, b_claim)| {
             b_score
                 .total_cmp(a_score)
@@ -415,7 +431,7 @@ impl Store {
         let use_vec_index =
             query_embedding.len() == VECTOR_INDEX_DIM && self.has_table("vector_index");
         if use_vec_index {
-            let fanout = top_k.saturating_mul(4).max(top_k);
+            let fanout = top_k.saturating_mul(4).max(top_k).min(i64::MAX as usize);
             let q_json = serde_json::to_string(&query_embedding)?;
             let mut stmt = self.conn.prepare(
                 "SELECT vc.claim_id, vi.distance

@@ -825,6 +825,10 @@ fn prune_observations_removes_lowest_relevance_projection_only() {
     assert_eq!(remaining[0].id, high);
     assert_eq!(store.get_observation(&low).unwrap().id, low);
     assert_eq!(store.get_event(event).unwrap().payload, "Use observations.");
+    store.close().unwrap();
+
+    let report = aver_core::replay(dir.path(), true).unwrap();
+    assert_eq!(report.lifecycle, 1, "prune marker must count as lifecycle");
 }
 
 #[test]
@@ -1104,6 +1108,101 @@ fn record_observation_detects_id_collision_instead_of_overwriting() {
     // The pre-existing row is untouched, and no new log line was appended.
     let observation = store.get_observation(&id).unwrap();
     assert_eq!(observation.content, "different");
+    let log = std::fs::read_to_string(dir.path().join("observations.jsonl")).unwrap();
+    assert_eq!(log.matches("\"record_observation\"").count(), 1);
+}
+
+#[test]
+fn concurrent_candidate_promotion_returns_one_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event_id = store
+        .record_event("session-race", "message", "payload", "test")
+        .unwrap();
+    let candidate_id = store
+        .propose_candidate_claim(event_id, "Aver", "uses", "SQLite")
+        .unwrap();
+    store.close().unwrap();
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let memory_dir = dir.path().to_path_buf();
+        let barrier = std::sync::Arc::clone(&barrier);
+        let ready_tx = ready_tx.clone();
+        handles.push(std::thread::spawn(move || {
+            let store = Store::open(&memory_dir).unwrap();
+            ready_tx.send(()).unwrap();
+            barrier.wait();
+            store.promote_candidate_claim(candidate_id)
+        }));
+    }
+    ready_rx.recv().unwrap();
+    ready_rx.recv().unwrap();
+
+    let gate = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    gate.execute_batch("BEGIN IMMEDIATE").unwrap();
+    barrier.wait();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    gate.execute_batch("COMMIT").unwrap();
+
+    let claim_ids: Vec<i64> = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap().unwrap())
+        .collect();
+    assert_eq!(claim_ids[0], claim_ids[1]);
+
+    let store = Store::open(dir.path()).unwrap();
+    let candidate = store.get_candidate_claim(candidate_id).unwrap();
+    assert_eq!(candidate.promoted_claim_id, Some(claim_ids[0]));
+    let log = std::fs::read_to_string(dir.path().join("log.jsonl")).unwrap();
+    assert_eq!(log.matches("\"add_claim\"").count(), 1);
+}
+
+#[test]
+fn concurrent_observation_retry_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event_id = store
+        .record_event("session-race", "message", "payload", "test")
+        .unwrap();
+    store.close().unwrap();
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let memory_dir = dir.path().to_path_buf();
+        let barrier = std::sync::Arc::clone(&barrier);
+        let ready_tx = ready_tx.clone();
+        handles.push(std::thread::spawn(move || {
+            let store = Store::open(&memory_dir).unwrap();
+            ready_tx.send(()).unwrap();
+            barrier.wait();
+            store.record_observation(
+                "session-race",
+                "same observation",
+                ObservationRelevance::High,
+                &[event_id],
+                "observer",
+            )
+        }));
+    }
+    ready_rx.recv().unwrap();
+    ready_rx.recv().unwrap();
+
+    let gate = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    gate.execute_batch("BEGIN IMMEDIATE").unwrap();
+    barrier.wait();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    gate.execute_batch("COMMIT").unwrap();
+
+    let observation_ids: Vec<String> = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap().unwrap())
+        .collect();
+    assert_eq!(observation_ids[0], observation_ids[1]);
     let log = std::fs::read_to_string(dir.path().join("observations.jsonl")).unwrap();
     assert_eq!(log.matches("\"record_observation\"").count(), 1);
 }

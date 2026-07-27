@@ -33,6 +33,7 @@ pub fn vacuum(
     let _lock = AverLock::acquire(memory_dir)?;
     let db_path = memory_dir.join("db.sqlite");
     let conn = Connection::open(&db_path)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     let pages_before: i64 = conn.pragma_query_value(None, "page_count", |r| r.get(0))?;
     let freelist_before: i64 = conn.pragma_query_value(None, "freelist_count", |r| r.get(0))?;
 

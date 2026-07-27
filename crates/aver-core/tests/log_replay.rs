@@ -535,6 +535,26 @@ fn lenient_replay_quarantines_bad_lines() {
 }
 
 #[test]
+fn lenient_replay_skips_quarantined_claims_in_supersede_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = r#"{"kind":"add_claim","ts":1,"claim_id":1,"subject":"good","predicate":"depends_on","object":"o","source":"s","agent_id":"local","agent_kind":"HUMAN","confidence":0.9}
+{"kind":"add_claim","ts":1,"claim_id":2,"subject":"bad","predicate":"depends_on","object":"o","source":"s","agent_id":"local","agent_kind":"HUMAN","confidence":5.0}
+{"kind":"supersede_claims","ts":2,"claim_ids":[2,1]}
+"#;
+    std::fs::write(dir.path().join("log.jsonl"), log).unwrap();
+
+    let report = replay_with_mode(dir.path(), false, ReplayMode::Lenient).unwrap();
+
+    assert_eq!(report.quarantined.len(), 1);
+    assert_eq!(report.lifecycle, 1);
+    let store = Store::open(dir.path()).unwrap();
+    assert_eq!(
+        store.get_claim(1).unwrap().status,
+        aver_core::ClaimStatus::Superseded
+    );
+}
+
+#[test]
 fn vector_chunks_are_rebuildable_after_replay() {
     let dir = tempfile::tempdir().unwrap();
     let claim_id = {

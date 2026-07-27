@@ -384,60 +384,72 @@ impl Store {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let id = observation_id(session_id, content, source_event_ids);
         let source_event_ids_json = serde_json::to_string(source_event_ids)?;
-        // Id is a deterministic content hash: check the projection BEFORE
-        // appending to the log. An identical existing row is an idempotent
-        // retry (return the same id without a duplicate log line); a row
-        // with the same id but different content is a hash collision and
-        // must error instead of silently overwriting (INSERT OR REPLACE did).
-        let existing: Option<(String, String, String)> = self
-            .conn
-            .query_row(
-                "SELECT session_id, content, source_event_ids FROM observations WHERE id = ?1",
-                [&id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()?;
-        if let Some((existing_session, existing_content, existing_event_ids)) = existing {
-            if existing_session == session_id
-                && existing_content == content
-                && existing_event_ids == source_event_ids_json
-            {
-                return Ok(id);
+        // Serialize the idempotency check, log append, and projection insert so
+        // concurrent identical retries cannot both append or race the unique key.
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<String, Error> {
+            let existing: Option<(String, String, String)> = self
+                .conn
+                .query_row(
+                    "SELECT session_id, content, source_event_ids FROM observations WHERE id = ?1",
+                    [&id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            if let Some((existing_session, existing_content, existing_event_ids)) = existing {
+                if existing_session == session_id
+                    && existing_content == content
+                    && existing_event_ids == source_event_ids_json
+                {
+                    return Ok(id.clone());
+                }
+                return Err(Error::ObservationIdCollision {
+                    observation_id: id.clone(),
+                });
             }
-            return Err(Error::ObservationIdCollision { observation_id: id });
-        }
-        let entry = ObservationLogEntry {
-            kind: "record_observation",
-            ts: now,
-            observation_id: &id,
-            session_id,
-            content,
-            relevance: relevance.as_str(),
-            source_event_ids,
-            agent_id: &first_event.agent_id,
-            agent_kind: first_event.agent_kind.as_str(),
-            derivation,
-            scope,
-        };
-        append_jsonl(&self.observation_log_path, &entry)?;
-        self.conn.execute(
-            "INSERT INTO observations
-             (id, session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation, ts, scope)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                id,
+            let entry = ObservationLogEntry {
+                kind: "record_observation",
+                ts: now,
+                observation_id: &id,
                 session_id,
                 content,
-                relevance.as_str(),
-                source_event_ids_json,
-                first_event.agent_id,
-                first_event.agent_kind.as_str(),
+                relevance: relevance.as_str(),
+                source_event_ids,
+                agent_id: &first_event.agent_id,
+                agent_kind: first_event.agent_kind.as_str(),
                 derivation,
-                now,
                 scope,
-            ],
-        )?;
-        Ok(id)
+            };
+            append_jsonl(&self.observation_log_path, &entry)?;
+            self.conn.execute(
+                "INSERT INTO observations
+                 (id, session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation, ts, scope)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    id,
+                    session_id,
+                    content,
+                    relevance.as_str(),
+                    source_event_ids_json,
+                    first_event.agent_id,
+                    first_event.agent_kind.as_str(),
+                    derivation,
+                    now,
+                    scope,
+                ],
+            )?;
+            Ok(id.clone())
+        })();
+        match result {
+            Ok(id) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(id)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
     }
 
     pub fn propose_observations_from_observer(

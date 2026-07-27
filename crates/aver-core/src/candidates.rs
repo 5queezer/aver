@@ -179,6 +179,29 @@ impl Store {
         // is preserved: both log lines precede the SQLite writes.
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
+            // Re-read under the write lock so racing promoters cannot both
+            // observe PENDING and create separate claims for one candidate.
+            let current: Option<(String, Option<i64>)> = self
+                .conn
+                .query_row(
+                    "SELECT status, promoted_claim_id FROM candidate_claims WHERE id = ?1",
+                    [candidate_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let Some((status, promoted_claim_id)) = current else {
+                return Err(Error::MissingCandidate { candidate_id });
+            };
+            if let Some(claim_id) = promoted_claim_id {
+                return Ok(claim_id);
+            }
+            if status != "PENDING" {
+                return Err(Error::InvalidCandidateStatus {
+                    candidate_id,
+                    status,
+                });
+            }
+
             let claim_id: i64 =
                 self.conn
                     .query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM claims", [], |r| {

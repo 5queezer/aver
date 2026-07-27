@@ -88,6 +88,8 @@ impl Store {
             1.0_f64,
         )]);
         let mut shortest_depth: Option<usize> = None;
+        let mut visited: HashMap<String, (usize, f64)> =
+            HashMap::from([(query.source.clone(), (0, 1.0))]);
 
         while let Some((entity, entity_path, steps, path_confidence)) = queue.pop_front() {
             if shortest_depth.is_some_and(|depth| steps.len() >= depth) {
@@ -125,6 +127,19 @@ impl Store {
                         best = Some((next_steps, next_entities, next_confidence));
                     }
                 } else {
+                    let next_depth = next_steps.len();
+                    let should_expand = match visited.get(&candidate.traverse_to) {
+                        None => true,
+                        Some((best_depth, _)) if next_depth < *best_depth => true,
+                        Some((best_depth, best_confidence)) if next_depth == *best_depth => {
+                            next_confidence > *best_confidence
+                        }
+                        Some(_) => false,
+                    };
+                    if !should_expand {
+                        continue;
+                    }
+                    visited.insert(candidate.traverse_to.clone(), (next_depth, next_confidence));
                     queue.push_back((
                         candidate.traverse_to.clone(),
                         next_entities,

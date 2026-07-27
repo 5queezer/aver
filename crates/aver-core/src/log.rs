@@ -1,6 +1,6 @@
 //! JSONL audit-log records, append helper, rotation, and the advisory lock.
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -201,79 +201,50 @@ pub(crate) fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), E
     Ok(())
 }
 
-/// Acquire the advisory `.aver/.lock` PID file (ADR-0019 §2/§5).
-/// Returns a guard whose drop releases the lock by deleting the file.
+/// Acquire the advisory `<memory_dir>/.lock` file (ADR-0019 §2/§5).
+/// The OS lock is held by the retained file handle for the guard's lifetime.
 pub struct AverLock {
     path: PathBuf,
+    file: Option<File>,
 }
 
 impl AverLock {
-    /// Acquire `<memory_dir>/.lock`. Refuses if a live PID already holds it.
+    /// Acquire `<memory_dir>/.lock` without relying on PID-file liveness races.
     pub fn acquire(memory_dir: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(memory_dir)?;
         let path = memory_dir.join(".lock");
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                let pid = std::process::id();
-                writeln!(file, "{pid}")?;
-                file.sync_data()?;
-                Ok(Self { path })
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(Error::LockHeld {
+                    path: path.display().to_string(),
+                });
             }
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                // Stale-lock recovery: if the recorded PID is not alive, take it.
-                let contents = std::fs::read_to_string(&path).unwrap_or_default();
-                let pid: Option<u32> = contents.trim().parse().ok();
-                let alive = match pid {
-                    Some(p) => process_alive(p),
-                    None => false,
-                };
-                if alive {
-                    Err(Error::LockHeld {
-                        path: path.display().to_string(),
-                    })
-                } else {
-                    std::fs::remove_file(&path)?;
-                    Self::acquire(memory_dir)
-                }
-            }
-            Err(err) => Err(Error::Io(err)),
+            Err(std::fs::TryLockError::Error(err)) => return Err(Error::Io(err)),
         }
+        file.set_len(0)?;
+        writeln!(file, "{}", std::process::id())?;
+        file.sync_data()?;
+        Ok(Self {
+            path,
+            file: Some(file),
+        })
     }
 }
 
 impl Drop for AverLock {
     fn drop(&mut self) {
+        // Close the locked handle before removing the marker path. Advisory
+        // locks are released automatically when the handle closes.
+        drop(self.file.take());
         let _ = std::fs::remove_file(&self.path);
     }
-}
-
-#[cfg(unix)]
-pub(crate) fn process_alive(pid: u32) -> bool {
-    // signal 0 is "check existence" semantics on POSIX.
-    if unsafe { libc_kill(pid as i32, 0) } == 0 {
-        return true;
-    }
-    // EPERM means the process exists but belongs to another UID — alive,
-    // just not signal-able by us. Treating it as dead would let stale-lock
-    // recovery steal a lock held by another user's live process.
-    std::io::Error::last_os_error().raw_os_error() == Some(EPERM)
-}
-
-/// POSIX `EPERM` ("operation not permitted"); stable value 1 across Unix
-/// platforms, declared here to avoid a libc crate dependency.
-#[cfg(unix)]
-pub(crate) const EPERM: i32 = 1;
-
-#[cfg(not(unix))]
-pub(crate) fn process_alive(_pid: u32) -> bool {
-    // Conservative fallback: assume the lock holder is alive.
-    true
-}
-
-#[cfg(unix)]
-unsafe extern "C" {
-    #[link_name = "kill"]
-    fn libc_kill(pid: i32, sig: i32) -> i32;
 }
 
 /// Count newline-terminated lines in a file without loading it whole.

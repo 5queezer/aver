@@ -89,6 +89,8 @@ pub fn replay_with_mode(
     let _lock = AverLock::acquire(memory_dir)?;
     let db_path = memory_dir.join("db.sqlite");
     let partial_path = memory_dir.join("db.sqlite.partial");
+    let partial_wal_path = memory_dir.join("db.sqlite.partial-wal");
+    let partial_shm_path = memory_dir.join("db.sqlite.partial-shm");
 
     if db_path.exists() && !force {
         // Refuse if claims is non-empty (per ADR contract).
@@ -107,8 +109,11 @@ pub fn replay_with_mode(
         }
     }
 
-    // Build the partial db from scratch.
+    // Build the partial db from scratch, including sidecars from an interrupted
+    // prior WAL-mode replay.
     let _ = std::fs::remove_file(&partial_path);
+    let _ = std::fs::remove_file(&partial_wal_path);
+    let _ = std::fs::remove_file(&partial_shm_path);
     let result = (|| -> Result<ReplayReport, Error> {
         let conn = Connection::open(&partial_path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -138,6 +143,7 @@ pub fn replay_with_mode(
                     &input.to_string_lossy(),
                     lineno + 1,
                     &mut report,
+                    mode,
                 );
                 match result {
                     Ok(()) => conn.execute_batch("RELEASE replay_line")?,
@@ -171,7 +177,12 @@ pub fn replay_with_mode(
             std::fs::rename(&partial_path, &db_path)?;
             Ok(report)
         }
-        Err(err) => Err(err),
+        Err(err) => {
+            let _ = std::fs::remove_file(&partial_path);
+            let _ = std::fs::remove_file(&partial_wal_path);
+            let _ = std::fs::remove_file(&partial_shm_path);
+            Err(err)
+        }
     }
 }
 
@@ -249,6 +260,7 @@ pub(crate) fn apply_log_line(
     path: &str,
     lineno: usize,
     report: &mut ReplayReport,
+    mode: ReplayMode,
 ) -> Result<(), Error> {
     let value: serde_json::Value =
         serde_json::from_str(line).map_err(|err| Error::ReplayMalformed {
@@ -283,7 +295,7 @@ pub(crate) fn apply_log_line(
         "reject_candidate_claim" => {
             apply_reject_candidate_claim(conn, &value, path, lineno, report)
         }
-        "supersede_claims" => apply_supersede_claims(conn, &value, path, lineno, report),
+        "supersede_claims" => apply_supersede_claims(conn, &value, path, lineno, report, mode),
         "decay_confidence" => apply_decay_confidence(conn, &value, path, lineno, report),
         "merge_source_refs" => apply_merge_source_refs(conn, &value, path, lineno, report),
         other => Err(Error::ReplayUnknownKind {
@@ -796,7 +808,7 @@ pub(crate) fn apply_prune_observations(
     value: &serde_json::Value,
     path: &str,
     lineno: usize,
-    _report: &mut ReplayReport,
+    report: &mut ReplayReport,
 ) -> Result<(), Error> {
     let marker_id = replay_str(value, "prune_marker_id", path, lineno)?;
     let ts = replay_i64(value, "ts", path, lineno)?;
@@ -829,6 +841,7 @@ pub(crate) fn apply_prune_observations(
          VALUES (?1, ?2, ?3, ?4)",
         params![marker_id, session_id, pruned_observation_ids_json, ts],
     )?;
+    report.lifecycle += 1;
     Ok(())
 }
 
@@ -1140,6 +1153,7 @@ pub(crate) fn apply_supersede_claims(
     path: &str,
     lineno: usize,
     report: &mut ReplayReport,
+    mode: ReplayMode,
 ) -> Result<(), Error> {
     let _ts = replay_i64(value, "ts", path, lineno)?;
     let claim_ids = replay_i64_list(value, "claim_ids", path, lineno)?;
@@ -1152,6 +1166,11 @@ pub(crate) fn apply_supersede_claims(
             )
             .optional()?;
         let Some(status) = status else {
+            if mode == ReplayMode::Lenient {
+                // The source add_claim line was quarantined; continue applying
+                // this lifecycle record to any claims that did replay.
+                continue;
+            }
             return Err(Error::ReplayMalformed {
                 path: path.to_string(),
                 line: lineno,
