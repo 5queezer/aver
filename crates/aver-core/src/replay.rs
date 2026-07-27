@@ -130,6 +130,8 @@ pub fn replay_with_mode(
                 if line.trim().is_empty() {
                     continue;
                 }
+                conn.execute_batch("SAVEPOINT replay_line")?;
+                let report_before = report.clone();
                 let result = apply_log_line(
                     &conn,
                     &line,
@@ -137,14 +139,19 @@ pub fn replay_with_mode(
                     lineno + 1,
                     &mut report,
                 );
-                if let Err(err) = result {
-                    match mode {
-                        ReplayMode::Strict => return Err(err),
-                        ReplayMode::Lenient => report.quarantined.push(ReplayQuarantine {
-                            path: input.to_string_lossy().into_owned(),
-                            line: lineno + 1,
-                            error: err.to_string(),
-                        }),
+                match result {
+                    Ok(()) => conn.execute_batch("RELEASE replay_line")?,
+                    Err(err) => {
+                        conn.execute_batch("ROLLBACK TO replay_line; RELEASE replay_line")?;
+                        report = report_before;
+                        match mode {
+                            ReplayMode::Strict => return Err(err),
+                            ReplayMode::Lenient => report.quarantined.push(ReplayQuarantine {
+                                path: input.to_string_lossy().into_owned(),
+                                line: lineno + 1,
+                                error: err.to_string(),
+                            }),
+                        }
                     }
                 }
             }
@@ -557,35 +564,26 @@ pub(crate) fn apply_add_hyperedge(
 
     ontology_check_for_replay(conn, predicate, provenance, "local", ts)?;
     let source_refs_json = serde_json::to_string(&source_refs)?;
-    conn.execute_batch("BEGIN IMMEDIATE")?;
-    let projection = (|| -> Result<(), Error> {
+    conn.execute(
+        "INSERT INTO hyperedges (id, predicate, provenance, confidence, source_refs, status, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'ACTIVE', ?6, ?6)",
+        params![
+            hyperedge_id,
+            predicate,
+            provenance.as_str(),
+            confidence,
+            source_refs_json,
+            ts,
+        ],
+    )?;
+    for participant in &participants {
+        ensure_entity_on(conn, &participant.entity, ts)?;
         conn.execute(
-            "INSERT INTO hyperedges (id, predicate, provenance, confidence, source_refs, status, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'ACTIVE', ?6, ?6)",
-            params![
-                hyperedge_id,
-                predicate,
-                provenance.as_str(),
-                confidence,
-                source_refs_json,
-                ts,
-            ],
+            "INSERT INTO hyperedge_participants (hyperedge_id, role, entity)
+             VALUES (?1, ?2, ?3)",
+            params![hyperedge_id, participant.role, participant.entity],
         )?;
-        for participant in &participants {
-            ensure_entity_on(conn, &participant.entity, ts)?;
-            conn.execute(
-                "INSERT INTO hyperedge_participants (hyperedge_id, role, entity)
-                 VALUES (?1, ?2, ?3)",
-                params![hyperedge_id, participant.role, participant.entity],
-            )?;
-        }
-        Ok(())
-    })();
-    if let Err(err) = projection {
-        let _ = conn.execute_batch("ROLLBACK");
-        return Err(err);
     }
-    conn.execute_batch("COMMIT")?;
     report.hyperedges += 1;
     Ok(())
 }
@@ -1039,12 +1037,37 @@ pub(crate) fn apply_promote_candidate_claim(
             ),
         });
     }
-    conn.execute(
+    if status != "PENDING" {
+        return Err(Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("cannot promote candidate {candidate_id} from status {status}"),
+        });
+    }
+    let claim_exists = conn
+        .query_row("SELECT 1 FROM claims WHERE id = ?1", [claim_id], |_| Ok(()))
+        .optional()?
+        .is_some();
+    if !claim_exists {
+        return Err(Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("promotion references missing claim {claim_id}"),
+        });
+    }
+    let rows_changed = conn.execute(
         "UPDATE candidate_claims
             SET status = 'PROMOTED', promoted_claim_id = ?1
-          WHERE id = ?2",
+          WHERE id = ?2 AND status = 'PENDING'",
         params![claim_id, candidate_id],
     )?;
+    if rows_changed != 1 {
+        return Err(Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("promotion changed {rows_changed} rows for candidate {candidate_id}"),
+        });
+    }
     report.lifecycle += 1;
     Ok(())
 }
@@ -1084,12 +1107,26 @@ pub(crate) fn apply_reject_candidate_claim(
             ),
         });
     }
-    conn.execute(
+    if status != "PENDING" {
+        return Err(Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("cannot reject candidate {candidate_id} from status {status}"),
+        });
+    }
+    let rows_changed = conn.execute(
         "UPDATE candidate_claims
             SET status = 'REJECTED', rejection_reason = ?1
-          WHERE id = ?2",
+          WHERE id = ?2 AND status = 'PENDING'",
         params![reason, candidate_id],
     )?;
+    if rows_changed != 1 {
+        return Err(Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("rejection changed {rows_changed} rows for candidate {candidate_id}"),
+        });
+    }
     report.lifecycle += 1;
     Ok(())
 }
@@ -1107,10 +1144,34 @@ pub(crate) fn apply_supersede_claims(
     let _ts = replay_i64(value, "ts", path, lineno)?;
     let claim_ids = replay_i64_list(value, "claim_ids", path, lineno)?;
     for claim_id in &claim_ids {
-        conn.execute(
+        let status: Option<String> = conn
+            .query_row(
+                "SELECT status FROM claims WHERE id = ?1",
+                [claim_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(status) = status else {
+            return Err(Error::ReplayMalformed {
+                path: path.to_string(),
+                line: lineno,
+                detail: format!("supersede_claims references missing claim {claim_id}"),
+            });
+        };
+        if status == "SUPERSEDED" {
+            continue;
+        }
+        let rows_changed = conn.execute(
             "UPDATE claims SET status = 'SUPERSEDED' WHERE id = ?1",
             [claim_id],
         )?;
+        if rows_changed != 1 {
+            return Err(Error::ReplayMalformed {
+                path: path.to_string(),
+                line: lineno,
+                detail: format!("supersede changed {rows_changed} rows for claim {claim_id}"),
+            });
+        }
     }
     report.lifecycle += 1;
     Ok(())
@@ -1135,10 +1196,20 @@ pub(crate) fn apply_decay_confidence(
         detail: format!("'changes' is not a confidence-change array: {err}"),
     })?;
     for change in &changes {
-        conn.execute(
+        let rows_changed = conn.execute(
             "UPDATE claims SET confidence = ?1 WHERE id = ?2",
             params![change.confidence, change.claim_id],
         )?;
+        if rows_changed != 1 {
+            return Err(Error::ReplayMalformed {
+                path: path.to_string(),
+                line: lineno,
+                detail: format!(
+                    "decay_confidence references missing claim {}",
+                    change.claim_id
+                ),
+            });
+        }
     }
     report.lifecycle += 1;
     Ok(())
@@ -1162,18 +1233,25 @@ pub(crate) fn apply_merge_source_refs(
             detail: "'promote' is not a boolean".to_string(),
         })?;
     let merged = serde_json::to_string(&source_refs)?;
-    if promote {
+    let rows_changed = if promote {
         conn.execute(
             "UPDATE claims
                 SET source_refs = ?1, provenance = 'EXTRACTED', confidence = MAX(confidence, 0.75)
               WHERE id = ?2",
             params![merged, claim_id],
-        )?;
+        )?
     } else {
         conn.execute(
             "UPDATE claims SET source_refs = ?1 WHERE id = ?2",
             params![merged, claim_id],
-        )?;
+        )?
+    };
+    if rows_changed != 1 {
+        return Err(Error::ReplayMalformed {
+            path: path.to_string(),
+            line: lineno,
+            detail: format!("merge_source_refs references missing claim {claim_id}"),
+        });
     }
     report.lifecycle += 1;
     Ok(())

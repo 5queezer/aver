@@ -415,20 +415,18 @@ impl Store {
     /// ADR-0018: resolve a predicate against `predicate_types.name` and the
     /// `predicate_alias` table.
     ///
-    /// Returns `Ok(true)` if the predicate is canonical or aliased; on miss
-    /// the policy diverges by provenance:
-    ///   * `USER_ASSERTED` — auto-extend `predicate_types` with parent
-    ///     `relates_to`, log to `ontology_extension_log`, return `Ok(true)`.
-    ///   * everything else — return `Err(Error::UnknownPredicate)`.
-    pub(crate) fn ontology_check(
+    /// Returns `Ok(false)` if the predicate is canonical or aliased. On a
+    /// `USER_ASSERTED` miss, returns `Ok(true)` so the caller can append first
+    /// and then extend `predicate_types` with parent `relates_to` plus an
+    /// `ontology_extension_log` record. Every other miss returns
+    /// `Err(Error::UnknownPredicate)`.
+    pub(crate) fn validate_ontology(
         &self,
         predicate: &str,
         provenance: Provenance,
-        agent_id: &str,
-        now: i64,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         if self.predicate_type_id(predicate)?.is_some() {
-            return Ok(());
+            return Ok(false);
         }
         let alias_hit: Option<i64> = self
             .conn
@@ -439,36 +437,40 @@ impl Store {
             )
             .optional()?;
         if alias_hit.is_some() {
-            return Ok(());
+            return Ok(false);
         }
         match provenance {
-            Provenance::UserAsserted => {
-                let parent_id = self
-                    .predicate_type_id("relates_to")?
-                    .expect("ontology bootstrap should seed relates_to");
-                self.conn.execute(
-                    "INSERT INTO predicate_types (name, parent_id, created_via, created_at)
-                     VALUES (?1, ?2, 'user_assertion', ?3)",
-                    params![predicate, parent_id, now],
-                )?;
-                // Closure rebuild covers the new id incrementally; the
-                // rebuild is cheap (small ontology) and matches the
-                // pattern in `seed_ontology`.
-                seed::rebuild_closure(&self.conn, "predicate_types", "predicate_closure")?;
-                self.conn.execute(
-                    "INSERT INTO ontology_extension_log
-                       (predicate, parent, agent_id, created_at)
-                     VALUES (?1, 'relates_to', ?2, ?3)",
-                    params![predicate, agent_id, now],
-                )?;
-                Ok(())
-            }
+            Provenance::UserAsserted => Ok(true),
             Provenance::Extracted | Provenance::Inferred | Provenance::Ambiguous => {
                 Err(Error::UnknownPredicate {
                     name: predicate.to_string(),
                 })
             }
         }
+    }
+
+    pub(crate) fn apply_ontology_extension(
+        &self,
+        predicate: &str,
+        agent_id: &str,
+        now: i64,
+    ) -> Result<(), Error> {
+        let parent_id = self
+            .predicate_type_id("relates_to")?
+            .expect("ontology bootstrap should seed relates_to");
+        self.conn.execute(
+            "INSERT INTO predicate_types (name, parent_id, created_via, created_at)
+             VALUES (?1, ?2, 'user_assertion', ?3)",
+            params![predicate, parent_id, now],
+        )?;
+        seed::rebuild_closure(&self.conn, "predicate_types", "predicate_closure")?;
+        self.conn.execute(
+            "INSERT INTO ontology_extension_log
+               (predicate, parent, agent_id, created_at)
+             VALUES (?1, 'relates_to', ?2, ?3)",
+            params![predicate, agent_id, now],
+        )?;
+        Ok(())
     }
 
     pub(crate) fn predicate_vocabulary(&self) -> Result<PredicateVocabulary, Error> {

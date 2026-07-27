@@ -78,7 +78,7 @@ impl Store {
         }
 
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        self.ontology_check(&input.predicate, input.provenance, "local", now)?;
+        let extend_ontology = self.validate_ontology(&input.predicate, input.provenance)?;
 
         // BEGIN IMMEDIATE covers id allocation + log append + projection so
         // concurrent processes cannot allocate duplicate hyperedge ids. The
@@ -102,6 +102,10 @@ impl Store {
                 participants: &input.participants,
             };
             append_jsonl(&self.log_path, &entry)?;
+
+            if extend_ontology {
+                self.apply_ontology_extension(&input.predicate, "local", now)?;
+            }
 
             let source_refs_json = serde_json::to_string(&input.source_refs)?;
             self.conn.execute(

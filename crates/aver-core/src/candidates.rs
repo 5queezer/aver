@@ -2,7 +2,7 @@
 
 use std::str::FromStr;
 
-use rusqlite::{params, types::Type};
+use rusqlite::{OptionalExtension, params, types::Type};
 
 use crate::error::Error;
 use crate::log::{
@@ -170,18 +170,9 @@ impl Store {
         let source = format!("event:{}", event.id);
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
-        // ADR-0018: ontology check BEFORE any log append. Promoting an
-        // extractor candidate with an unknown predicate must fail cleanly;
-        // appending the add_claim line first would poison the log with a
-        // record whose projection INSERT later fails at the ontology
-        // trigger. (The candidate content was privacy-filtered at proposal
-        // time, so there is nothing new to filter here.)
-        self.ontology_check(
-            &candidate.predicate,
-            candidate.provenance,
-            &event.agent_id,
-            now,
-        )?;
+        // Validate before log append; apply any USER_ASSERTED ontology extension
+        // only after the append boundary inside the write transaction.
+        let extend_ontology = self.validate_ontology(&candidate.predicate, candidate.provenance)?;
 
         // Id allocation, log appends, and projection updates in one write
         // transaction (same race class as insert_claim). Log-first ordering
@@ -220,6 +211,10 @@ impl Store {
                 claim_id,
             };
             append_jsonl(&self.event_log_path, &promote_entry)?;
+
+            if extend_ontology {
+                self.apply_ontology_extension(&candidate.predicate, &event.agent_id, now)?;
+            }
 
             self.ensure_entity(&candidate.subject, now)?;
             self.ensure_entity(&candidate.object, now)?;
@@ -279,6 +274,35 @@ impl Store {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<(), Error> {
+            // Re-read under the write lock so racing callers cannot both
+            // observe PENDING and append conflicting terminal transitions.
+            let current: Option<(String, Option<String>)> = self
+                .conn
+                .query_row(
+                    "SELECT status, rejection_reason FROM candidate_claims WHERE id = ?1",
+                    [candidate_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let Some((status, rejection_reason)) = current else {
+                return Err(Error::MissingCandidate { candidate_id });
+            };
+            if status == "REJECTED" {
+                if rejection_reason.as_deref() == Some(reason) {
+                    return Ok(());
+                }
+                return Err(Error::InvalidCandidateStatus {
+                    candidate_id,
+                    status,
+                });
+            }
+            if status != "PENDING" {
+                return Err(Error::InvalidCandidateStatus {
+                    candidate_id,
+                    status,
+                });
+            }
+
             // Candidate lifecycle records live in the episodic log so replay
             // applies them in the same phase as the candidate proposal.
             let entry = RejectCandidateLogEntry {

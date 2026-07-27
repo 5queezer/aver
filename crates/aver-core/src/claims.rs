@@ -260,18 +260,13 @@ impl Store {
             self.privacy_filter_path_recording(possible_path)?;
         }
 
-        let now = time::OffsetDateTime::now_utc().unix_timestamp();
-
-        // ADR-0018: ontology check. USER_ASSERTED writes auto-extend the
-        // ontology with audit trail; EXTRACTED/INFERRED/AMBIGUOUS writes
-        // reject unknown predicates. Runs after the privacy filter so a
-        // secret-bearing predicate is quarantined first (see ADR-0018
-        // §"Telemetry").
-        self.ontology_check(write.predicate, write.provenance, write.agent_id, now)
+        self.validate_ontology(write.predicate, write.provenance)
+            .map(|_| ())
     }
 
     pub(crate) fn insert_claim(&self, write: ClaimWrite<'_>) -> Result<i64, Error> {
         self.validate_claim_write(&write)?;
+        let extend_ontology = self.validate_ontology(write.predicate, write.provenance)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
         // Pre-allocate the claim id inside a write transaction. The
@@ -303,6 +298,10 @@ impl Store {
             };
             append_jsonl(&self.log_path, &entry)?;
             append_jsonl(&self.agent_log_path(write.agent_id)?, &entry)?;
+
+            if extend_ontology {
+                self.apply_ontology_extension(write.predicate, write.agent_id, now)?;
+            }
 
             self.ensure_entity(write.subject, now)?;
             self.ensure_entity(write.object, now)?;
