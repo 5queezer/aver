@@ -642,6 +642,12 @@ fn push_sanitized_token(output: &mut String, token: &str) {
     if token.is_empty() {
         return;
     }
+    // Pure-hex tokens of known hash lengths (MD5/SHA-1/SHA-256 digests, git
+    // SHAs) are identifiers, not secrets — keep them for benchmark fidelity.
+    if is_known_hash_hex(token) {
+        output.push_str(token);
+        return;
+    }
     if token.len() >= 20
         && matches!(
             aver_core::privacy_filter(&format!("secret {token}")),
@@ -658,6 +664,10 @@ fn push_sanitized_token(output: &mut String, token: &str) {
     } else {
         output.push_str(token);
     }
+}
+
+fn is_known_hash_hex(token: &str) -> bool {
+    matches!(token.len(), 32 | 40 | 64) && token.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 pub fn order_contexts_by_beam_message_index(contexts: Vec<(String, String)>) -> Vec<String> {
@@ -684,19 +694,25 @@ fn order_contexts(mut contexts: Vec<(String, String)>, recent_first: bool) -> Ve
 
 fn asks_for_current_value(question: &str) -> bool {
     let normalized = question.to_ascii_lowercase();
-    [
-        "current",
-        "currently",
-        "latest",
-        "updated",
-        "recent",
-        " now",
-        "as of",
-        "today",
-        "present",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
+    if normalized.contains("as of") {
+        return true;
+    }
+    // Match whole words so "represent"/"presented" do not trip "present".
+    normalized
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|token| {
+            matches!(
+                token,
+                "current"
+                    | "currently"
+                    | "latest"
+                    | "updated"
+                    | "recent"
+                    | "now"
+                    | "today"
+                    | "present"
+            )
+        })
 }
 
 fn beam_message_index(subject: &str) -> Option<usize> {

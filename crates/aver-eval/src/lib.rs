@@ -1,4 +1,9 @@
-//! Deterministic, offline MemoryAgentBench runner for the Aver memory core.
+//! Fixture-based evaluation runners for the Aver memory core.
+//!
+//! The fixture runner (this binary and [`load_fixture`]/[`run_fixture`]) is
+//! deterministic and offline. The BEAM100K runner in [`beam`] is a live,
+//! networked harness that talks to an Ollama or OpenAI provider for
+//! embeddings, answer generation, and judging.
 
 pub mod beam;
 pub mod prompt_assertions;

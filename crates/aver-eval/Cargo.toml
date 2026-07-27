@@ -25,5 +25,3 @@ clap = { workspace = true }
 [[bin]]
 name = "aver-beam100k"
 path = "src/bin/aver-beam100k.rs"
-
-[dev-dependencies]

@@ -150,7 +150,7 @@ dependencies = [
  "serde_json",
  "sqlite-vec",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "time",
  "ureq",
 ]
@@ -174,7 +174,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-c-sharp",

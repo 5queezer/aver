@@ -1,5 +1,7 @@
 use std::{env, process};
 
+use anyhow::Context as _;
+
 fn main() {
     if let Err(err) = run() {
         eprintln!("aver-eval: {err}");
@@ -17,7 +19,8 @@ fn run() -> anyhow::Result<()> {
 
     let mut metrics = Vec::new();
     for fixture_path in fixture_paths {
-        let fixture_json = std::fs::read_to_string(fixture_path)?;
+        let fixture_json = std::fs::read_to_string(&fixture_path)
+            .with_context(|| format!("read fixture {fixture_path}"))?;
         let fixture = aver_eval::load_fixture(&fixture_json)?;
         metrics.push(aver_eval::run_fixture(&fixture)?);
     }
