@@ -24,7 +24,6 @@ serde_json.workspace  = true
 ureq = { workspace = true, optional = true }
 thiserror.workspace   = true
 time.workspace        = true
-directories.workspace = true
 flate2                = "1"
 
 [dev-dependencies]

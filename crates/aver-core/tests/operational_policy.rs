@@ -369,3 +369,164 @@ fn replay_walks_rotated_logs_in_numeric_order() {
     assert_eq!(store.get_claim(2).unwrap().subject, "second");
     assert_eq!(store.get_claim(3).unwrap().subject, "third");
 }
+
+#[test]
+fn finalize_rebuilds_truncated_gzip_from_plain_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let make_line = |id: i64| {
+        format!(
+            r#"{{"kind":"add_claim","ts":1,"claim_id":{id},"subject":"s{id}","predicate":"p","object":"o","source":"s","agent_id":"local","agent_kind":"HUMAN","confidence":1.0}}"#
+        )
+    };
+    // Simulate the crash window: the plain intermediate is complete, but the
+    // `.gz` left behind is truncated. Recovery must not prefer the broken
+    // archive over the complete source (pre-atomic-gzip data loss).
+    let plain = dir.path().join("log.1.jsonl");
+    {
+        let mut f = std::fs::File::create(&plain).unwrap();
+        writeln!(f, "{}", make_line(1)).unwrap();
+        writeln!(f, "{}", make_line(2)).unwrap();
+    }
+    let gz = dir.path().join("log.1.jsonl.gz");
+    {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        let mut buf = Vec::new();
+        {
+            let mut enc = GzEncoder::new(&mut buf, Compression::default());
+            writeln!(enc, "{}", make_line(1)).unwrap();
+            writeln!(enc, "{}", make_line(2)).unwrap();
+            enc.finish().unwrap();
+        }
+        buf.truncate(buf.len() / 2);
+        std::fs::write(&gz, &buf).unwrap();
+    }
+
+    let store = Store::open(dir.path()).unwrap();
+    drop(store);
+
+    assert!(!plain.exists(), "plain intermediate should be finalized");
+    let decoded = {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+        let mut decoded = String::new();
+        GzDecoder::new(std::fs::File::open(&gz).unwrap())
+            .read_to_string(&mut decoded)
+            .expect("rebuilt archive must be intact");
+        decoded
+    };
+    assert!(decoded.contains(&make_line(1)), "decoded: {decoded}");
+    assert!(
+        decoded.contains(&make_line(2)),
+        "truncated archive must be rebuilt with the full source; decoded: {decoded}"
+    );
+
+    // End to end: no records lost — replay rebuilds both claims.
+    let report = replay(dir.path(), false).unwrap();
+    assert_eq!(report.claims, 2);
+}
+
+#[test]
+fn finalize_removes_stale_gzip_tmp_and_finishes_compression() {
+    let dir = tempfile::tempdir().unwrap();
+    let line = r#"{"kind":"add_claim","ts":1,"claim_id":1,"subject":"a","predicate":"p","object":"o","source":"s","agent_id":"local","agent_kind":"HUMAN","confidence":1.0}"#;
+    let plain = dir.path().join("log.1.jsonl");
+    writeln!(std::fs::File::create(&plain).unwrap(), "{line}").unwrap();
+    // Crash between compression and atomic rename leaves the tmp behind.
+    let tmp = dir.path().join("log.1.jsonl.gz.tmp");
+    std::fs::write(&tmp, b"partial gzip garbage").unwrap();
+
+    let store = Store::open(dir.path()).unwrap();
+    drop(store);
+
+    assert!(!tmp.exists(), "stale .tmp archive should be removed");
+    assert!(!plain.exists(), "plain intermediate should be finalized");
+    assert!(dir.path().join("log.1.jsonl.gz").exists());
+}
+
+#[test]
+fn events_and_observations_logs_rotate_at_size_threshold() {
+    let dir = tempfile::tempdir().unwrap();
+    // Exceed LOG_ROTATE_MAX_BYTES with a few large lines (cheap to write).
+    let big_line = "x".repeat(1024 * 1024);
+    for series in ["events", "observations"] {
+        let path = dir.path().join(format!("{series}.jsonl"));
+        let mut f = std::fs::File::create(&path).unwrap();
+        for _ in 0..65 {
+            writeln!(f, "{big_line}").unwrap();
+        }
+    }
+
+    let _store = Store::open(dir.path()).unwrap();
+
+    for series in ["events", "observations"] {
+        let rotated = dir.path().join(format!("{series}.1.jsonl.gz"));
+        assert!(
+            rotated.exists(),
+            "{series}.1.jsonl.gz should exist after rotation"
+        );
+        let active_size = std::fs::metadata(dir.path().join(format!("{series}.jsonl")))
+            .map(|m| m.len())
+            .unwrap_or(u64::MAX);
+        assert!(
+            active_size < 1024,
+            "active {series}.jsonl should be empty after rotation, got {active_size} bytes"
+        );
+    }
+}
+
+#[test]
+fn replay_walks_rotated_event_and_observation_logs() {
+    let dir = tempfile::tempdir().unwrap();
+    let event_line = r#"{"kind":"record_event","ts":1,"event_id":1,"session_id":"s1","event_kind":"message","payload":"hello","source":"test","agent_id":"local","agent_kind":"HUMAN","scope":"global"}"#;
+    let observation_line = r#"{"kind":"record_observation","ts":2,"observation_id":"ob1","session_id":"s1","content":"note","relevance":"high","source_event_ids":[1],"agent_id":"local","agent_kind":"HUMAN","derivation":"observer","scope":"global"}"#;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    for (name, line) in [
+        ("events.1.jsonl.gz", event_line),
+        ("observations.1.jsonl.gz", observation_line),
+    ] {
+        let f = std::fs::File::create(dir.path().join(name)).unwrap();
+        let mut enc = GzEncoder::new(f, Compression::default());
+        writeln!(enc, "{line}").unwrap();
+        enc.finish().unwrap();
+    }
+
+    let report = replay(dir.path(), false).unwrap();
+    assert_eq!(report.events, 1);
+    assert_eq!(report.observations, 1);
+
+    let store = Store::open(dir.path()).unwrap();
+    assert_eq!(store.list_events_for_session("s1").unwrap().len(), 1);
+    let observation = store.get_observation("ob1").unwrap();
+    assert_eq!(observation.content, "note");
+}
+
+#[test]
+fn lock_is_not_stolen_from_live_foreign_owned_process() {
+    let dir = tempfile::tempdir().unwrap();
+    // PID 1 (init) always exists, but for a non-root test runner it is owned
+    // by another UID: kill(pid, 0) fails with EPERM, which must count as
+    // "alive" — never as a stale lock to steal.
+    std::fs::write(dir.path().join(".lock"), "1\n").unwrap();
+    let err = match aver_core::AverLock::acquire(dir.path()) {
+        Ok(_guard) => panic!("PID 1 is alive; the lock must not be treated as stale"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(err, aver_core::Error::LockHeld { .. }),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn replay_refuses_while_advisory_lock_is_held() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = aver_core::AverLock::acquire(dir.path()).unwrap();
+    let err = replay(dir.path(), false)
+        .expect_err("replay must not run against a locked memory directory");
+    assert!(
+        matches!(err, aver_core::Error::LockHeld { .. }),
+        "unexpected error: {err:?}"
+    );
+}

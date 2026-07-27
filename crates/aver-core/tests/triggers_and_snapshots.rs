@@ -158,3 +158,22 @@ fn graph_drift_snapshot_includes_privacy_rejection_counts() {
     assert_eq!(snapshot.privacy_rejection_counts.get("path:ssh"), Some(&1));
     assert_eq!(snapshot.consolidation_merged, 1);
 }
+
+#[test]
+fn extraction_decision_surfaces_coverage_gap_without_token_threshold() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    store
+        .record_event("s1", "user_message", "uncovered event", "conversation")
+        .unwrap();
+
+    // The coverage signal must not depend on a token threshold being set.
+    let decision = store.extraction_decision("s1", 100, None).unwrap();
+
+    assert!(decision.should_extract);
+    assert!(
+        decision
+            .reasons
+            .contains(&ExtractionTriggerReason::UncoveredCoverageGap)
+    );
+}

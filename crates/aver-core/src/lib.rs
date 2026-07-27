@@ -95,6 +95,12 @@ pub struct Store {
 pub const LOG_ROTATE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 pub const LOG_ROTATE_MAX_LINES: u64 = 500_000;
 
+/// JSONL log series rotated at session boundaries (ADR-0019 §5): the claims
+/// log plus the episodic event and observation logs, which otherwise grow
+/// without bound. Order matters for replay: claims apply before events and
+/// observations (candidate and observation records reference them).
+const ROTATED_LOG_SERIES: [&str; 3] = ["log", "events", "observations"];
+
 /// Runtime availability of the bundled `sqlite-vec` extension (ADR-0017).
 /// Static linking via the `sqlite-vec` crate makes `Available` the expected
 /// state on every supported platform; the `Unavailable` variant exists so
@@ -132,17 +138,37 @@ fn scope_filter_sql(scope: &str, walk: ScopeWalk) -> (String, Vec<String>) {
         ScopeWalk::Any => ("1=1".to_string(), Vec::new()),
         ScopeWalk::Exact => ("scope = ?".to_string(), vec![scope.to_string()]),
         ScopeWalk::Descendants => (
-            "(scope = ? OR scope LIKE ? || '/%')".to_string(),
-            vec![scope.to_string(), scope.to_string()],
+            // `_` is legal in scopes (ADR-0021 charset) but is a LIKE
+            // metachar: unescaped, "proj_aver" would also match rows scoped
+            // "proj/aver/...". Escape metachars in the parameter and declare
+            // the escape character explicitly.
+            "(scope = ? OR scope LIKE ? || '/%' ESCAPE '\\')".to_string(),
+            vec![scope.to_string(), escape_like_pattern(scope)],
         ),
         ScopeWalk::Ancestors => (
             // Match: row.scope is "global" (implicit root), row.scope equals
             // the input, OR the input path begins with row.scope + "/" (i.e.
-            // row.scope is a strict path-prefix ancestor of the input).
-            "(scope = 'global' OR scope = ? OR ? LIKE scope || '/%')".to_string(),
+            // row.scope is a strict path-prefix ancestor of the input). The
+            // LIKE pattern is built from the row's own scope column, so its
+            // metacharacters are escaped in SQL (same `_` hazard as above).
+            "(scope = 'global' OR scope = ? OR ? LIKE (replace(replace(replace(scope, '\\', '\\\\'), '_', '\\_'), '%', '\\%') || '/%') ESCAPE '\\')"
+                .to_string(),
             vec![scope.to_string(), scope.to_string()],
         ),
     }
+}
+
+/// Escape LIKE metacharacters so a scope can serve as a literal LIKE prefix
+/// under `ESCAPE '\'`.
+fn escape_like_pattern(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(ch, '\\' | '_' | '%') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 struct ClaimWrite<'a> {
@@ -405,9 +431,13 @@ impl Store {
         let observation_log_path = memory_dir.join("observations.jsonl");
 
         // ADR-0019 §5: rotation only at session boundaries — check at open.
-        // Also recover any half-rotated `log.{N}.jsonl` left by a prior crash.
+        // Also recover any half-rotated `{series}.{N}.jsonl` left by a prior
+        // crash. Every log series rotates, not just the claims log, so
+        // events.jsonl and observations.jsonl stay bounded too.
         finalize_pending_rotations(&memory_dir)?;
-        maybe_rotate_log(&memory_dir, &log_path)?;
+        for series in ROTATED_LOG_SERIES {
+            maybe_rotate_log(&memory_dir, series)?;
+        }
 
         let conn = Connection::open(&db_path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -1637,6 +1667,28 @@ impl Store {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let id = observation_id(session_id, content, source_event_ids);
         let source_event_ids_json = serde_json::to_string(source_event_ids)?;
+        // Id is a deterministic content hash: check the projection BEFORE
+        // appending to the log. An identical existing row is an idempotent
+        // retry (return the same id without a duplicate log line); a row
+        // with the same id but different content is a hash collision and
+        // must error instead of silently overwriting (INSERT OR REPLACE did).
+        let existing: Option<(String, String, String)> = self
+            .conn
+            .query_row(
+                "SELECT session_id, content, source_event_ids FROM observations WHERE id = ?1",
+                [&id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        if let Some((existing_session, existing_content, existing_event_ids)) = existing {
+            if existing_session == session_id
+                && existing_content == content
+                && existing_event_ids == source_event_ids_json
+            {
+                return Ok(id);
+            }
+            return Err(Error::ObservationIdCollision { observation_id: id });
+        }
         let entry = ObservationLogEntry {
             kind: "record_observation",
             ts: now,
@@ -1652,7 +1704,7 @@ impl Store {
         };
         append_jsonl(&self.observation_log_path, &entry)?;
         self.conn.execute(
-            "INSERT OR REPLACE INTO observations
+            "INSERT INTO observations
              (id, session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation, ts, scope)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
@@ -2039,9 +2091,16 @@ impl Store {
         session_id: &str,
         event_threshold: usize,
     ) -> Result<bool, Error> {
-        Ok(self
-            .extraction_decision(session_id, event_threshold, None)?
-            .should_extract)
+        // Coarse "enough accumulated to justify extraction" check: explicit
+        // triggers and volume thresholds only. The coverage-gap reason is
+        // surfaced by `extraction_decision` but does not flip this bool —
+        // it is true for any session with undigested events, which would
+        // make the event-count threshold meaningless.
+        let decision = self.extraction_decision(session_id, event_threshold, None)?;
+        Ok(decision
+            .reasons
+            .iter()
+            .any(|reason| *reason != ExtractionTriggerReason::UncoveredCoverageGap))
     }
 
     pub fn extraction_decision(
@@ -2084,11 +2143,11 @@ impl Store {
             }
         }
 
-        if observation_token_threshold.is_some() {
-            let coverage = self.observation_coverage(session_id)?;
-            if !coverage.uncovered_event_ids.is_empty() {
-                reasons.push(ExtractionTriggerReason::UncoveredCoverageGap);
-            }
+        // Coverage gaps are a signal in their own right: they must surface
+        // even when no observation-token threshold is configured.
+        let coverage = self.observation_coverage(session_id)?;
+        if !coverage.uncovered_event_ids.is_empty() {
+            reasons.push(ExtractionTriggerReason::UncoveredCoverageGap);
         }
 
         let event_count: usize = self.conn.query_row(
@@ -2289,11 +2348,13 @@ impl Store {
             self.ensure_entity(&candidate.object, now)?;
 
             let source_refs = serde_json::to_string(&[source])?;
+            // last_verified_at starts at creation, same as add_claim and as
+            // replay's apply_add_claim (which only sees the add_claim line).
             self.conn.execute(
                 "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
                                      status, source_refs, agent_id, agent_kind, write_ts,
-                                     created_at, last_seen_at, scope)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7, ?8, ?9, ?10, ?10, ?10, ?11)",
+                                     created_at, last_seen_at, last_verified_at, scope)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7, ?8, ?9, ?10, ?10, ?10, ?10, ?11)",
                 params![
                     claim_id,
                     candidate.subject,
@@ -2329,13 +2390,7 @@ impl Store {
     }
 
     pub fn reject_candidate_claim(&self, candidate_id: i64, reason: &str) -> Result<(), Error> {
-        let candidate = match self.get_candidate_claim(candidate_id) {
-            Ok(candidate) => candidate,
-            Err(Error::Sqlite(rusqlite::Error::QueryReturnedNoRows)) => {
-                return Err(Error::MissingCandidate { candidate_id });
-            }
-            Err(err) => return Err(err),
-        };
+        let candidate = self.get_candidate_claim(candidate_id)?;
         if candidate.status == "PROMOTED" {
             return Err(Error::InvalidCandidateStatus {
                 candidate_id,
@@ -2741,13 +2796,8 @@ impl Store {
     }
 
     fn ensure_claim_exists(&self, claim_id: i64) -> Result<(), Error> {
-        match self.get_claim(claim_id) {
-            Ok(_) => Ok(()),
-            Err(Error::Sqlite(rusqlite::Error::QueryReturnedNoRows)) => {
-                Err(Error::MissingClaim { claim_id })
-            }
-            Err(err) => Err(err),
-        }
+        self.get_claim(claim_id)?;
+        Ok(())
     }
 
     /// Insert vector chunk metadata using the canonical claim text rendering.
@@ -2907,7 +2957,7 @@ impl Store {
         drop(stmt);
 
         // Merge with text-search results.
-        let text_claims = self.recall_text(query).unwrap_or_default();
+        let text_claims = self.recall_text(query)?;
         let text_score_base = 0.5_f64;
         for claim in &text_claims {
             scores
@@ -3114,7 +3164,7 @@ impl Store {
             }
         }
 
-        let text_claims = self.recall_text(query).unwrap_or_default();
+        let text_claims = self.recall_text(query)?;
         let mut candidate_ids: HashSet<i64> = text_claims.iter().map(|claim| claim.id).collect();
         candidate_ids.extend(vector_scores.keys().copied());
 
@@ -3636,13 +3686,7 @@ impl Store {
         reason: &str,
         new_claim: Option<NewClaim<'_>>,
     ) -> Result<ContradictionRecord, Error> {
-        match self.get_claim(claim_id) {
-            Ok(_) => {}
-            Err(Error::Sqlite(rusqlite::Error::QueryReturnedNoRows)) => {
-                return Err(Error::MissingClaim { claim_id });
-            }
-            Err(err) => return Err(err),
-        }
+        self.ensure_claim_exists(claim_id)?;
         validate_contradiction_reason(reason)?;
         self.privacy_filter_recording(reason)?;
         let new_claim_id = if let Some(claim) = new_claim {
@@ -3690,13 +3734,7 @@ impl Store {
     }
 
     pub fn list_contradictions(&self, claim_id: i64) -> Result<Vec<ContradictionRecord>, Error> {
-        match self.get_claim(claim_id) {
-            Ok(_) => {}
-            Err(Error::Sqlite(rusqlite::Error::QueryReturnedNoRows)) => {
-                return Err(Error::MissingClaim { claim_id });
-            }
-            Err(err) => return Err(err),
-        }
+        self.ensure_claim_exists(claim_id)?;
         let mut stmt = self.conn.prepare(
             "SELECT id
                FROM contradictions
@@ -4535,7 +4573,9 @@ fn observation_id(session_id: &str, content: &str, source_event_ids: &[i64]) -> 
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(FNV_PRIME);
     }
-    format!("{hash:016x}")[..12].to_string()
+    // Full 64-bit digest: truncating to 48 bits made collisions (which
+    // INSERT OR REPLACE would silently overwrite with) meaningfully likely.
+    format!("{hash:016x}")
 }
 
 fn observation_prune_marker_id(
@@ -4627,8 +4667,19 @@ impl Drop for AverLock {
 #[cfg(unix)]
 fn process_alive(pid: u32) -> bool {
     // signal 0 is "check existence" semantics on POSIX.
-    unsafe { libc_kill(pid as i32, 0) == 0 }
+    if unsafe { libc_kill(pid as i32, 0) } == 0 {
+        return true;
+    }
+    // EPERM means the process exists but belongs to another UID — alive,
+    // just not signal-able by us. Treating it as dead would let stale-lock
+    // recovery steal a lock held by another user's live process.
+    std::io::Error::last_os_error().raw_os_error() == Some(EPERM)
 }
+
+/// POSIX `EPERM` ("operation not permitted"); stable value 1 across Unix
+/// platforms, declared here to avoid a libc crate dependency.
+#[cfg(unix)]
+const EPERM: i32 = 1;
 
 #[cfg(not(unix))]
 fn process_alive(_pid: u32) -> bool {
@@ -4662,20 +4713,21 @@ fn count_lines(path: &Path) -> std::io::Result<u64> {
     Ok(lines)
 }
 
-/// Determine the next rotation index `N` for `log.{N}.jsonl[.gz]`.
-fn next_rotation_index(memory_dir: &Path) -> std::io::Result<u32> {
+/// Determine the next rotation index `N` for `{series}.{N}.jsonl[.gz]`.
+fn next_rotation_index(memory_dir: &Path, series: &str) -> std::io::Result<u32> {
     let mut max = 0u32;
     let read_dir = match std::fs::read_dir(memory_dir) {
         Ok(rd) => rd,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(1),
         Err(err) => return Err(err),
     };
+    let prefix = format!("{series}.");
     for entry in read_dir {
         let entry = entry?;
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        // Match log.{N}.jsonl or log.{N}.jsonl.gz
-        let rest = match name.strip_prefix("log.") {
+        // Match {series}.{N}.jsonl or {series}.{N}.jsonl.gz
+        let rest = match name.strip_prefix(&prefix) {
             Some(r) => r,
             None => continue,
         };
@@ -4698,8 +4750,11 @@ fn next_rotation_index(memory_dir: &Path) -> std::io::Result<u32> {
     Ok(max + 1)
 }
 
-/// Recover from a partial rotation: any `log.{N}.jsonl` without a matching
-/// `.gz` finishes gzipping. ADR-0019 §5.
+/// Recover from a partial rotation in any log series: a `{series}.{N}.jsonl`
+/// without a matching `.gz` finishes gzipping; a `.gz` left truncated by a
+/// crash mid-compression is rebuilt from its complete plain source instead
+/// of silently winning over it. Stale `.tmp` archives from a crash between
+/// compression and atomic rename are removed. ADR-0019 §5.
 fn finalize_pending_rotations(memory_dir: &Path) -> Result<(), Error> {
     let read_dir = match std::fs::read_dir(memory_dir) {
         Ok(rd) => rd,
@@ -4707,13 +4762,23 @@ fn finalize_pending_rotations(memory_dir: &Path) -> Result<(), Error> {
         Err(err) => return Err(Error::Io(err)),
     };
     let mut pending = Vec::new();
+    let mut stale_tmps = Vec::new();
     for entry in read_dir {
         let entry = entry?;
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        let Some(rest) = name.strip_prefix("log.") else {
+        let Some(rest) = ROTATED_LOG_SERIES
+            .iter()
+            .find_map(|series| name.strip_prefix(&format!("{series}.")))
+        else {
             continue;
         };
+        if let Some(num) = rest.strip_suffix(".jsonl.gz.tmp") {
+            if num.parse::<u32>().is_ok() {
+                stale_tmps.push(entry.path());
+            }
+            continue;
+        }
         let Some(num) = rest.strip_suffix(".jsonl") else {
             continue;
         };
@@ -4724,11 +4789,23 @@ fn finalize_pending_rotations(memory_dir: &Path) -> Result<(), Error> {
             pending.push(entry.path());
         }
     }
+    for tmp in stale_tmps {
+        std::fs::remove_file(tmp)?;
+    }
     for src in pending {
         let dst = src.with_extension("jsonl.gz");
-        // If the gz already exists, prefer it and remove the orphan plain file.
         if dst.exists() {
-            std::fs::remove_file(&src)?;
+            if gz_intact(&dst) {
+                // Compression completed before the crash: keep the archive.
+                std::fs::remove_file(&src)?;
+            } else {
+                // Truncated archive from a crash mid-gzip: the plain source
+                // is complete, so rebuild the archive from it rather than
+                // losing the tail of the log.
+                std::fs::remove_file(&dst)?;
+                gzip_file(&src, &dst)?;
+                std::fs::remove_file(&src)?;
+            }
             continue;
         }
         gzip_file(&src, &dst)?;
@@ -4737,13 +4814,38 @@ fn finalize_pending_rotations(memory_dir: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// Read a gzip stream to end-of-stream, returning false on any I/O or
+/// format error (e.g. a truncated archive from a crash mid-compression).
+fn gz_intact(path: &Path) -> bool {
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut decoder = GzDecoder::new(file);
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        match decoder.read(&mut buf) {
+            Ok(0) => return true,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+    }
+}
+
 fn gzip_file(src: &Path, dst: &Path) -> Result<(), Error> {
     use flate2::Compression;
     use flate2::write::GzEncoder;
     use std::io::{BufReader, Read};
     let input = std::fs::File::open(src)?;
     let mut input = BufReader::new(input);
-    let output = std::fs::File::create(dst)?;
+    // Compress into a temporary sibling and rename atomically so a crash
+    // can never leave a truncated archive at `dst` for the recovery path to
+    // prefer over the complete plain source.
+    let mut tmp_name = dst.as_os_str().to_os_string();
+    tmp_name.push(".tmp");
+    let tmp = PathBuf::from(tmp_name);
+    let output = std::fs::File::create(&tmp)?;
     let mut encoder = GzEncoder::new(output, Compression::default());
     let mut buf = [0u8; 64 * 1024];
     loop {
@@ -4755,13 +4857,15 @@ fn gzip_file(src: &Path, dst: &Path) -> Result<(), Error> {
     }
     let output = encoder.finish()?;
     output.sync_data()?;
+    std::fs::rename(&tmp, dst)?;
     Ok(())
 }
 
-/// Rotate `log.jsonl` if it exceeds either size or line threshold.
+/// Rotate `{series}.jsonl` if it exceeds either size or line threshold.
 /// Runs only at session boundaries (called from `Store::open`). ADR-0019 §5.
-fn maybe_rotate_log(memory_dir: &Path, log_path: &Path) -> Result<(), Error> {
-    let metadata = match std::fs::metadata(log_path) {
+fn maybe_rotate_log(memory_dir: &Path, series: &str) -> Result<(), Error> {
+    let log_path = memory_dir.join(format!("{series}.jsonl"));
+    let metadata = match std::fs::metadata(&log_path) {
         Ok(m) => m,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(Error::Io(err)),
@@ -4770,23 +4874,23 @@ fn maybe_rotate_log(memory_dir: &Path, log_path: &Path) -> Result<(), Error> {
     let line_over = if size_over {
         true
     } else {
-        count_lines(log_path)? >= LOG_ROTATE_MAX_LINES
+        count_lines(&log_path)? >= LOG_ROTATE_MAX_LINES
     };
     if !(size_over || line_over) {
         return Ok(());
     }
     let _lock = AverLock::acquire(memory_dir)?;
-    let n = next_rotation_index(memory_dir)?;
-    let intermediate = memory_dir.join(format!("log.{n}.jsonl"));
-    std::fs::rename(log_path, &intermediate)?;
-    let target = memory_dir.join(format!("log.{n}.jsonl.gz"));
+    let n = next_rotation_index(memory_dir, series)?;
+    let intermediate = memory_dir.join(format!("{series}.{n}.jsonl"));
+    std::fs::rename(&log_path, &intermediate)?;
+    let target = memory_dir.join(format!("{series}.{n}.jsonl.gz"));
     gzip_file(&intermediate, &target)?;
     std::fs::remove_file(&intermediate)?;
     // Touch a fresh empty active log.
     let _ = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log_path)?;
+        .open(&log_path)?;
     Ok(())
 }
 
@@ -4814,7 +4918,7 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("embedding: {0}")]
     Embedding(#[from] vector::EmbeddingError),
-    #[error("privacy filter rejected content: {0:?}")]
+    #[error("privacy filter rejected content: {0}")]
     Privacy(#[from] PrivacyRejection),
     #[error("invalid {kind} value in database: {value:?}")]
     EnumParse { kind: &'static str, value: String },
@@ -4868,6 +4972,10 @@ pub enum Error {
     MissingCandidate { candidate_id: i64 },
     #[error("missing observation: observation {observation_id} does not exist")]
     MissingObservation { observation_id: String },
+    #[error("observation id collision: {observation_id} already exists with different content")]
+    ObservationIdCollision { observation_id: String },
+    #[error("missing entity type: {name} (ontology bootstrap incomplete)")]
+    MissingEntityType { name: &'static str },
     #[error("invalid candidate claim status for candidate {candidate_id}: {status}")]
     InvalidCandidateStatus { candidate_id: i64, status: String },
     #[error("invalid candidate status filter: {status}")]
@@ -5022,6 +5130,10 @@ pub fn replay_with_mode(
     ensure_sqlite_vec_registered();
 
     std::fs::create_dir_all(memory_dir)?;
+    // Hold the advisory lock for the whole run (same as vacuum/rotation):
+    // replay swaps in a fresh db.sqlite, so a live Store writing meanwhile
+    // would race the swap.
+    let _lock = AverLock::acquire(memory_dir)?;
     let db_path = memory_dir.join("db.sqlite");
     let partial_path = memory_dir.join("db.sqlite.partial");
 
@@ -5099,7 +5211,7 @@ pub fn replay_with_mode(
 
     match result {
         Ok(report) => {
-            // Atomic swap: only overwrite db.sqtilte after success.
+            // Atomic swap: only overwrite db.sqlite after success.
             let _ = std::fs::remove_file(&db_path);
             let _ = std::fs::remove_file(memory_dir.join("db.sqlite-wal"));
             let _ = std::fs::remove_file(memory_dir.join("db.sqlite-shm"));
@@ -5111,42 +5223,40 @@ pub fn replay_with_mode(
 }
 
 fn collect_replay_inputs(memory_dir: &Path) -> Result<Vec<PathBuf>, Error> {
-    let mut rotated: Vec<(u32, PathBuf)> = Vec::new();
-    let read_dir = match std::fs::read_dir(memory_dir) {
-        Ok(rd) => rd,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Vec::new());
-        }
-        Err(err) => return Err(Error::Io(err)),
-    };
-    for entry in read_dir {
-        let entry = entry?;
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        let Some(rest) = name.strip_prefix("log.") else {
-            continue;
+    let mut inputs: Vec<PathBuf> = Vec::new();
+    // Each series replays oldest-first: rotated archives in numeric order,
+    // then the active file. Series order is fixed (claims before events
+    // before observations) so records apply after the rows they reference.
+    for series in ROTATED_LOG_SERIES {
+        let mut rotated: Vec<(u32, PathBuf)> = Vec::new();
+        let read_dir = match std::fs::read_dir(memory_dir) {
+            Ok(rd) => rd,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Vec::new());
+            }
+            Err(err) => return Err(Error::Io(err)),
         };
-        let Some(num) = rest.strip_suffix(".jsonl.gz") else {
-            continue;
-        };
-        if let Ok(n) = num.parse::<u32>() {
-            rotated.push((n, entry.path()));
+        let prefix = format!("{series}.");
+        for entry in read_dir {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let Some(rest) = name.strip_prefix(&prefix) else {
+                continue;
+            };
+            let Some(num) = rest.strip_suffix(".jsonl.gz") else {
+                continue;
+            };
+            if let Ok(n) = num.parse::<u32>() {
+                rotated.push((n, entry.path()));
+            }
         }
-    }
-    rotated.sort_by_key(|(n, _)| *n);
-
-    let mut inputs: Vec<PathBuf> = rotated.into_iter().map(|(_, p)| p).collect();
-    let active = memory_dir.join("log.jsonl");
-    if active.exists() {
-        inputs.push(active);
-    }
-    let events = memory_dir.join("events.jsonl");
-    if events.exists() {
-        inputs.push(events);
-    }
-    let observations = memory_dir.join("observations.jsonl");
-    if observations.exists() {
-        inputs.push(observations);
+        rotated.sort_by_key(|(n, _)| *n);
+        inputs.extend(rotated.into_iter().map(|(_, p)| p));
+        let active = memory_dir.join(format!("{series}.jsonl"));
+        if active.exists() {
+            inputs.push(active);
+        }
     }
     let agents_dir = memory_dir.join("agents");
     if agents_dir.exists() {
@@ -5628,12 +5738,11 @@ fn infer_entity_type_name_on(conn: &Connection, entity: &str) -> Result<String, 
 /// every entity as Thing would silently lose that information.
 fn ensure_entity_on(conn: &Connection, entity: &str, now: i64) -> Result<(), Error> {
     let inferred_type = infer_entity_type_name_on(conn, entity)?;
-    let type_id = entity_type_id_on(conn, &inferred_type)?.unwrap_or_else(|| {
-        entity_type_id_on(conn, "Thing")
-            .expect("Thing lookup should not fail")
-            .expect("ontology bootstrap should seed Thing")
-    });
-    let thing_id = entity_type_id_on(conn, "Thing")?.expect("ontology bootstrap should seed Thing");
+    // `Thing` is seeded by the ontology bootstrap; a missing row means a
+    // corrupt or seedless database — report it instead of panicking.
+    let thing_id =
+        entity_type_id_on(conn, "Thing")?.ok_or(Error::MissingEntityType { name: "Thing" })?;
+    let type_id = entity_type_id_on(conn, &inferred_type)?.unwrap_or(thing_id);
     // When the inferred type falls back to `Thing` (no `prefix:` and no
     // synonym match), surface the entity for consolidation review instead of
     // silently coercing.

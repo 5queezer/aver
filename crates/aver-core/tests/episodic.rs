@@ -1016,3 +1016,94 @@ fn recall_pruned_observation_includes_audit_marker_and_prune_status() {
         Some(marker_id.as_str())
     );
 }
+
+#[test]
+fn record_observation_is_idempotent_for_identical_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event_id = store
+        .record_event("session-1", "message", "payload", "test")
+        .unwrap();
+
+    let first = store
+        .record_observation(
+            "session-1",
+            "continuity note",
+            ObservationRelevance::High,
+            &[event_id],
+            "observer",
+        )
+        .unwrap();
+    let second = store
+        .record_observation(
+            "session-1",
+            "continuity note",
+            ObservationRelevance::High,
+            &[event_id],
+            "observer",
+        )
+        .unwrap();
+
+    assert_eq!(first, second);
+    // 64-bit digest (widened from 48-bit truncation).
+    assert_eq!(first.len(), 16);
+    assert_eq!(
+        store
+            .list_observations_for_session("session-1")
+            .unwrap()
+            .len(),
+        1,
+        "an identical retry must not duplicate the row"
+    );
+    // Nor append a duplicate log line.
+    let log = std::fs::read_to_string(dir.path().join("observations.jsonl")).unwrap();
+    assert_eq!(log.matches("\"record_observation\"").count(), 1);
+}
+
+#[test]
+fn record_observation_detects_id_collision_instead_of_overwriting() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event_id = store
+        .record_event("session-1", "message", "payload", "test")
+        .unwrap();
+    let id = store
+        .record_observation(
+            "session-1",
+            "continuity note",
+            ObservationRelevance::High,
+            &[event_id],
+            "observer",
+        )
+        .unwrap();
+
+    // Simulate a colliding row: same id, different content (the state an
+    // INSERT OR REPLACE would have silently clobbered).
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.execute(
+        "UPDATE observations SET content = 'different' WHERE id = ?1",
+        [&id],
+    )
+    .unwrap();
+    drop(conn);
+
+    let err = store
+        .record_observation(
+            "session-1",
+            "continuity note",
+            ObservationRelevance::High,
+            &[event_id],
+            "observer",
+        )
+        .expect_err("a collision must error, not silently overwrite");
+    assert!(
+        matches!(err, aver_core::Error::ObservationIdCollision { .. }),
+        "unexpected error: {err:?}"
+    );
+
+    // The pre-existing row is untouched, and no new log line was appended.
+    let observation = store.get_observation(&id).unwrap();
+    assert_eq!(observation.content, "different");
+    let log = std::fs::read_to_string(dir.path().join("observations.jsonl")).unwrap();
+    assert_eq!(log.matches("\"record_observation\"").count(), 1);
+}

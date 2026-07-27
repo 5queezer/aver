@@ -84,8 +84,12 @@ fn extract_from_payload(event_id: i64, payload: &str) -> Vec<CandidateClaimDraft
     }
 
     // Rule 4: "prefer X for|over|instead" / "use X for|over|instead" / "using X for|over|instead"
+    // Starters must begin on a word boundary so "use " does not match inside
+    // "because " or "reuse ".
     for starter in ["prefer ", "use ", "using "] {
-        if let Some(after_verb) = lower.find(starter).map(|pos| &lower[pos + starter.len()..]) {
+        if let Some(after_verb) =
+            find_word_boundary(&lower, starter).map(|pos| &lower[pos + starter.len()..])
+        {
             // find first occurrence of "for ", "over ", or "instead"
             let object = if let Some(pos) = find_first(after_verb, &["for ", "over ", "instead"]) {
                 trim_trailing(&after_verb[..pos])
@@ -113,7 +117,71 @@ fn extract_from_payload(event_id: i64, payload: &str) -> Vec<CandidateClaimDraft
         }
     }
 
-    drafts
+    dedupe_drafts(drafts)
+}
+
+/// Drop duplicate and overlapping drafts. Two rules can parse one sentence
+/// ("i prefer tabs over spaces" hits both Rule 1a and Rule 4); when one
+/// draft's object merely extends another's with a comparison conjunction,
+/// keep the tighter extraction.
+fn dedupe_drafts(drafts: Vec<CandidateClaimDraft>) -> Vec<CandidateClaimDraft> {
+    let mut kept: Vec<CandidateClaimDraft> = Vec::new();
+    'outer: for draft in drafts {
+        let mut i = 0;
+        while i < kept.len() {
+            let other = &kept[i];
+            let same_slot = other.event_id == draft.event_id
+                && other.subject == draft.subject
+                && other.predicate == draft.predicate;
+            if same_slot {
+                if other.object == draft.object
+                    || is_conjunction_extension(&other.object, &draft.object)
+                {
+                    // Exact duplicate, or the kept draft is already the
+                    // tighter extraction.
+                    continue 'outer;
+                }
+                if is_conjunction_extension(&draft.object, &other.object) {
+                    // The new draft is the tighter extraction; replace the
+                    // kept one and keep scanning.
+                    kept.remove(i);
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        kept.push(draft);
+    }
+    kept
+}
+
+/// True when `longer` is `shorter` plus a comparison conjunction, e.g.
+/// "tabs over spaces" extending "tabs" with " over ...".
+fn is_conjunction_extension(shorter: &str, longer: &str) -> bool {
+    longer.strip_prefix(shorter).is_some_and(|rest| {
+        [" for ", " over ", " instead "]
+            .iter()
+            .any(|conjunction| rest.starts_with(conjunction))
+    })
+}
+
+/// Find the first occurrence of `needle` starting on a word boundary (start
+/// of the string or a non-alphanumeric predecessor).
+fn find_word_boundary(haystack: &str, needle: &str) -> Option<usize> {
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(needle) {
+        let abs = start + pos;
+        let on_boundary = abs == 0
+            || haystack[..abs]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| !ch.is_ascii_alphanumeric());
+        if on_boundary {
+            return Some(abs);
+        }
+        start = abs + 1;
+    }
+    None
 }
 
 fn draft(event_id: i64, subject: &str, predicate: &str, object: &str) -> CandidateClaimDraft {

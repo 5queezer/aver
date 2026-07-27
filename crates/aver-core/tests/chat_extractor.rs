@@ -109,3 +109,36 @@ fn full_store_integration_record_propose_promote_recall() {
     let candidate = store.get_candidate_claim(candidate_ids[0]).unwrap();
     assert_eq!(candidate.event_id, event_id);
 }
+
+#[test]
+fn rule4_starters_require_a_word_boundary() {
+    let extractor = ChatEventExtractor;
+    // "use " occurs inside "reuse" and "because"; neither may trigger Rule 4.
+    for payload in [
+        "we reuse containers for speed",
+        "it works because rust wins for reliability",
+    ] {
+        let drafts = extractor.extract(&[make_event(1, payload)]).unwrap();
+        assert!(
+            drafts.iter().all(|d| d.predicate != "prefers"),
+            "{payload:?} should not produce prefers drafts, got {drafts:?}"
+        );
+    }
+}
+
+#[test]
+fn overlapping_prefer_drafts_dedupe_to_the_tighter_object() {
+    let extractor = ChatEventExtractor;
+    // Rule 1a ("i prefer X") and Rule 4 ("prefer X over Y") both parse this
+    // sentence; only the tighter extraction should survive.
+    let drafts = extractor
+        .extract(&[make_event(1, "I prefer tabs over spaces")])
+        .unwrap();
+    let prefers: Vec<_> = drafts.iter().filter(|d| d.predicate == "prefers").collect();
+    assert_eq!(
+        prefers.len(),
+        1,
+        "overlapping drafts must dedupe, got {drafts:?}"
+    );
+    assert_eq!(prefers[0].object, "tabs");
+}

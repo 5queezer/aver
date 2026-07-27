@@ -81,7 +81,17 @@ Replay is strict by default: the first line that fails to apply aborts the
 run (ADR-0019 §4). For disaster recovery, `aver replay --lenient`
 quarantines invalid lines instead — each is reported with path, line number,
 and error — and continues with the next line, so one poisoned record cannot
-block rebuilding every other projection.
+block rebuilding every other projection. Replay holds the advisory `.lock`
+for the whole run (like vacuum and rotation), so it cannot race a live
+store writing to the same memory directory.
+
+Log rotation compresses all three series — `log.jsonl`, `events.jsonl`, and
+`observations.jsonl` — into `{series}.{N}.jsonl.gz` at session boundaries.
+Replay walks rotated archives in numeric order before the active file of
+each series, so no records are skipped. Compression writes a temporary file
+and renames atomically; recovery verifies archive integrity before dropping
+a plain intermediate, so a crash mid-compression cannot lose log tail
+records.
 
 **Derived projections are not logged.** Vector chunks (chunk text plus
 embedding vectors and the `vec0` ANN index) are deliberately absent from the

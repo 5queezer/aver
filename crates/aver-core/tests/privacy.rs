@@ -672,3 +672,50 @@ fn privacy_filter_rejects_github_user_to_server_token() {
     let token = synthetic_token(&["gh", "u_", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
     assert!(privacy_filter(&format!("GITHUB_USER_SERVER_TOKEN={token}")).is_err());
 }
+
+#[test]
+fn privacy_filter_rejects_json_quoted_github_pat() {
+    let token = synthetic_token(&["gh", "p_", "abcdefghijklmnopqrstuvwxyz1234567890abcd"]);
+    // The quote before the token must not shield it from detection.
+    let result = privacy_filter(&format!(r#"{{"token":"{token}"}}"#));
+
+    assert_eq!(result, Err(PrivacyRejection::GitHubPat));
+}
+
+#[test]
+fn privacy_filter_rejects_json_quoted_openai_key() {
+    let token = synthetic_token(&["sk", "-", "abcdefghijklmnopqrstuvwxyz1234567890"]);
+    let result = privacy_filter(&format!(r#"{{"OPENAI_API_KEY":"{token}"}}"#));
+
+    assert_eq!(result, Err(PrivacyRejection::OpenAiKey));
+}
+
+#[test]
+fn privacy_filter_rejects_json_quoted_jwt() {
+    let token = synthetic_token(&[
+        "eyJhbGciOiJIUzI1NiJ9",
+        ".",
+        "eyJzdWIiOiIxMjM0NTY3ODkw",
+        ".signature123",
+    ]);
+    let result = privacy_filter(&format!(r#"{{"Authorization":"Bearer {token}"}}"#));
+
+    assert_eq!(result, Err(PrivacyRejection::Jwt));
+}
+
+#[test]
+fn privacy_filter_path_allows_environment_suffix() {
+    // `/.environment` (and similar suffixes) are benign: only `.env`,
+    // `.envrc`, and `.env.*` segments are environment files.
+    assert!(privacy_filter_path("/project/.environment").is_ok());
+    assert!(privacy_filter_path("config/.envrc.bak").is_ok());
+    // Guard against over-tightening: real env paths still reject.
+    assert_eq!(
+        privacy_filter_path("config/.env.production"),
+        Err(PrivacyRejection::EnvPath)
+    );
+    assert_eq!(
+        privacy_filter_path(".env.local"),
+        Err(PrivacyRejection::EnvPath)
+    );
+}
