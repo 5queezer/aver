@@ -578,6 +578,31 @@ fn add_claim_from_llm_agent_applies_inferred_confidence_policy() {
 }
 
 #[test]
+fn decay_inferred_confidence_does_not_amplify_future_claims() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let now_ts = time::OffsetDateTime::now_utc().unix_timestamp();
+    let claim_id = store
+        .add_claim_from_agent(
+            "summary_bot",
+            aver_core::AgentKind::Llm,
+            "project",
+            "prefers",
+            "offline_tests",
+            "prose_extractor",
+        )
+        .unwrap();
+    let before = store.get_claim(claim_id).unwrap();
+
+    store
+        .decay_inferred_confidence_at(now_ts - 60, 1_000.0)
+        .unwrap();
+
+    let after = store.get_claim(claim_id).unwrap();
+    assert_eq!(after.confidence, before.confidence);
+}
+
+#[test]
 fn add_claim_records_last_verified_at_for_policy_scoring() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
@@ -1088,4 +1113,24 @@ fn add_claim_on_seedless_database_errors_instead_of_panicking() {
         matches!(err, aver_core::Error::MissingEntityType { name: "Thing" }),
         "unexpected error: {err:?}"
     );
+}
+
+#[test]
+fn ontology_extension_without_relates_to_returns_typed_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+    conn.execute("DELETE FROM predicate_types WHERE name = 'relates_to'", [])
+        .unwrap();
+    drop(conn);
+
+    let err = store
+        .add_claim("alpha", "brand_new_relation", "beta", "test")
+        .expect_err("missing relates_to seed must be a typed error");
+
+    assert!(matches!(
+        err,
+        aver_core::Error::MissingEntityType { name: "relates_to" }
+    ));
 }

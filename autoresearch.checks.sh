@@ -34,16 +34,46 @@ if grep -rn '#\[ignore\]' crates/ 2>/dev/null | grep -v -- '#\[ignore *=' | grep
 fi
 
 echo "=== log-first invariant heuristic ==="
-LIB=crates/aver-core/src/lib.rs
-if [ -f "$LIB" ]; then
-  APPEND_LINE=$(grep -n "append_jsonl" "$LIB" | head -1 | cut -d: -f1)
-  INSERT_LINE=$(grep -n 'INSERT INTO claims' "$LIB" | head -1 | cut -d: -f1)
-  if [ -n "$APPEND_LINE" ] && [ -n "$INSERT_LINE" ]; then
-    if [ "$APPEND_LINE" -gt "$INSERT_LINE" ]; then
-      echo "FAIL: append_jsonl appears after INSERT INTO claims in lib.rs (log-first violated)."
-      FAIL=1
-    fi
-  fi
+# Pair each claims INSERT with an append in the same Rust function. The check
+# fails closed when no write path is exercised, so module moves cannot silently
+# turn this gate into a no-op.
+if ! python3 - <<'PY'
+import pathlib
+import re
+import sys
+
+fn_start = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+[A-Za-z_][A-Za-z0-9_]*")
+checked = 0
+failed = False
+
+for path in sorted(pathlib.Path("crates/aver-core/src").glob("*.rs")):
+    # Replay rebuilds the SQLite projection from already-durable logs, so it is
+    # intentionally exempt from the live-write append boundary.
+    if path.name == "replay.rs":
+        continue
+    lines = path.read_text(encoding="utf-8").splitlines()
+    starts = [i for i, line in enumerate(lines) if fn_start.match(line)]
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(lines)
+        block = lines[start:end]
+        append_lines = [start + i + 1 for i, line in enumerate(block) if "append_jsonl(" in line]
+        insert_lines = [start + i + 1 for i, line in enumerate(block) if "INSERT INTO claims" in line]
+        if not insert_lines:
+            continue
+        checked += 1
+        if not append_lines or min(append_lines) > min(insert_lines):
+            name = lines[start].strip()
+            print(f"FAIL: claims INSERT is not preceded by append_jsonl in {path}:{start + 1} ({name}).")
+            failed = True
+
+if checked == 0:
+    print("FAIL: log-first heuristic matched no claim write functions; the check is stale.")
+    failed = True
+
+sys.exit(1 if failed else 0)
+PY
+then
+  FAIL=1
 fi
 
 echo "=== no committed secrets / env / keys ==="

@@ -100,4 +100,7 @@ first regenerate chunk rows from claim text (for example with
 `Store::add_embedded_vector_chunk_for_claim`, which creates a chunk and its
 embedding). `Store::backfill_vector_embeddings` is not a standalone restore
 path: it only fills embeddings for chunk rows that already exist but have no
-embedding.
+embedding. It processes a resumable batch of up to 100 rows; callers that need a
+smaller maintenance window can use `backfill_vector_embeddings_with_limit`.
+Individual provider failures leave those rows unfilled for a later retry without
+rolling back successful rows from the same batch.
