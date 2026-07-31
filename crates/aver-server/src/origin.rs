@@ -1,9 +1,9 @@
 //! Browser-origin validation helper for ADR-0020.
 //!
-//! Slice 1 only exposes the helper; later slices mount it on
-//! `/oauth/authorize` and the consent endpoints. The function is deliberately
-//! permissive for non-browser clients (curl, MCP HTTP clients) which omit
-//! both the `Origin` and `Sec-Fetch-Site` request headers.
+//! Mounted by the consent flow ([`crate::consent`]) on `/oauth/authorize`,
+//! `/oauth/authorize/decision`, and `/oauth/consent/revoke`. The function is
+//! deliberately permissive for non-browser clients (curl, MCP HTTP clients)
+//! which omit both the `Origin` and `Sec-Fetch-Site` request headers.
 
 use axum::http::{HeaderMap, header};
 use url::Url;

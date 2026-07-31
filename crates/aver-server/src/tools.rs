@@ -7,6 +7,12 @@ use aver_core::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Embedding-model label recorded on vector chunks written via
+/// `add_vector_chunk`. The server stores retrieval text only — embedding
+/// happens outside the MCP surface — so this names the model the chunk is
+/// tuned for rather than anything computed in-process.
+const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text";
+
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RememberClaimParams {
     /// Durable memory subject.
@@ -33,9 +39,6 @@ pub struct RememberClaimParams {
 pub struct RecallParams {
     /// Natural-language or entity query to retrieve durable memory. Start broad enough to find related claims, then narrow with filters if needed.
     pub query: String,
-    /// Hybrid retrieval weight.
-    #[serde(default)]
-    pub alpha: Option<f64>,
     /// Graph hop limit.
     #[serde(default)]
     pub hops: Option<usize>,
@@ -132,7 +135,9 @@ pub struct ContradictParams {
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct ConsolidateParams {
-    /// ADR-0021 scope filter.
+    /// Consolidation scope. Only `"all"` (or omission) is accepted today —
+    /// consolidation always recomputes derived state across every scope;
+    /// per-scope consolidation is not implemented.
     #[serde(default)]
     pub scope: Option<String>,
 }
@@ -598,13 +603,6 @@ impl AverTools {
             .store
             .recall_text_with_filters(&params.query, filters)?;
         claims.truncate(top_k);
-        let _alpha = if let Some(alpha) = params.alpha {
-            aver_core::retrieval::HybridWeights::try_new(alpha)
-                .map_err(|err| anyhow::anyhow!("invalid alpha: {err}"))?
-                .alpha
-        } else {
-            aver_core::retrieval::HybridWeights::for_query(&params.query).alpha
-        };
         let hops = validate_hops(params.hops.unwrap_or(2))?;
         let mut subgraph = self
             .store
@@ -859,7 +857,7 @@ impl AverTools {
         }
         let chunk_id =
             self.store
-                .add_vector_chunk(params.claim_id, &params.text, "nomic-embed-text")?;
+                .add_vector_chunk(params.claim_id, &params.text, DEFAULT_EMBEDDING_MODEL)?;
         Ok(VectorChunkView {
             id: chunk_id,
             claim_id: params.claim_id,

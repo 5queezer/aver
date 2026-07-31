@@ -16,10 +16,13 @@ pub struct ServerConfig {
 
 impl ServerConfig {
     pub fn from_env() -> anyhow::Result<Self> {
+        use anyhow::Context;
+
         let host = std::env::var("AVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let port = std::env::var("AVER_PORT")
             .unwrap_or_else(|_| "3317".to_string())
-            .parse()?;
+            .parse()
+            .context("invalid AVER_PORT")?;
         let base_url =
             std::env::var("AVER_BASE_URL").unwrap_or_else(|_| format!("http://{host}:{port}"));
         let memory_dir = std::env::var("AVER_MEMORY_DIR").unwrap_or_else(|_| ".aver".to_string());

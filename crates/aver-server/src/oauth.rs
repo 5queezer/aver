@@ -8,8 +8,26 @@ pub fn pkce_s256_challenge(verifier: &str) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
 }
 
+/// Constant-time byte-slice equality. Shared by PKCE challenge verification
+/// here and the consent flow's anti-CSRF HMAC comparison, so both surfaces
+/// avoid early-exit `==` on secrets. Length inequality still leaks length
+/// (both inputs are fixed-length digests in practice).
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 pub fn verify_pkce_s256(verifier: &str, challenge: &str) -> bool {
-    pkce_s256_challenge(verifier) == challenge
+    constant_time_eq(
+        pkce_s256_challenge(verifier).as_bytes(),
+        challenge.as_bytes(),
+    )
 }
 
 pub fn authorization_server_metadata(base_url: &str) -> serde_json::Value {
