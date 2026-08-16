@@ -2,8 +2,7 @@ use tree_sitter::Node;
 
 use crate::{
     Error, ExtractedFact, collect_function_variable_names, collect_heritage_type_name,
-    collect_names_from_kinds, definition_facts, first_named_descendant_of_kind,
-    parse_with_language,
+    collect_names_from_kinds, definition_facts, named_child_of_kind, parse_with_language,
 };
 
 pub fn extract_javascript_functions(source: &str) -> Result<Vec<String>, Error> {
@@ -23,20 +22,20 @@ pub fn extract_javascript_classes(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_javascript_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut facts = definition_facts(path, "Function", extract_javascript_functions(source)?);
+    let tree = parse_with_language(source, tree_sitter_javascript::language())?;
+    let root = tree.root_node();
+    let source = source.as_bytes();
+
+    let mut functions =
+        collect_names_from_kinds(root, source, &["function_declaration", "method_definition"])?;
+    collect_function_variable_names(root, source, &mut functions)?;
+    let mut facts = definition_facts(path, "Function", functions);
     facts.extend(definition_facts(
         path,
         "Class",
-        extract_javascript_classes(source)?,
+        collect_names_from_kinds(root, source, &["class_declaration"])?,
     ));
-    facts.extend(extract_javascript_extends_facts(source)?);
-    Ok(facts)
-}
-
-fn extract_javascript_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let tree = parse_with_language(source, tree_sitter_javascript::language())?;
-    let mut facts = Vec::new();
-    collect_javascript_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
+    collect_javascript_extends_facts(root, source, &mut facts)?;
     Ok(facts)
 }
 
@@ -47,7 +46,7 @@ fn collect_javascript_extends_facts(
 ) -> Result<(), Error> {
     if node.kind() == "class_declaration"
         && let Some(class_name) = node.child_by_field_name("name")
-        && let Some(heritage) = first_named_descendant_of_kind(node, "class_heritage")
+        && let Some(heritage) = named_child_of_kind(node, "class_heritage")
     {
         let mut base_name = None;
         collect_heritage_type_name(heritage, source, &mut base_name)?;

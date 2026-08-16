@@ -27,20 +27,19 @@ pub fn extract_python_classes(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_python_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut facts = definition_facts(path, "Function", extract_python_functions(source)?);
-    facts.extend(definition_facts(
-        path,
-        "Class",
-        extract_python_classes(source)?,
-    ));
-    facts.extend(extract_python_extends_facts(source)?);
-    Ok(facts)
-}
-
-fn extract_python_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
     let tree = parse_with_language(source, tree_sitter_python::language())?;
-    let mut facts = Vec::new();
-    collect_python_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
+    let root = tree.root_node();
+    let source = source.as_bytes();
+
+    let mut functions = Vec::new();
+    collect_named_nodes(root, source, &["function_definition"], &mut functions)?;
+    let mut facts = definition_facts(path, "Function", functions);
+
+    let mut classes = Vec::new();
+    collect_named_nodes(root, source, &["class_definition"], &mut classes)?;
+    facts.extend(definition_facts(path, "Class", classes));
+
+    collect_python_extends_facts(root, source, &mut facts)?;
     Ok(facts)
 }
 

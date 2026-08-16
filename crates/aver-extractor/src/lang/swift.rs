@@ -70,48 +70,84 @@ pub fn extract_swift_protocols(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_swift_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut facts = definition_facts(path, "Function", extract_swift_functions(source)?);
+    let tree = parse_with_language(source, tree_sitter_swift::language())?;
+    let root = tree.root_node();
+    let source = source.as_bytes();
+
+    let mut facts = definition_facts(
+        path,
+        "Function",
+        collect_names_from_kinds(root, source, &["function_declaration"])?,
+    );
     facts.extend(definition_facts(
         path,
         "Class",
-        extract_swift_classes(source)?,
+        collect_names_from_kinds_with_field_text(
+            root,
+            source,
+            &["class_declaration"],
+            "declaration_kind",
+            "class",
+        )?,
     ));
     facts.extend(definition_facts(
         path,
         "Struct",
-        extract_swift_structs(source)?,
+        collect_names_from_kinds_with_field_text(
+            root,
+            source,
+            &["class_declaration"],
+            "declaration_kind",
+            "struct",
+        )?,
     ));
-    facts.extend(definition_facts(path, "Enum", extract_swift_enums(source)?));
+    facts.extend(definition_facts(
+        path,
+        "Enum",
+        collect_names_from_kinds_with_field_text(
+            root,
+            source,
+            &["class_declaration"],
+            "declaration_kind",
+            "enum",
+        )?,
+    ));
     facts.extend(definition_facts(
         path,
         "Actor",
-        extract_swift_actors(source)?,
+        collect_names_from_kinds_with_field_text(
+            root,
+            source,
+            &["class_declaration"],
+            "declaration_kind",
+            "actor",
+        )?,
     ));
-    facts.extend(definition_facts(
-        path,
-        "Protocol",
-        extract_swift_protocols(source)?,
-    ));
-    facts.extend(extract_swift_extends_facts(source)?);
-    facts.extend(extract_swift_implements_facts(source)?);
+    let protocols = collect_names_from_kinds(root, source, &["protocol_declaration"])?;
+    facts.extend(definition_facts(path, "Protocol", protocols.clone()));
+
+    let protocols = protocols.into_iter().collect::<HashSet<_>>();
+    collect_swift_extends_facts(root, source, &protocols, &mut facts)?;
+    collect_swift_implements_facts(root, source, &protocols, &mut facts)?;
     Ok(facts)
 }
 
-fn extract_swift_implements_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let protocols = extract_swift_protocols(source)?
-        .into_iter()
-        .collect::<HashSet<_>>();
-    let tree = parse_with_language(source, tree_sitter_swift::language())?;
-    let mut facts = Vec::new();
-    collect_swift_implements_facts(tree.root_node(), source.as_bytes(), &protocols, &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_swift_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let tree = parse_with_language(source, tree_sitter_swift::language())?;
-    let mut facts = Vec::new();
-    collect_swift_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
-    Ok(facts)
+/// Maps a Swift `class_declaration` to its fact kind, keeping actors distinct
+/// from classes so one entity never gets two identities.
+fn swift_declaration_kind(node: Node<'_>, source: &[u8]) -> Option<&'static str> {
+    if node.kind() != "class_declaration" {
+        return None;
+    }
+    match node
+        .child_by_field_name("declaration_kind")
+        .and_then(|kind| kind.utf8_text(source).ok())
+    {
+        Some("class") => Some("Class"),
+        Some("actor") => Some("Actor"),
+        Some("struct") => Some("Struct"),
+        Some("enum") => Some("Enum"),
+        _ => None,
+    }
 }
 
 fn collect_swift_implements_facts(
@@ -120,15 +156,7 @@ fn collect_swift_implements_facts(
     protocols: &HashSet<String>,
     facts: &mut Vec<ExtractedFact>,
 ) -> Result<(), Error> {
-    if node.kind() == "class_declaration"
-        && let Some(type_kind) = node
-            .child_by_field_name("declaration_kind")
-            .and_then(|kind| match kind.utf8_text(source).ok()? {
-                "class" | "actor" => Some("Class"),
-                "struct" => Some("Struct"),
-                "enum" => Some("Enum"),
-                _ => None,
-            })
+    if let Some(type_kind) = swift_declaration_kind(node, source)
         && let Some(type_name) = node.child_by_field_name("name")
     {
         let mut protocol_names = Vec::new();
@@ -153,23 +181,24 @@ fn collect_swift_implements_facts(
     Ok(())
 }
 
+/// Collects the types named by a declaration's own `inheritance_specifier`
+/// children, without descending into the body where nested declarations have
+/// their own inheritance clauses.
 fn collect_swift_inheritance_type_names(
     node: Node<'_>,
     source: &[u8],
     names: &mut Vec<String>,
 ) -> Result<(), Error> {
-    if node.kind() == "inheritance_specifier" {
-        if let Some(inherits_from) = node.child_by_field_name("inherits_from")
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() != "inheritance_specifier" {
+            continue;
+        }
+        if let Some(inherits_from) = child.child_by_field_name("inherits_from")
             && let Some(name) = first_named_descendant_of_kind(inherits_from, "type_identifier")
         {
             names.push(name.utf8_text(source)?.to_string());
         }
-        return Ok(());
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_swift_inheritance_type_names(child, source, names)?;
     }
     Ok(())
 }
@@ -177,20 +206,15 @@ fn collect_swift_inheritance_type_names(
 fn collect_swift_extends_facts(
     node: Node<'_>,
     source: &[u8],
+    protocols: &HashSet<String>,
     facts: &mut Vec<ExtractedFact>,
 ) -> Result<(), Error> {
-    let type_kind = if node.kind() == "class_declaration"
-        && node
-            .child_by_field_name("declaration_kind")
-            .is_some_and(|kind| {
-                kind.utf8_text(source)
-                    .is_ok_and(|text| matches!(text, "class" | "actor"))
-            }) {
-        Some("Class")
-    } else if node.kind() == "protocol_declaration" {
+    let class_kind =
+        swift_declaration_kind(node, source).filter(|kind| matches!(*kind, "Class" | "Actor"));
+    let type_kind = if node.kind() == "protocol_declaration" {
         Some("Protocol")
     } else {
-        None
+        class_kind
     };
     if let Some(type_kind) = type_kind
         && let Some(type_name) = node.child_by_field_name("name")
@@ -204,7 +228,12 @@ fn collect_swift_extends_facts(
                 predicate: "extends".to_string(),
                 object: format!("Protocol:{base_name}"),
             }));
-        } else if let Some(base_name) = base_names.into_iter().next() {
+        } else if let Some(base_name) = base_names
+            .into_iter()
+            .find(|base_name| !protocols.contains(base_name))
+        {
+            // The superclass is the first inheritance entry that is not a
+            // file-locally declared protocol.
             facts.push(ExtractedFact {
                 subject,
                 predicate: "extends".to_string(),
@@ -215,7 +244,7 @@ fn collect_swift_extends_facts(
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        collect_swift_extends_facts(child, source, facts)?;
+        collect_swift_extends_facts(child, source, protocols, facts)?;
     }
     Ok(())
 }
