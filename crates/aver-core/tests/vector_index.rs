@@ -8,7 +8,7 @@
 //!   new path (verified by the existing hybrid_retrieval suite).
 
 use aver_core::ClaimWrite;
-use aver_core::{Store, VECTOR_INDEX_DIM, vector::MockEmbeddingClient};
+use aver_core::{Store, VECTOR_INDEX_DIM, retrieval::HybridWeights, vector::MockEmbeddingClient};
 
 fn make_embedding(seed: f32) -> Vec<f32> {
     // Synthetic VECTOR_INDEX_DIM-long vector. The first slot dominates so
@@ -80,7 +80,7 @@ fn knn_query_returns_nearest_neighbour_first() {
     // Query closest to seed=1.0 — `near` should rank first.
     let query_client = MockEmbeddingClient::new(make_embedding(1.0));
     let results = store
-        .recall_hybrid_claims("Near", &query_client, 3)
+        .recall_hybrid_claims("Near", &query_client, 3, HybridWeights::for_query("Near"))
         .unwrap();
     assert!(!results.is_empty());
     assert_eq!(results[0].id, near, "nearest neighbour should rank first");

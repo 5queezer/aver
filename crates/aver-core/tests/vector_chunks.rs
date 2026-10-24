@@ -4,6 +4,7 @@
 use aver_core::ClaimWrite;
 use aver_core::{
     Error, PrivacyRejection, Store,
+    retrieval::HybridWeights,
     vector::{EmbeddingClient, EmbeddingError, MockEmbeddingClient},
 };
 
@@ -410,7 +411,7 @@ fn recall_hybrid_claims_falls_back_to_text_when_vector_index_empty() {
     let client = MockEmbeddingClient::new(vec![1.0, 0.0]);
 
     let claims = store
-        .recall_hybrid_claims("stripe", &client, 8)
+        .recall_hybrid_claims("stripe", &client, 8, HybridWeights::for_query("stripe"))
         .expect("hybrid recall should use text fallback when no vectors exist");
 
     assert_eq!(claims.len(), 1);
@@ -423,7 +424,12 @@ fn recall_hybrid_claims_top_k_zero_does_not_embed_query() {
     let store = Store::open(dir.path()).unwrap();
 
     let claims = store
-        .recall_hybrid_claims("anything", &FailingEmbeddingClient, 0)
+        .recall_hybrid_claims(
+            "anything",
+            &FailingEmbeddingClient,
+            0,
+            HybridWeights::for_query("anything"),
+        )
         .expect("top_k=0 should short-circuit before embedding");
 
     assert!(claims.is_empty());

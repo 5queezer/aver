@@ -546,7 +546,7 @@ impl BeamMemory<'_> {
     ) -> Result<Vec<(String, String)>> {
         match self {
             Self::Direct(store) => Ok(store
-                .recall_hybrid_claims_with_alpha(question, embedder, top_k, weights)?
+                .recall_hybrid_claims(question, embedder, top_k, weights)?
                 .into_iter()
                 .map(|claim| (claim.subject, claim.object))
                 .collect()),

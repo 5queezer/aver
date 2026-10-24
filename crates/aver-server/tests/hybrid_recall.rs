@@ -202,7 +202,10 @@ fn recall_without_embedding_client_is_keyword() {
 }
 
 #[test]
-fn non_active_status_filter_uses_keyword_path() {
+fn non_active_status_filter_stays_hybrid() {
+    // Status (like scope, agent, predicate and min_confidence) is applied by
+    // core's `recall_hybrid_claims_with_filters`, so a non-ACTIVE filter no
+    // longer forces the keyword path.
     let dir = tempfile::tempdir().unwrap();
     let (tools, _, _) = seeded_tools(&dir);
 
@@ -213,5 +216,6 @@ fn non_active_status_filter_uses_keyword_path() {
         })
         .unwrap();
 
-    assert_eq!(recalled.retrieval, "keyword");
+    assert_eq!(recalled.retrieval, "hybrid");
+    assert!(!recalled.triples.is_empty());
 }

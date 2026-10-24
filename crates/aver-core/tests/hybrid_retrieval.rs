@@ -199,7 +199,7 @@ fn hybrid_recall_alpha_zero_prefers_graph_match_over_vector_match() {
     let client = MockEmbeddingClient::new(vec![1.0, 0.0]);
 
     let graph_first = store
-        .recall_hybrid_claims_with_alpha(
+        .recall_hybrid_claims(
             "auth_service",
             &client,
             2,
@@ -249,7 +249,7 @@ fn hybrid_recall_alpha_one_prefers_vector_match_over_graph_match() {
     let client = MockEmbeddingClient::new(vec![1.0, 0.0]);
 
     let vector_first = store
-        .recall_hybrid_claims_with_alpha(
+        .recall_hybrid_claims(
             "auth_service",
             &client,
             2,
@@ -258,4 +258,101 @@ fn hybrid_recall_alpha_one_prefers_vector_match_over_graph_match() {
         .unwrap();
 
     assert_eq!(vector_first[0].id, vector_match);
+}
+
+#[test]
+fn hybrid_recall_with_filters_applies_them_to_both_halves() {
+    use aver_core::{ClaimStatus, RecallFilters, ScopeWalk};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    // Same text in two scopes, both with a vector chunk matching the query.
+    let in_scope = store
+        .add_claim(ClaimWrite::new("auth_service", "depends_on", "stripe_sdk", "s").scope("proj/a"))
+        .unwrap();
+    let out_of_scope = store
+        .add_claim(ClaimWrite::new("auth_service", "depends_on", "stripe_sdk", "s").scope("proj/b"))
+        .unwrap();
+    // A vector-only candidate (no keyword overlap) that is low-confidence.
+    let weak = store
+        .add_claim(
+            ClaimWrite::new("billing", "uses", "ledger", "s")
+                .confidence(0.2)
+                .scope("proj/a"),
+        )
+        .unwrap();
+    for (id, text) in [
+        (in_scope, "auth_service depends_on stripe_sdk"),
+        (out_of_scope, "auth_service depends_on stripe_sdk"),
+        (weak, "billing uses ledger"),
+    ] {
+        store
+            .add_vector_chunk_with_embedding(id, text, "mock", &[1.0, 0.0])
+            .unwrap();
+    }
+    let weights = HybridWeights::try_new(1.0).unwrap();
+    let query = &[1.0_f32, 0.0];
+
+    // Scope filter removes the out-of-scope twin on both halves.
+    let scoped = store
+        .recall_hybrid_claims_with_filters(
+            "auth_service",
+            query,
+            5,
+            weights,
+            &RecallFilters {
+                scope: "proj/a".to_string(),
+                scope_walk: ScopeWalk::Exact,
+                ..RecallFilters::default()
+            },
+        )
+        .unwrap();
+    let ids: Vec<i64> = scoped.iter().map(|claim| claim.id).collect();
+    assert!(ids.contains(&in_scope) && ids.contains(&weak), "{ids:?}");
+    assert!(!ids.contains(&out_of_scope), "{ids:?}");
+
+    // min_confidence drops the vector-only candidate.
+    let confident = store
+        .recall_hybrid_claims_with_filters(
+            "auth_service",
+            query,
+            5,
+            weights,
+            &RecallFilters {
+                min_confidence: Some(0.5),
+                ..RecallFilters::default()
+            },
+        )
+        .unwrap();
+    let ids: Vec<i64> = confident.iter().map(|claim| claim.id).collect();
+    assert_eq!(ids, vec![in_scope, out_of_scope]);
+
+    // Non-ACTIVE statuses are selectable: retire one claim, ask for it.
+    store.retire_claim(out_of_scope, "stale").unwrap();
+    let retired = store
+        .recall_hybrid_claims_with_filters(
+            "auth_service",
+            query,
+            5,
+            weights,
+            &RecallFilters {
+                status: Some(ClaimStatus::Invalidated),
+                ..RecallFilters::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        retired.iter().map(|claim| claim.id).collect::<Vec<_>>(),
+        vec![out_of_scope]
+    );
+    // And the default (ACTIVE) no longer returns it.
+    let active = store
+        .recall_hybrid_claims(
+            "auth_service",
+            &MockEmbeddingClient::new(vec![1.0, 0.0]),
+            5,
+            weights,
+        )
+        .unwrap();
+    assert!(active.iter().all(|claim| claim.id != out_of_scope));
 }

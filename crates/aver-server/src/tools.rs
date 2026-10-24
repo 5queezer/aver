@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use aver_core::candidate_decision::CandidateTriage;
 use aver_core::decision::{DecisionClient, DecisionConfig, client_from_env};
 use aver_core::retrieval::HybridWeights;
-use aver_core::vector::{EmbeddingClient, EmbeddingError, VectorIndexConfig};
+use aver_core::vector::{EmbeddingClient, VectorIndexConfig};
 use aver_core::{
     AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, Error,
     ExtractionTriggerReason, GraphPathQuery, Observation, ObservationCoverage, ObservationRecall,
@@ -20,12 +20,6 @@ use crate::recall_log::{RecallMissFilters, RecallMissLog, RecallRequestShape};
 /// Query-embedding client for hybrid recall (ADR-0004), built at the server
 /// edge. `None` keeps recall on the keyword path.
 pub type Embedder = Box<dyn EmbeddingClient + Send + Sync>;
-
-/// How many hybrid candidates core ranks before the server applies the
-/// ADR-0021/0023 filters and truncates to `top_k`. Core's vector half asks
-/// the `vec0` index for `4 * top_k` neighbours and sqlite-vec caps `k` at
-/// 4096, so 1024 is the largest pool that stays on the indexed path.
-const HYBRID_CANDIDATE_POOL: usize = 1024;
 
 /// Reads the embedding configuration once. `AVER_EMBEDDING_URL` (an Ollama
 /// base URL) opts in; `AVER_EMBEDDING_MODEL` overrides the
@@ -53,16 +47,6 @@ fn ollama_embedder(url: Option<String>, model: &str) -> Option<Embedder> {
 #[cfg(not(feature = "ollama"))]
 fn ollama_embedder(_url: Option<String>, _model: &str) -> Option<Embedder> {
     None
-}
-
-/// Hands core the query embedding the server already computed, so one recall
-/// embeds the query once even though claims and chunks are ranked separately.
-struct PrecomputedEmbedding<'a>(&'a [f32]);
-
-impl EmbeddingClient for PrecomputedEmbedding<'_> {
-    fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
-        Ok(self.0.to_vec())
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -1055,13 +1039,12 @@ impl AverTools {
     }
 
     /// ADR-0004 hybrid half of [`AverTools::recall`]: claims ranked by core's
-    /// `recall_hybrid_claims_with_alpha`, then filtered (core's hybrid recall
-    /// takes no ADR-0021/0023 filters) and truncated to `top_k`, plus the
+    /// `recall_hybrid_claims_with_filters` (scope, agent, predicate,
+    /// min_confidence and status filters applied in core), plus the
     /// vector-chunk texts of those claims ranked by similarity to the query.
     ///
     /// `Ok(None)` means "use the keyword path": no embedding client, no
-    /// embedded chunks, a status filter other than ACTIVE (core's hybrid
-    /// recall returns ACTIVE claims only), or the embedding call failed.
+    /// embedded chunks, or the embedding call failed.
     fn recall_hybrid(
         &self,
         query: &str,
@@ -1072,9 +1055,7 @@ impl AverTools {
         let Some(embedder) = self.embedder.as_deref() else {
             return Ok(None);
         };
-        if filters.status != Some(ClaimStatus::Active)
-            || self.store.vector_chunk_embedding_status()?.0 == 0
-        {
+        if self.store.vector_chunk_embedding_status()?.0 == 0 {
             return Ok(None);
         }
         let query_embedding = match embedder.embed(query) {
@@ -1084,20 +1065,13 @@ impl AverTools {
                 return Ok(None);
             }
         };
-        let mut claims = Vec::new();
-        for claim in self.store.recall_hybrid_claims_with_alpha(
+        let claims = self.store.recall_hybrid_claims_with_filters(
             query,
-            &PrecomputedEmbedding(&query_embedding),
-            HYBRID_CANDIDATE_POOL,
+            &query_embedding,
+            top_k,
             weights,
-        )? {
-            if self.claim_matches_filters(&claim, filters)? {
-                claims.push(claim);
-                if claims.len() == top_k {
-                    break;
-                }
-            }
-        }
+            filters,
+        )?;
         let mut chunks = Vec::new();
         for claim in &claims {
             for chunk in self.store.list_vector_chunks_for_claim(claim.id)? {
@@ -1115,39 +1089,6 @@ impl AverTools {
             claims,
             chunks.into_iter().map(|(_, _, text)| text).collect(),
         )))
-    }
-
-    /// Server-side mirror of the `recall_text_with_filters` WHERE clause for
-    /// hybrid results. Status is not checked: hybrid recall only runs for the
-    /// ACTIVE filter and core returns ACTIVE claims only.
-    fn claim_matches_filters(
-        &self,
-        claim: &Claim,
-        filters: &RecallFilters,
-    ) -> anyhow::Result<bool> {
-        if !scope_matches(&claim.scope, &filters.scope, filters.scope_walk)
-            || filters
-                .agent_id
-                .as_ref()
-                .is_some_and(|id| *id != claim.agent_id)
-            || filters
-                .agent_kind
-                .is_some_and(|kind| kind != claim.agent_kind)
-            || filters
-                .min_confidence
-                .is_some_and(|min| claim.confidence < min)
-        {
-            return Ok(false);
-        }
-        Ok(match filters.predicate.as_deref() {
-            None => true,
-            Some(predicate) if claim.predicate == predicate => true,
-            Some(predicate) => {
-                filters.predicate_walk == PredicateWalk::Descendants
-                    && !predicate.trim().is_empty()
-                    && self.store.predicate_implies(&claim.predicate, predicate)?
-            }
-        })
     }
 
     pub fn expand(&self, params: ExpandParams) -> anyhow::Result<GraphView> {
@@ -1539,23 +1480,6 @@ impl AverTools {
     }
 }
 
-/// ADR-0021 scope walk over one claim's scope; the same rule as core's
-/// `scope_filter_sql`, applied to rows core's hybrid recall returns unfiltered.
-fn scope_matches(claim_scope: &str, scope: &str, walk: ScopeWalk) -> bool {
-    let is_strict_prefix = |prefix: &str, path: &str| {
-        path.strip_prefix(prefix)
-            .is_some_and(|rest| rest.starts_with('/'))
-    };
-    match walk {
-        ScopeWalk::Any => true,
-        ScopeWalk::Exact => claim_scope == scope,
-        ScopeWalk::Descendants => claim_scope == scope || is_strict_prefix(scope, claim_scope),
-        ScopeWalk::Ancestors => {
-            claim_scope == "global" || claim_scope == scope || is_strict_prefix(claim_scope, scope)
-        }
-    }
-}
-
 /// Resolve `ScopeWalk` from optional MCP request strings.
 ///
 /// Agent attribution for an MCP write: the caller's `agent_id` (the
@@ -1644,27 +1568,5 @@ fn validate_top_k(top_k: usize) -> anyhow::Result<usize> {
         Ok(top_k)
     } else {
         anyhow::bail!("invalid top_k: must be between 1 and 100")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scope_matches_follows_adr_0021_walks() {
-        assert!(scope_matches("proj/a", "proj/a", ScopeWalk::Exact));
-        assert!(!scope_matches("proj/a/x", "proj/a", ScopeWalk::Exact));
-        assert!(scope_matches("proj/a/x", "proj/a", ScopeWalk::Descendants));
-        assert!(!scope_matches("proj/ab", "proj/a", ScopeWalk::Descendants));
-        assert!(scope_matches("global", "proj/a/x", ScopeWalk::Ancestors));
-        assert!(scope_matches("proj", "proj/a/x", ScopeWalk::Ancestors));
-        assert!(!scope_matches(
-            "proj/a/x/y",
-            "proj/a/x",
-            ScopeWalk::Ancestors
-        ));
-        assert!(!scope_matches("pro", "proj/a", ScopeWalk::Ancestors));
-        assert!(scope_matches("anything", "proj/a", ScopeWalk::Any));
     }
 }
