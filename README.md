@@ -184,11 +184,12 @@ Useful endpoints:
 - `POST /oauth/register`
 - `GET /oauth/authorize` (browser consent screen; loopback by default, optional trusted-header for non-loopback)
 - `POST /oauth/authorize/decision` (consent-screen form submission)
-- `POST /oauth/token` for authorization-code + PKCE token exchange and refresh-token grants
+- `POST /oauth/consent/revoke` (browser-session form; revokes a client's consent and its live tokens, after which `/oauth/authorize` re-renders the consent screen)
+- `POST /oauth/token` for authorization-code + PKCE token exchange and refresh-token grants (RFC 6749 §5.2 JSON error bodies)
 - `GET /api/health` with `Authorization: Bearer <token>`
 - `/mcp` with `Authorization: Bearer <token>`
 
-`/oauth/authorize` drives a browser consent flow (ADR-0020). After a client dynamic-registers via `POST /oauth/register`, it redirects the user to `/oauth/authorize` with the standard PKCE parameters. Aver renders a consent screen showing the client name, redirect URI, and all supported scopes as checkboxes, with the client's requested scopes pre-selected; on **Approve** it stores a per-client consent row, mints an authorization code bound to the checked scopes, and redirects back to the client's `redirect_uri` with `code` and `state`. The client then exchanges the code at `/oauth/token` for an `access_token` plus `refresh_token`; refresh grants issue a new access token while preserving the existing refresh token, and access tokens carry only the scopes recorded on the consent row.
+`/oauth/authorize` drives a browser consent flow (ADR-0020). After a client dynamic-registers via `POST /oauth/register`, it redirects the user to `/oauth/authorize` with the standard PKCE parameters. Aver renders a consent screen showing the client name, redirect URI, and all supported scopes as checkboxes, with the client's requested scopes pre-selected; on **Approve** it stores a per-client consent row, mints an authorization code bound to the checked scopes, and redirects back to the client's `redirect_uri` with `code` and `state`. Approving with zero scopes records an empty grant that never skips the consent screen, so a later visit can grant real access. The client then exchanges the code at `/oauth/token` for an `access_token` plus `refresh_token` (and an `expires_in` lifetime); refresh grants rotate both halves of the token pair, presenting an already-rotated refresh token revokes the client's whole token family (RFC 6819 §5.2.2.3 reuse detection), and access tokens carry only the scopes recorded on the consent row.
 
 The flow supports loopback (`127.0.0.1` / `::1`) callers by default (Profile A in ADR-0020). Non-loopback callers can also authenticate via Profile C when `AVER_TRUSTED_AUTH_HEADER` is set to a trusted upstream identity header (for example `X-Forwarded-User`); otherwise they are rejected with an HTML 403.
 

@@ -88,8 +88,6 @@ pub struct RememberClaimParams {
 pub struct RecallParams {
     pub query: String,
     #[serde(default)]
-    pub alpha: Option<f64>,
-    #[serde(default)]
     pub hops: Option<usize>,
     #[serde(default = "default_top_k")]
     pub top_k: usize,
@@ -130,11 +128,22 @@ pub struct AverMcpService {
 #[tool_router]
 impl AverMcpService {
     pub fn open(memory_dir: impl AsRef<Path>, base_url: String) -> anyhow::Result<Self> {
-        Ok(Self {
-            tools: Arc::new(Mutex::new(AverTools::open(memory_dir)?)),
+        Ok(Self::from_shared_tools(
+            Arc::new(Mutex::new(AverTools::open(memory_dir)?)),
+            base_url,
+        ))
+    }
+
+    /// Builds a service facade over an already-open, shared [`AverTools`].
+    /// The HTTP server opens one store at startup and hands a clone of the
+    /// same `Arc` to every MCP session, preserving the single-writer
+    /// invariant on the underlying SQLite connection.
+    pub fn from_shared_tools(tools: Arc<Mutex<AverTools>>, base_url: String) -> Self {
+        Self {
+            tools,
             base_url,
             tool_router: Self::tool_router(),
-        })
+        }
     }
 
     fn lock_tools(&self) -> Result<MutexGuard<'_, AverTools>, McpError> {
@@ -435,7 +444,6 @@ impl AverMcpService {
             });
             CoreRecallParams {
                 query: params.query,
-                alpha: params.alpha,
                 hops: params.hops,
                 top_k: Some(params.top_k),
                 scope: params.scope.or(Some(resolved.scope)),
@@ -458,9 +466,14 @@ fn json_tool_result<T: serde::Serialize>(
     tool_name: &str,
 ) -> Result<CallToolResult, McpError> {
     match result {
-        Ok(value) => Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&value).unwrap_or_default(),
-        )])),
+        Ok(value) => match serde_json::to_string_pretty(&value) {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(err) => Err(McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("{tool_name} result serialization failed: {err}"),
+                None,
+            )),
+        },
         Err(err) => Err(McpError::new(
             ErrorCode::INTERNAL_ERROR,
             format!("{tool_name} failed: {}", tools.describe_error(&err)),
@@ -542,6 +555,80 @@ impl ServerHandler for AverMcpService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn services_sharing_tools_observe_each_others_writes() {
+        // Two service facades (one per MCP session) over one shared
+        // `Arc<Mutex<AverTools>>` write into the same store — the
+        // single-writer invariant the HTTP layer relies on.
+        let dir = tempfile::tempdir().unwrap();
+        let shared = Arc::new(Mutex::new(AverTools::open(dir.path()).unwrap()));
+        let service_a =
+            AverMcpService::from_shared_tools(shared.clone(), "http://localhost:3317".to_string());
+        let service_b =
+            AverMcpService::from_shared_tools(shared.clone(), "http://localhost:3317".to_string());
+
+        std::thread::scope(|scope| {
+            let a = &service_a;
+            let b = &service_b;
+            let writer_a = scope.spawn(move || {
+                a.lock_tools()
+                    .unwrap()
+                    .remember_claim(crate::tools::RememberClaimParams {
+                        subject: "writer-a".to_string(),
+                        predicate: "relates_to".to_string(),
+                        object: "shared".to_string(),
+                        source: None,
+                        agent_id: None,
+                        agent_kind: None,
+                        scope: None,
+                    })
+                    .unwrap();
+            });
+            let writer_b = scope.spawn(move || {
+                b.lock_tools()
+                    .unwrap()
+                    .remember_claim(crate::tools::RememberClaimParams {
+                        subject: "writer-b".to_string(),
+                        predicate: "relates_to".to_string(),
+                        object: "shared".to_string(),
+                        source: None,
+                        agent_id: None,
+                        agent_kind: None,
+                        scope: None,
+                    })
+                    .unwrap();
+            });
+            writer_a.join().unwrap();
+            writer_b.join().unwrap();
+        });
+
+        let tools = shared.lock().unwrap();
+        let recalled = tools
+            .recall(crate::tools::RecallParams {
+                query: "shared".to_string(),
+                hops: None,
+                top_k: Some(10),
+                scope: None,
+                scope_walk: None,
+                agent_id: None,
+                agent_kind: None,
+                predicate: None,
+                predicate_walk: None,
+                min_confidence: None,
+                status: None,
+            })
+            .unwrap();
+        let subjects: Vec<&str> = recalled
+            .triples
+            .iter()
+            .map(|claim| claim.subject.as_str())
+            .collect();
+        assert!(
+            subjects.contains(&"writer-a") && subjects.contains(&"writer-b"),
+            "both facades' writes land in the shared store: {subjects:?}",
+        );
+    }
 
     #[test]
     fn json_tool_result_enriches_unknown_predicate_for_any_tool_name() {
