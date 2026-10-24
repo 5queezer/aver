@@ -59,6 +59,8 @@ fn add_triple_with_scope_is_persisted() {
             confidence: None,
             source: "mcp-test".to_string(),
             scope: Some("proj/aver".to_string()),
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
     assert_eq!(view.status, "appended");
@@ -150,6 +152,8 @@ fn recall_with_scope_filters_by_walk() {
             confidence: None,
             source: "test".to_string(),
             scope: Some("proj/aver".to_string()),
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
     tools
@@ -160,6 +164,8 @@ fn recall_with_scope_filters_by_walk() {
             confidence: None,
             source: "test".to_string(),
             scope: Some("proj/other".to_string()),
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
 
@@ -198,6 +204,8 @@ fn expand_with_scope_filters_edges() {
             confidence: None,
             source: "test".to_string(),
             scope: Some("proj/aver".to_string()),
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
     tools
@@ -208,6 +216,8 @@ fn expand_with_scope_filters_edges() {
             confidence: None,
             source: "test".to_string(),
             scope: None, // → "global"
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
 
@@ -243,6 +253,8 @@ fn add_vector_chunk_does_not_take_scope_param() {
             confidence: None,
             source: "t".to_string(),
             scope: Some("proj/aver".to_string()),
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
     let _ = tools

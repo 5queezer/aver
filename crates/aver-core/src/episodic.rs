@@ -269,7 +269,7 @@ impl Store {
                 session_id,
                 draft.content,
                 draft.relevance,
-                uncovered_event_ids,
+                &uncovered_event_ids,
                 draft.derivation,
             ))?;
             ids.push(id);

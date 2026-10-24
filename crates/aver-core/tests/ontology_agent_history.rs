@@ -1,3 +1,4 @@
+use aver_core::ClaimWrite;
 use aver_core::Store;
 
 fn open_store() -> Store {
@@ -60,12 +61,12 @@ fn infer_entity_type_uses_claude_session_prefix() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     store
-        .add_claim(
+        .add_claim(ClaimWrite::new(
             "ClaudeSession:abc123",
             "relates_to",
             "Project:myapp",
             "test",
-        )
+        ))
         .unwrap();
     let type_name = store.entity_type_name("ClaudeSession:abc123").unwrap();
     assert_eq!(type_name, "ClaudeSession");
@@ -76,12 +77,12 @@ fn entity_is_a_type_process_for_claude_session_entity() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     store
-        .add_claim(
+        .add_claim(ClaimWrite::new(
             "ClaudeSession:abc123",
             "relates_to",
             "Project:myapp",
             "test",
-        )
+        ))
         .unwrap();
     assert!(
         store

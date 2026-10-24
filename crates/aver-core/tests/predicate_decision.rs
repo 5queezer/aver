@@ -1,5 +1,6 @@
 //! ADR-0024 decision-model predicate normalization.
 
+use aver_core::ClaimWrite;
 use aver_core::Store;
 use aver_core::decision::{DecisionError, MAX_OPTIONS, MockDecisionClient};
 
@@ -177,7 +178,9 @@ fn floor_gates_model_choice() {
 fn vocabulary_predicate_named_none_gets_a_distinct_sentinel() {
     let (_dir, store) = store();
     // ADR-0018: a USER_ASSERTED claim auto-extends the vocabulary.
-    store.add_claim("a", "none", "b", "s1").unwrap();
+    store
+        .add_claim(ClaimWrite::new("a", "none", "b", "s1"))
+        .unwrap();
 
     let options = options_for(&store, "needs");
     assert_eq!(options.last().unwrap(), "none_of_the_above");

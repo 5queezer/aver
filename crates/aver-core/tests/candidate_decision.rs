@@ -1,6 +1,7 @@
 //! ADR-0024 decision-model seams for ADR-0014: candidate triage and the
 //! extraction trigger, all driven by `MockDecisionClient` (no Ollama).
 
+use aver_core::{CandidateWrite, EventWrite};
 use std::path::Path;
 
 use aver_core::candidate_decision::CandidateTriage;
@@ -34,10 +35,20 @@ fn log_lines_of_kind(dir: &Path, kind: &str) -> Vec<serde_json::Value> {
 
 fn staged(store: &Store) -> i64 {
     let event_id = store
-        .record_event("s1", "note", "the service depends on postgres", "src")
+        .record_event(EventWrite::new(
+            "s1",
+            "note",
+            "the service depends on postgres",
+            "src",
+        ))
         .unwrap();
     store
-        .propose_candidate_claim(event_id, "service", "depends_on", "postgres")
+        .propose_candidate_claim(CandidateWrite::new(
+            event_id,
+            "service",
+            "depends_on",
+            "postgres",
+        ))
         .unwrap()
 }
 
@@ -180,9 +191,16 @@ fn replay_with_decision_field_reproduces_claim_without_client() {
     let (promoted_id, rejected_id, claim_id) = {
         let store = Store::open(dir.path()).unwrap();
         let promoted_id = staged(&store);
-        let event_id = store.record_event("s1", "note", "noise", "src").unwrap();
+        let event_id = store
+            .record_event(EventWrite::new("s1", "note", "noise", "src"))
+            .unwrap();
         let rejected_id = store
-            .propose_candidate_claim(event_id, "noise", "depends_on", "chatter")
+            .propose_candidate_claim(CandidateWrite::new(
+                event_id,
+                "noise",
+                "depends_on",
+                "chatter",
+            ))
             .unwrap();
         let client = MockDecisionClient::with_indices(vec![PROMOTE, REJECT]);
         store
@@ -286,10 +304,15 @@ fn replay_rejects_decision_field_contradicting_line_kind() {
 
 fn undigested_session(store: &Store) {
     store
-        .record_event("s1", "note", "we chose sqlite for storage", "src")
+        .record_event(EventWrite::new(
+            "s1",
+            "note",
+            "we chose sqlite for storage",
+            "src",
+        ))
         .unwrap();
     store
-        .record_event("s1", "note", "tests run offline", "src")
+        .record_event(EventWrite::new("s1", "note", "tests run offline", "src"))
         .unwrap();
 }
 
@@ -377,7 +400,9 @@ fn trigger_state_is_bounded() {
     let store = Store::open(dir.path()).unwrap();
     let long = "word ".repeat(400);
     for _ in 0..40 {
-        store.record_event("s1", "note", &long, "src").unwrap();
+        store
+            .record_event(EventWrite::new("s1", "note", &long, "src"))
+            .unwrap();
     }
     let client = MockDecisionClient::with_indices(vec![SKIP]);
 

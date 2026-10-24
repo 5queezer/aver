@@ -346,6 +346,7 @@ mod tests {
                 "aver_extractor",
                 aver_core::AgentKind::DeterministicParser,
                 path,
+                "global",
                 &facts,
             )
             .unwrap();
@@ -354,6 +355,7 @@ mod tests {
                 "aver_extractor",
                 aver_core::AgentKind::DeterministicParser,
                 "app/User.php",
+                "global",
                 &[to_core_fact(
                     "app/User.php",
                     &ExtractedFact {

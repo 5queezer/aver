@@ -2,6 +2,7 @@
 //! predicate + predicate_walk, min_confidence, status.
 
 use aver_core::{AgentKind, ClaimStatus, PredicateWalk, RecallFilters, ScopeWalk, Store};
+use aver_core::{ClaimWrite, RecallQuery};
 
 fn open_store() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
@@ -13,19 +14,30 @@ fn open_store() -> (tempfile::TempDir, Store) {
 fn recall_with_agent_id_filter_excludes_others() {
     let (_dir, store) = open_store();
     store
-        .add_claim_from_agent("alice", AgentKind::Human, "x", "uses", "y", "test")
+        .add_claim(ClaimWrite::from_agent(
+            "alice",
+            AgentKind::Human,
+            "x",
+            "uses",
+            "y",
+            "test",
+        ))
         .unwrap();
     store
-        .add_claim_from_agent("bob", AgentKind::Human, "x", "uses", "z", "test")
+        .add_claim(ClaimWrite::from_agent(
+            "bob",
+            AgentKind::Human,
+            "x",
+            "uses",
+            "z",
+            "test",
+        ))
         .unwrap();
     let claims = store
-        .recall_text_with_filters(
-            "uses",
-            RecallFilters {
-                agent_id: Some("alice".to_string()),
-                ..Default::default()
-            },
-        )
+        .recall_text(RecallQuery::new("uses").filters(RecallFilters {
+            agent_id: Some("alice".to_string()),
+            ..Default::default()
+        }))
         .unwrap();
     assert!(claims.iter().all(|c| c.agent_id == "alice"));
     assert!(claims.iter().any(|c| c.object == "y"));
@@ -36,19 +48,30 @@ fn recall_with_agent_id_filter_excludes_others() {
 fn recall_with_agent_kind_filter_excludes_others() {
     let (_dir, store) = open_store();
     store
-        .add_claim_from_agent("a", AgentKind::Human, "x", "uses", "y", "t")
+        .add_claim(ClaimWrite::from_agent(
+            "a",
+            AgentKind::Human,
+            "x",
+            "uses",
+            "y",
+            "t",
+        ))
         .unwrap();
     store
-        .add_claim_from_agent("b", AgentKind::Llm, "x", "uses", "z", "t")
+        .add_claim(ClaimWrite::from_agent(
+            "b",
+            AgentKind::Llm,
+            "x",
+            "uses",
+            "z",
+            "t",
+        ))
         .unwrap();
     let claims = store
-        .recall_text_with_filters(
-            "uses",
-            RecallFilters {
-                agent_kind: Some(AgentKind::Human),
-                ..Default::default()
-            },
-        )
+        .recall_text(RecallQuery::new("uses").filters(RecallFilters {
+            agent_kind: Some(AgentKind::Human),
+            ..Default::default()
+        }))
         .unwrap();
     assert!(claims.iter().all(|c| c.agent_kind == AgentKind::Human));
 }
@@ -57,19 +80,16 @@ fn recall_with_agent_kind_filter_excludes_others() {
 fn recall_with_min_confidence_filter() {
     let (_dir, store) = open_store();
     store
-        .add_claim_with_confidence("x", "uses", "high", "t", 0.95)
+        .add_claim(ClaimWrite::new("x", "uses", "high", "t").confidence(0.95))
         .unwrap();
     store
-        .add_claim_with_confidence("x", "uses", "low", "t", 0.40)
+        .add_claim(ClaimWrite::new("x", "uses", "low", "t").confidence(0.40))
         .unwrap();
     let claims = store
-        .recall_text_with_filters(
-            "uses",
-            RecallFilters {
-                min_confidence: Some(0.8),
-                ..Default::default()
-            },
-        )
+        .recall_text(RecallQuery::new("uses").filters(RecallFilters {
+            min_confidence: Some(0.8),
+            ..Default::default()
+        }))
         .unwrap();
     assert!(claims.iter().all(|c| c.confidence >= 0.8));
     assert!(!claims.iter().any(|c| c.object == "low"));
@@ -78,22 +98,21 @@ fn recall_with_min_confidence_filter() {
 #[test]
 fn recall_with_status_any_includes_invalidated() {
     let (_dir, store) = open_store();
-    let id = store.add_claim("x", "uses", "y", "t").unwrap();
+    let id = store
+        .add_claim(ClaimWrite::new("x", "uses", "y", "t"))
+        .unwrap();
     store.retire_claim(id, "test retirement").unwrap();
     // Default status filter is ACTIVE → should NOT see this row.
     let active = store
-        .recall_text_with_filters("uses", RecallFilters::default())
+        .recall_text(RecallQuery::new("uses").filters(RecallFilters::default()))
         .unwrap();
     assert!(!active.iter().any(|c| c.id == id));
     // status: None means "any" → should see it.
     let any = store
-        .recall_text_with_filters(
-            "uses",
-            RecallFilters {
-                status: None,
-                ..Default::default()
-            },
-        )
+        .recall_text(RecallQuery::new("uses").filters(RecallFilters {
+            status: None,
+            ..Default::default()
+        }))
         .unwrap();
     assert!(any.iter().any(|c| c.id == id));
 }
@@ -101,17 +120,18 @@ fn recall_with_status_any_includes_invalidated() {
 #[test]
 fn recall_with_predicate_filter_exact() {
     let (_dir, store) = open_store();
-    store.add_claim("aver", "uses", "rusqlite", "t").unwrap();
-    store.add_claim("aver", "imports", "x", "t").unwrap();
+    store
+        .add_claim(ClaimWrite::new("aver", "uses", "rusqlite", "t"))
+        .unwrap();
+    store
+        .add_claim(ClaimWrite::new("aver", "imports", "x", "t"))
+        .unwrap();
     let claims = store
-        .recall_text_with_filters(
-            "aver",
-            RecallFilters {
-                predicate: Some("uses".to_string()),
-                predicate_walk: PredicateWalk::Exact,
-                ..Default::default()
-            },
-        )
+        .recall_text(RecallQuery::new("aver").filters(RecallFilters {
+            predicate: Some("uses".to_string()),
+            predicate_walk: PredicateWalk::Exact,
+            ..Default::default()
+        }))
         .unwrap();
     assert!(claims.iter().all(|c| c.predicate == "uses"));
 }
@@ -120,18 +140,21 @@ fn recall_with_predicate_filter_exact() {
 fn recall_with_predicate_filter_descendants_uses_closure() {
     // ADR-0010 closure: `imports` and `calls` are children of `depends_on`.
     let (_dir, store) = open_store();
-    store.add_claim("aver", "imports", "x", "t").unwrap();
-    store.add_claim("aver", "calls", "y", "t").unwrap();
-    store.add_claim("aver", "owns", "z", "t").unwrap();
+    store
+        .add_claim(ClaimWrite::new("aver", "imports", "x", "t"))
+        .unwrap();
+    store
+        .add_claim(ClaimWrite::new("aver", "calls", "y", "t"))
+        .unwrap();
+    store
+        .add_claim(ClaimWrite::new("aver", "owns", "z", "t"))
+        .unwrap();
     let claims = store
-        .recall_text_with_filters(
-            "aver",
-            RecallFilters {
-                predicate: Some("depends_on".to_string()),
-                predicate_walk: PredicateWalk::Descendants,
-                ..Default::default()
-            },
-        )
+        .recall_text(RecallQuery::new("aver").filters(RecallFilters {
+            predicate: Some("depends_on".to_string()),
+            predicate_walk: PredicateWalk::Descendants,
+            ..Default::default()
+        }))
         .unwrap();
     let preds: Vec<String> = claims.iter().map(|c| c.predicate.clone()).collect();
     assert!(preds.iter().any(|p| p == "imports"), "{preds:?}");
@@ -143,21 +166,32 @@ fn recall_with_predicate_filter_descendants_uses_closure() {
 fn recall_filters_compose() {
     let (_dir, store) = open_store();
     store
-        .add_claim_from_agent("alice", AgentKind::Llm, "aver", "uses", "rusqlite", "t")
+        .add_claim(ClaimWrite::from_agent(
+            "alice",
+            AgentKind::Llm,
+            "aver",
+            "uses",
+            "rusqlite",
+            "t",
+        ))
         .unwrap();
     store
-        .add_claim_from_agent("bob", AgentKind::Human, "aver", "uses", "rmcp", "t")
+        .add_claim(ClaimWrite::from_agent(
+            "bob",
+            AgentKind::Human,
+            "aver",
+            "uses",
+            "rmcp",
+            "t",
+        ))
         .unwrap();
     let claims = store
-        .recall_text_with_filters(
-            "uses",
-            RecallFilters {
-                agent_id: Some("alice".to_string()),
-                agent_kind: Some(AgentKind::Llm),
-                predicate: Some("uses".to_string()),
-                ..Default::default()
-            },
-        )
+        .recall_text(RecallQuery::new("uses").filters(RecallFilters {
+            agent_id: Some("alice".to_string()),
+            agent_kind: Some(AgentKind::Llm),
+            predicate: Some("uses".to_string()),
+            ..Default::default()
+        }))
         .unwrap();
     assert_eq!(claims.len(), 1);
     assert_eq!(claims[0].object, "rusqlite");
@@ -168,9 +202,11 @@ fn recall_filters_default_preserves_today_behavior() {
     // RecallFilters::default() reproduces the pre-Layer-3 behavior of
     // `recall_text` exactly: scope="global", walk=any, ACTIVE only.
     let (_dir, store) = open_store();
-    store.add_claim("x", "uses", "y", "t").unwrap();
+    store
+        .add_claim(ClaimWrite::new("x", "uses", "y", "t"))
+        .unwrap();
     let claims = store
-        .recall_text_with_filters("uses", RecallFilters::default())
+        .recall_text(RecallQuery::new("uses").filters(RecallFilters::default()))
         .unwrap();
     assert!(!claims.is_empty());
     assert!(claims.iter().all(|c| c.status == ClaimStatus::Active));
@@ -180,13 +216,10 @@ fn recall_filters_default_preserves_today_behavior() {
 fn recall_filters_min_confidence_validates_range() {
     let (_dir, store) = open_store();
     let err = store
-        .recall_text_with_filters(
-            "x",
-            RecallFilters {
-                min_confidence: Some(1.5),
-                ..Default::default()
-            },
-        )
+        .recall_text(RecallQuery::new("x").filters(RecallFilters {
+            min_confidence: Some(1.5),
+            ..Default::default()
+        }))
         .expect_err("min_confidence > 1 must reject");
     let _ = err;
 }
@@ -195,18 +228,17 @@ fn recall_filters_min_confidence_validates_range() {
 fn scope_filter_composes_with_typed_filters() {
     let (_dir, store) = open_store();
     store
-        .add_claim_with_scope("x", "uses", "in_proj", "t", "proj/aver")
+        .add_claim(ClaimWrite::new("x", "uses", "in_proj", "t").scope("proj/aver"))
         .unwrap();
-    store.add_claim("x", "uses", "in_global", "t").unwrap();
+    store
+        .add_claim(ClaimWrite::new("x", "uses", "in_global", "t"))
+        .unwrap();
     let claims = store
-        .recall_text_with_filters(
-            "uses",
-            RecallFilters {
-                scope: "proj/aver".to_string(),
-                scope_walk: ScopeWalk::Exact,
-                ..Default::default()
-            },
-        )
+        .recall_text(RecallQuery::new("uses").filters(RecallFilters {
+            scope: "proj/aver".to_string(),
+            scope_walk: ScopeWalk::Exact,
+            ..Default::default()
+        }))
         .unwrap();
     assert!(claims.iter().all(|c| c.scope == "proj/aver"));
     assert!(claims.iter().any(|c| c.object == "in_proj"));

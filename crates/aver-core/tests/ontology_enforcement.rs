@@ -3,6 +3,7 @@
 //! Three integration tests, one per failure axis, plus a defense-in-depth
 //! test for the BEFORE INSERT trigger.
 
+use aver_core::ClaimWrite;
 use aver_core::{AgentKind, Error, Store};
 use rusqlite::Connection;
 
@@ -12,14 +13,14 @@ fn unknown_predicate_rejected_for_extracted() {
     let store = Store::open(dir.path()).unwrap();
 
     let err = store
-        .add_claim_from_agent(
+        .add_claim(ClaimWrite::from_agent(
             "parser_agent",
             AgentKind::DeterministicParser,
             "auth_service",
             "orchestrates",
             "session_token",
             "tree_sitter",
-        )
+        ))
         .expect_err("EXTRACTED writes with unknown predicate must reject");
 
     assert!(
@@ -52,14 +53,14 @@ fn unknown_predicate_diagnostic_includes_available_predicates_and_suggestion() {
     let store = Store::open(dir.path()).unwrap();
 
     let err = store
-        .add_claim_from_agent(
+        .add_claim(ClaimWrite::from_agent(
             "llm_agent",
             AgentKind::Llm,
             "app_server",
             "depends_onn",
             "database",
             "llm",
-        )
+        ))
         .expect_err("LLM writes with unknown predicates should explain the vocabulary");
 
     let Error::UnknownPredicate { name } = err else {
@@ -83,14 +84,14 @@ fn requires_alias_resolves_to_depends_on_for_claims_and_graph_filters() {
     let store = Store::open(dir.path()).unwrap();
 
     let claim_id = store
-        .add_claim_from_agent(
+        .add_claim(ClaimWrite::from_agent(
             "llm_agent",
             AgentKind::Llm,
             "app_server",
             "requires",
             "database",
             "llm",
-        )
+        ))
         .expect("requires should be accepted as an alias for depends_on");
 
     let claim = store.get_claim(claim_id).unwrap();
@@ -116,14 +117,14 @@ fn unknown_predicate_diagnostic_uses_fuzzy_alias_aware_suggestions() {
     let store = Store::open(dir.path()).unwrap();
 
     let err = store
-        .add_claim_from_agent(
+        .add_claim(ClaimWrite::from_agent(
             "llm_agent",
             AgentKind::Llm,
             "app_server",
             "requirse",
             "database",
             "llm",
-        )
+        ))
         .expect_err("misspelled aliases should still reject");
 
     let Error::UnknownPredicate { name } = err else {
@@ -148,7 +149,12 @@ fn unknown_predicate_auto_added_for_user_asserted() {
     let store = Store::open(dir.path()).unwrap();
 
     let claim_id = store
-        .add_claim("auth", "orchestrates_v2", "session_token", "manual")
+        .add_claim(ClaimWrite::new(
+            "auth",
+            "orchestrates_v2",
+            "session_token",
+            "manual",
+        ))
         .expect("USER_ASSERTED auto-extends the ontology");
     assert!(claim_id > 0);
 
@@ -200,14 +206,14 @@ fn alias_resolution_accepts_kebab_case() {
     // resolve to `has_module`. Both EXTRACTED and USER_ASSERTED must
     // accept it because the alias makes it resolvable.
     let claim_id = store
-        .add_claim_from_agent(
+        .add_claim(ClaimWrite::from_agent(
             "parser_agent",
             AgentKind::DeterministicParser,
             "aver_core",
             "has-module",
             "extractor",
             "tree_sitter",
-        )
+        ))
         .expect("alias should resolve");
 
     let claim = store.get_claim(claim_id).unwrap();
@@ -254,7 +260,12 @@ fn ensure_entity_sets_requires_review_on_thing_fallback() {
     // the User/Claude/Pi synonyms, so they fall back to `Thing` and must
     // be flagged for review.
     store
-        .add_claim("bare_subject", "relates_to", "bare_object", "manual")
+        .add_claim(ClaimWrite::new(
+            "bare_subject",
+            "relates_to",
+            "bare_object",
+            "manual",
+        ))
         .unwrap();
 
     let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
@@ -270,7 +281,12 @@ fn ensure_entity_sets_requires_review_on_thing_fallback() {
 
     // A typed prefix (matching a seeded entity_type) does NOT flag.
     store
-        .add_claim("File:src/main.rs", "concerns", "auth", "manual")
+        .add_claim(ClaimWrite::new(
+            "File:src/main.rs",
+            "concerns",
+            "auth",
+            "manual",
+        ))
         .unwrap();
     let typed_flagged: i64 = conn
         .query_row(

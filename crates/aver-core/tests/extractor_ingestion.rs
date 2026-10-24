@@ -1,3 +1,4 @@
+use aver_core::RecallQuery;
 use aver_core::{AgentKind, ExtractorFact, PrivacyRejection, Provenance, Store};
 
 #[test]
@@ -10,6 +11,7 @@ fn deterministic_extractor_facts_become_recallable_extracted_claims() {
             "tree_sitter_rust",
             AgentKind::DeterministicParser,
             "src/lib.rs#L10-L20",
+            "global",
             &[ExtractorFact::new(
                 "src/lib.rs",
                 "defines",
@@ -19,7 +21,7 @@ fn deterministic_extractor_facts_become_recallable_extracted_claims() {
         .unwrap();
 
     assert_eq!(ids.len(), 1);
-    let recalled = store.recall_text("ingest").unwrap();
+    let recalled = store.recall_text(RecallQuery::new("ingest")).unwrap();
     assert_eq!(recalled.len(), 1);
     assert_eq!(recalled[0].id, ids[0]);
     assert_eq!(recalled[0].provenance, Provenance::Extracted);
@@ -40,6 +42,7 @@ fn llm_prose_facts_default_to_inferred_unless_explicitly_marked() {
             "prose_llm",
             AgentKind::Llm,
             "doc/readme.md#L1-L4",
+            "global",
             &[ExtractorFact::new("Aver", "concerns", "durable_memory")],
         )
         .unwrap()[0];
@@ -48,6 +51,7 @@ fn llm_prose_facts_default_to_inferred_unless_explicitly_marked() {
             "prose_llm",
             AgentKind::Llm,
             "doc/adr.md#L2-L3",
+            "global",
             &[ExtractorFact::new("Aver", "concerns", "append_first")
                 .with_provenance(Provenance::Extracted)],
         )
@@ -73,6 +77,7 @@ fn duplicate_extractor_facts_merge_source_refs_without_active_claim_explosion() 
             "tree_sitter_rust",
             AgentKind::DeterministicParser,
             "src/lib.rs#L10",
+            "global",
             &[ExtractorFact::new(
                 "src/lib.rs",
                 "defines",
@@ -85,6 +90,7 @@ fn duplicate_extractor_facts_merge_source_refs_without_active_claim_explosion() 
             "tree_sitter_rust",
             AgentKind::DeterministicParser,
             "src/lib.rs#L11",
+            "global",
             &[ExtractorFact::new(
                 "src/lib.rs",
                 "defines",
@@ -93,7 +99,9 @@ fn duplicate_extractor_facts_merge_source_refs_without_active_claim_explosion() 
         )
         .unwrap();
 
-    let recalled = store.recall_text("Function ingest").unwrap();
+    let recalled = store
+        .recall_text(RecallQuery::new("Function ingest"))
+        .unwrap();
     assert_eq!(recalled.len(), 1);
     assert_eq!(recalled[0].id, first);
     assert_eq!(
@@ -112,6 +120,7 @@ fn private_extractor_fact_is_rejected_without_claim_or_log_persistence() {
             "tree_sitter_rust",
             AgentKind::DeterministicParser,
             "src/lib.rs#L10",
+            "global",
             &[ExtractorFact::new(
                 "src/lib.rs",
                 "defines",
@@ -126,7 +135,7 @@ fn private_extractor_fact_is_rejected_without_claim_or_log_persistence() {
     ));
     assert!(
         store
-            .recall_text("abcdefghijklmnopqrstuvwxyz123456")
+            .recall_text(RecallQuery::new("abcdefghijklmnopqrstuvwxyz123456"))
             .unwrap()
             .is_empty()
     );
@@ -143,6 +152,7 @@ fn invalid_fact_in_batch_rejects_without_partial_claim_persistence() {
             "tree_sitter_rust",
             AgentKind::DeterministicParser,
             "src/lib.rs#L10",
+            "global",
             &[
                 ExtractorFact::new("src/lib.rs", "defines", "Function:valid"),
                 ExtractorFact::new("src/lib.rs", "defines", " "),
@@ -151,7 +161,12 @@ fn invalid_fact_in_batch_rejects_without_partial_claim_persistence() {
         .unwrap_err();
 
     assert!(matches!(err, aver_core::Error::InvalidClaimField { .. }));
-    assert!(store.recall_text("valid").unwrap().is_empty());
+    assert!(
+        store
+            .recall_text(RecallQuery::new("valid"))
+            .unwrap()
+            .is_empty()
+    );
     assert!(!dir.path().join("log.jsonl").exists());
 }
 
@@ -165,6 +180,7 @@ fn unknown_extractor_predicate_is_rejected_without_persistence() {
             "tree_sitter_rust",
             AgentKind::DeterministicParser,
             "src/lib.rs#L10",
+            "global",
             &[ExtractorFact::new(
                 "src/lib.rs",
                 "invented_predicate",
@@ -174,6 +190,11 @@ fn unknown_extractor_predicate_is_rejected_without_persistence() {
         .unwrap_err();
 
     assert!(matches!(err, aver_core::Error::UnknownPredicate { .. }));
-    assert!(store.recall_text("ingest").unwrap().is_empty());
+    assert!(
+        store
+            .recall_text(RecallQuery::new("ingest"))
+            .unwrap()
+            .is_empty()
+    );
     assert!(!dir.path().join("log.jsonl").exists());
 }

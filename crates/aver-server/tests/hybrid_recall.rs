@@ -57,6 +57,8 @@ fn add_claim(tools: &AverTools, subject: &str, object: &str, scope: Option<&str>
             confidence: None,
             source: "test".to_string(),
             scope: scope.map(str::to_string),
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap()
         .triple_id

@@ -4,6 +4,7 @@
 //! provenance flow that carries scope from candidate claims through to the
 //! durable claim on promotion.
 
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite};
 use aver_core::{ObservationRelevance, Store};
 use rusqlite::Connection;
 
@@ -17,7 +18,7 @@ fn open_store() -> (tempfile::TempDir, Store) {
 fn add_claim_with_scope_persists_explicit_scope() {
     let (dir, store) = open_store();
     let claim_id = store
-        .add_claim_with_scope("svc_a", "uses", "lib_x", "test", "proj/aver")
+        .add_claim(ClaimWrite::new("svc_a", "uses", "lib_x", "test").scope("proj/aver"))
         .unwrap();
     let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
     let scope: String = conn
@@ -32,7 +33,7 @@ fn add_claim_with_scope_persists_explicit_scope() {
 fn add_claim_with_scope_rejects_blank_scope() {
     let (_dir, store) = open_store();
     let err = store
-        .add_claim_with_scope("svc_a", "uses", "lib_x", "test", "   ")
+        .add_claim(ClaimWrite::new("svc_a", "uses", "lib_x", "test").scope("   "))
         .expect_err("blank scope must reject before SQL");
     assert!(format!("{err:?}").to_lowercase().contains("scope"));
 }
@@ -42,7 +43,7 @@ fn add_claim_with_scope_rejects_invalid_charset() {
     let (_dir, store) = open_store();
     for bad in ["bad space", "x@y", "x:y"] {
         let err = store
-            .add_claim_with_scope("svc_a", "uses", "lib_x", "test", bad)
+            .add_claim(ClaimWrite::new("svc_a", "uses", "lib_x", "test").scope(bad))
             .expect_err(&format!("invalid scope {bad:?} must reject"));
         assert!(format!("{err:?}").to_lowercase().contains("scope"));
     }
@@ -52,7 +53,7 @@ fn add_claim_with_scope_rejects_invalid_charset() {
 fn record_event_with_scope_persists_explicit_scope() {
     let (dir, store) = open_store();
     let event_id = store
-        .record_event_with_scope("session_x", "user_message", "hi", "test", "proj/aver")
+        .record_event(EventWrite::new("session_x", "user_message", "hi", "test").scope("proj/aver"))
         .unwrap();
     let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
     let scope: String = conn
@@ -69,16 +70,18 @@ fn record_event_with_scope_persists_explicit_scope() {
 fn record_observation_with_scope_persists_explicit_scope() {
     let (dir, store) = open_store();
     let event_id = store
-        .record_event_with_scope("session_x", "user_message", "hi", "test", "proj/aver")
+        .record_event(EventWrite::new("session_x", "user_message", "hi", "test").scope("proj/aver"))
         .unwrap();
     let obs_id = store
-        .record_observation_with_scope(
-            "session_x",
-            "obs body",
-            ObservationRelevance::Low,
-            &[event_id],
-            "test",
-            "proj/aver",
+        .record_observation(
+            ObservationWrite::new(
+                "session_x",
+                "obs body",
+                ObservationRelevance::Low,
+                &[event_id],
+                "test",
+            )
+            .scope("proj/aver"),
         )
         .unwrap();
     let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
@@ -96,10 +99,12 @@ fn record_observation_with_scope_persists_explicit_scope() {
 fn propose_candidate_claim_with_scope_persists_explicit_scope() {
     let (dir, store) = open_store();
     let event_id = store
-        .record_event("session_x", "user_message", "hi", "test")
+        .record_event(EventWrite::new("session_x", "user_message", "hi", "test"))
         .unwrap();
     let candidate_id = store
-        .propose_candidate_claim_with_scope(event_id, "subj", "uses", "obj", "proj/aver")
+        .propose_candidate_claim(
+            CandidateWrite::new(event_id, "subj", "uses", "obj").scope("proj/aver"),
+        )
         .unwrap();
     let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
     let scope: String = conn
@@ -119,15 +124,12 @@ fn candidate_scope_carries_through_promotion() {
     // parameter on promote — scope is fixed at proposal time.
     let (dir, store) = open_store();
     let event_id = store
-        .record_event("session_x", "user_message", "hi", "test")
+        .record_event(EventWrite::new("session_x", "user_message", "hi", "test"))
         .unwrap();
     let candidate_id = store
-        .propose_candidate_claim_with_scope(
-            event_id,
-            "svc_b",
-            "uses",
-            "lib_y",
-            "proj/aver/branch/feat_x",
+        .propose_candidate_claim(
+            CandidateWrite::new(event_id, "svc_b", "uses", "lib_y")
+                .scope("proj/aver/branch/feat_x"),
         )
         .unwrap();
     let claim_id = store.promote_candidate_claim(candidate_id).unwrap();

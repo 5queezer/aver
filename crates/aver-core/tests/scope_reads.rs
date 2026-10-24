@@ -10,6 +10,7 @@
 //! callers don't pass a scope. New `_with_scope` variants accept a scope
 //! and walk mode.
 
+use aver_core::{ClaimWrite, RecallQuery};
 use aver_core::{ScopeWalk, Store};
 
 fn open_store() -> (tempfile::TempDir, Store) {
@@ -20,16 +21,16 @@ fn open_store() -> (tempfile::TempDir, Store) {
 
 fn seed_corpus(store: &Store) {
     store
-        .add_claim_with_scope("user", "prefers", "tabs", "test", "global")
+        .add_claim(ClaimWrite::new("user", "prefers", "tabs", "test").scope("global"))
         .unwrap();
     store
-        .add_claim_with_scope("aver", "uses", "rusqlite", "test", "proj/aver")
+        .add_claim(ClaimWrite::new("aver", "uses", "rusqlite", "test").scope("proj/aver"))
         .unwrap();
     store
-        .add_claim_with_scope("aver", "uses", "rmcp", "test", "proj/aver/branch/feat_x")
+        .add_claim(ClaimWrite::new("aver", "uses", "rmcp", "test").scope("proj/aver/branch/feat_x"))
         .unwrap();
     store
-        .add_claim_with_scope("vasudev", "uses", "torch", "test", "proj/vasudev")
+        .add_claim(ClaimWrite::new("vasudev", "uses", "torch", "test").scope("proj/vasudev"))
         .unwrap();
 }
 
@@ -39,7 +40,7 @@ fn recall_text_default_scope_is_any_walk() {
     seed_corpus(&store);
     // Default `recall_text` preserves pre-scope behavior (Layer 1): returns
     // every active claim regardless of scope.
-    let claims = store.recall_text("uses").unwrap();
+    let claims = store.recall_text(RecallQuery::new("uses")).unwrap();
     let scopes: Vec<String> = claims.iter().map(|c| c.scope.clone()).collect();
     assert!(!scopes.contains(&"global".to_string())); // "user prefers tabs" doesn't match "uses"
     assert!(scopes.contains(&"proj/aver".to_string()));
@@ -52,7 +53,7 @@ fn recall_text_with_scope_exact_returns_only_that_scope() {
     let (_dir, store) = open_store();
     seed_corpus(&store);
     let claims = store
-        .recall_text_with_scope("uses", "proj/aver", ScopeWalk::Exact)
+        .recall_text(RecallQuery::new("uses").scope("proj/aver", ScopeWalk::Exact))
         .unwrap();
     let subjects: Vec<String> = claims.iter().map(|c| c.subject.clone()).collect();
     let scopes: Vec<String> = claims.iter().map(|c| c.scope.clone()).collect();
@@ -70,10 +71,10 @@ fn recall_text_with_scope_ancestors_includes_global_and_path_prefixes() {
     seed_corpus(&store);
     // Add a "global" claim that the query can match.
     store
-        .add_claim_with_scope("aver", "is", "tool", "test", "global")
+        .add_claim(ClaimWrite::new("aver", "is", "tool", "test").scope("global"))
         .unwrap();
     let claims = store
-        .recall_text_with_scope("aver", "proj/aver", ScopeWalk::Ancestors)
+        .recall_text(RecallQuery::new("aver").scope("proj/aver", ScopeWalk::Ancestors))
         .unwrap();
     let scopes: Vec<String> = claims.iter().map(|c| c.scope.clone()).collect();
     assert!(scopes.contains(&"proj/aver".to_string()));
@@ -95,7 +96,7 @@ fn recall_text_with_scope_descendants_includes_subpaths() {
     let (_dir, store) = open_store();
     seed_corpus(&store);
     let claims = store
-        .recall_text_with_scope("uses", "proj/aver", ScopeWalk::Descendants)
+        .recall_text(RecallQuery::new("uses").scope("proj/aver", ScopeWalk::Descendants))
         .unwrap();
     let scopes: Vec<String> = claims.iter().map(|c| c.scope.clone()).collect();
     assert!(scopes.contains(&"proj/aver".to_string()));
@@ -111,18 +112,18 @@ fn recall_text_with_scope_descendants_includes_subpaths() {
 fn recall_text_with_scope_descendants_does_not_confuse_underscore_with_slash() {
     let (_dir, store) = open_store();
     store
-        .add_claim_with_scope("aver", "uses", "rmcp", "test", "proj_aver")
+        .add_claim(ClaimWrite::new("aver", "uses", "rmcp", "test").scope("proj_aver"))
         .unwrap();
     store
-        .add_claim_with_scope("aver", "uses", "sqlx", "test", "proj_aver/branch")
+        .add_claim(ClaimWrite::new("aver", "uses", "sqlx", "test").scope("proj_aver/branch"))
         .unwrap();
     store
-        .add_claim_with_scope("slash", "uses", "torch", "test", "proj/aver")
+        .add_claim(ClaimWrite::new("slash", "uses", "torch", "test").scope("proj/aver"))
         .unwrap();
     // `_` is a LIKE metachar: unescaped, "proj_aver" would also match rows
     // scoped "proj/aver" (ADR-0021 allows `_` in the scope charset).
     let claims = store
-        .recall_text_with_scope("uses", "proj_aver", ScopeWalk::Descendants)
+        .recall_text(RecallQuery::new("uses").scope("proj_aver", ScopeWalk::Descendants))
         .unwrap();
     let scopes: Vec<String> = claims.iter().map(|c| c.scope.clone()).collect();
     assert!(scopes.contains(&"proj_aver".to_string()));
@@ -137,18 +138,18 @@ fn recall_text_with_scope_descendants_does_not_confuse_underscore_with_slash() {
 fn recall_text_with_scope_ancestors_does_not_confuse_underscore_with_slash() {
     let (_dir, store) = open_store();
     store
-        .add_claim_with_scope("root", "uses", "x", "test", "proj")
+        .add_claim(ClaimWrite::new("root", "uses", "x", "test").scope("proj"))
         .unwrap();
     store
-        .add_claim_with_scope("mid", "uses", "y", "test", "proj/aver")
+        .add_claim(ClaimWrite::new("mid", "uses", "y", "test").scope("proj/aver"))
         .unwrap();
     store
-        .add_claim_with_scope("under", "uses", "z", "test", "proj_aver")
+        .add_claim(ClaimWrite::new("under", "uses", "z", "test").scope("proj_aver"))
         .unwrap();
     // Symmetric hazard: the ancestors pattern is built from the row's scope,
     // so a row scoped "proj_aver" must not match the input "proj/aver/deep".
     let claims = store
-        .recall_text_with_scope("uses", "proj/aver/deep", ScopeWalk::Ancestors)
+        .recall_text(RecallQuery::new("uses").scope("proj/aver/deep", ScopeWalk::Ancestors))
         .unwrap();
     let scopes: Vec<String> = claims.iter().map(|c| c.scope.clone()).collect();
     assert!(scopes.contains(&"proj".to_string()));
@@ -164,7 +165,7 @@ fn recall_text_with_scope_any_returns_everything() {
     let (_dir, store) = open_store();
     seed_corpus(&store);
     let claims = store
-        .recall_text_with_scope("uses", "proj/aver", ScopeWalk::Any)
+        .recall_text(RecallQuery::new("uses").scope("proj/aver", ScopeWalk::Any))
         .unwrap();
     assert!(
         claims.len() >= 3,
@@ -176,13 +177,13 @@ fn recall_text_with_scope_any_returns_everything() {
 fn recall_text_with_scope_global_ancestors_is_just_global() {
     let (_dir, store) = open_store();
     store
-        .add_claim_with_scope("aver", "is", "tool", "test", "global")
+        .add_claim(ClaimWrite::new("aver", "is", "tool", "test").scope("global"))
         .unwrap();
     store
-        .add_claim_with_scope("aver", "uses", "x", "test", "proj/aver")
+        .add_claim(ClaimWrite::new("aver", "uses", "x", "test").scope("proj/aver"))
         .unwrap();
     let claims = store
-        .recall_text_with_scope("aver", "global", ScopeWalk::Ancestors)
+        .recall_text(RecallQuery::new("aver").scope("global", ScopeWalk::Ancestors))
         .unwrap();
     let scopes: Vec<String> = claims.iter().map(|c| c.scope.clone()).collect();
     assert!(scopes.iter().all(|s| s == "global"), "scopes: {scopes:?}");
@@ -193,10 +194,10 @@ fn expand_with_scope_filters_edges_by_scope() {
     let (_dir, store) = open_store();
     // Two graphs; same entity name but different scopes.
     store
-        .add_claim_with_scope("X", "uses", "Y_global", "test", "global")
+        .add_claim(ClaimWrite::new("X", "uses", "Y_global", "test").scope("global"))
         .unwrap();
     store
-        .add_claim_with_scope("X", "uses", "Y_proj", "test", "proj/aver")
+        .add_claim(ClaimWrite::new("X", "uses", "Y_proj", "test").scope("proj/aver"))
         .unwrap();
     let graph = store
         .expand_with_scope("X", 1, None, "global", ScopeWalk::Exact)
@@ -213,7 +214,7 @@ fn expand_with_scope_filters_edges_by_scope() {
 fn invalid_scope_walk_input_validates_via_scope_charset() {
     let (_dir, store) = open_store();
     let err = store
-        .recall_text_with_scope("foo", "bad@char", ScopeWalk::Exact)
+        .recall_text(RecallQuery::new("foo").scope("bad@char", ScopeWalk::Exact))
         .expect_err("invalid scope must reject");
     assert!(format!("{err:?}").to_lowercase().contains("scope"));
 }

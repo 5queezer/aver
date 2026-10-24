@@ -1,3 +1,4 @@
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite};
 use aver_core::{ConsolidationReport, Error, ExtractionTriggerReason, PrivacyRejection, Store};
 
 #[test]
@@ -6,29 +7,44 @@ fn extraction_decision_reports_richer_deterministic_trigger_reasons() {
     let store = Store::open(dir.path()).unwrap();
 
     store
-        .record_event("s1", "user_message", "first durable detail", "conversation")
+        .record_event(EventWrite::new(
+            "s1",
+            "user_message",
+            "first durable detail",
+            "conversation",
+        ))
         .unwrap();
     store
-        .record_event(
+        .record_event(EventWrite::new(
             "s1",
             "correction",
             "Correction: API clients use PKCE S256.",
             "conversation",
-        )
+        ))
         .unwrap();
     store
-        .record_event("s1", "commit_completed", "commit abc123 completed", "git")
+        .record_event(EventWrite::new(
+            "s1",
+            "commit_completed",
+            "commit abc123 completed",
+            "git",
+        ))
         .unwrap();
     store
-        .record_event("s1", "session_end", "session ended", "agent")
+        .record_event(EventWrite::new(
+            "s1",
+            "session_end",
+            "session ended",
+            "agent",
+        ))
         .unwrap();
     store
-        .record_event(
+        .record_event(EventWrite::new(
             "s1",
             "idle_compaction",
             "agent idle for compaction",
             "agent",
-        )
+        ))
         .unwrap();
 
     let decision = store.extraction_decision("s1", 3, Some(6)).unwrap();
@@ -72,15 +88,20 @@ fn extraction_decision_surfaces_uncovered_coverage_gap() {
     let store = Store::open(dir.path()).unwrap();
 
     store
-        .record_event(
+        .record_event(EventWrite::new(
             "s1",
             "user_message",
             "first uncovered event",
             "conversation",
-        )
+        ))
         .unwrap();
     store
-        .record_event("s1", "assistant_action", "second uncovered event", "tool")
+        .record_event(EventWrite::new(
+            "s1",
+            "assistant_action",
+            "second uncovered event",
+            "tool",
+        ))
         .unwrap();
 
     let decision = store.extraction_decision("s1", 100, Some(1_000)).unwrap();
@@ -97,37 +118,44 @@ fn extraction_decision_surfaces_uncovered_coverage_gap() {
 fn graph_drift_snapshot_includes_privacy_rejection_counts() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    store.add_claim("Aver", "uses", "SQLite", "test").unwrap();
+    store
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
+        .unwrap();
 
     let event_id = store
-        .record_event("s1", "user_message", "ordinary event", "test")
+        .record_event(EventWrite::new(
+            "s1",
+            "user_message",
+            "ordinary event",
+            "test",
+        ))
         .unwrap();
     let token = "sk-abcdefghijklmnopqrstuvwxyz1234567890";
     assert!(matches!(
-        store.record_event(
+        store.record_event(EventWrite::new(
             "s1",
             "user_message",
-            &format!("OPENAI_API_KEY={token}"),
+            format!("OPENAI_API_KEY={token}"),
             "test"
-        ),
+        )),
         Err(Error::Privacy(PrivacyRejection::OpenAiKey))
     ));
     assert!(matches!(
-        store.add_claim("Aver", "source", "ssh key", ".ssh/id_rsa"),
+        store.add_claim(ClaimWrite::new("Aver", "source", "ssh key", ".ssh/id_rsa")),
         Err(Error::Privacy(PrivacyRejection::SshPath))
     ));
     assert!(matches!(
-        store.record_observation(
+        store.record_observation(ObservationWrite::new(
             "s1",
-            &format!("observer saw OPENAI_API_KEY={token}"),
+            format!("observer saw OPENAI_API_KEY={token}"),
             aver_core::ObservationRelevance::High,
             &[event_id],
             "observer"
-        ),
+        )),
         Err(Error::Privacy(PrivacyRejection::OpenAiKey))
     ));
     assert!(matches!(
-        store.propose_candidate_claim(event_id, "Aver", "mentions", token),
+        store.propose_candidate_claim(CandidateWrite::new(event_id, "Aver", "mentions", token)),
         Err(Error::Privacy(PrivacyRejection::OpenAiKey))
     ));
     assert!(matches!(
@@ -164,7 +192,12 @@ fn extraction_decision_surfaces_coverage_gap_without_token_threshold() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     store
-        .record_event("s1", "user_message", "uncovered event", "conversation")
+        .record_event(EventWrite::new(
+            "s1",
+            "user_message",
+            "uncovered event",
+            "conversation",
+        ))
         .unwrap();
 
     // The coverage signal must not depend on a token threshold being set.

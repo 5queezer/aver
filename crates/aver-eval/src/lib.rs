@@ -10,6 +10,7 @@ pub mod prompt_assertions;
 pub mod tuning;
 
 use anyhow::Result;
+use aver_core::{ClaimWrite, RecallQuery};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -252,7 +253,12 @@ pub fn run_fixture(fixture: &BenchFixture) -> Result<BenchMetrics> {
 
     // Seed all claims.
     for claim in &fixture.claims {
-        store.add_claim(&claim.subject, &claim.predicate, &claim.object, "bench")?;
+        store.add_claim(ClaimWrite::new(
+            &claim.subject,
+            &claim.predicate,
+            &claim.object,
+            "bench",
+        ))?;
     }
 
     let mut query_results = Vec::new();
@@ -260,7 +266,7 @@ pub fn run_fixture(fixture: &BenchFixture) -> Result<BenchMetrics> {
     let mut total_non_relevant: usize = 0;
 
     for fq in &fixture.queries {
-        let all_retrieved = store.recall_text(&fq.query)?;
+        let all_retrieved = store.recall_text(RecallQuery::new(&fq.query))?;
         // recall_text returns all matches; apply top_k cap.
         let retrieved: Vec<_> = all_retrieved.into_iter().take(fq.top_k).collect();
         let retrieved_count = retrieved.len();

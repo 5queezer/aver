@@ -123,6 +123,8 @@ fn adr0008_five_tool_surface_covers_claim_graph_lifecycle() {
             confidence: None,
             source: "agent-test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
     tools
@@ -133,6 +135,8 @@ fn adr0008_five_tool_surface_covers_claim_graph_lifecycle() {
             confidence: None,
             source: "agent-test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
 
@@ -322,6 +326,8 @@ fn add_triple_rejects_confidence_outside_unit_interval() {
             confidence: Some(-0.1),
             source: "agent-test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .expect_err("invalid confidence should be rejected");
 
@@ -341,6 +347,8 @@ fn add_triple_persists_valid_confidence_override() {
             confidence: Some(0.4),
             source: "agent-test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
 
@@ -450,6 +458,8 @@ fn recall_tool_returns_graph_context_for_entity_query() {
             confidence: None,
             source: "test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
 
@@ -494,6 +504,8 @@ fn recall_tool_expands_graph_from_recalled_claim_subject_when_query_is_phrase() 
             confidence: None,
             source: "test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
 
@@ -538,6 +550,8 @@ fn recall_tool_reports_confidence_floor_for_returned_triples() {
             confidence: Some(0.4),
             source: "test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
 
@@ -575,6 +589,8 @@ fn recall_tool_confidence_floor_includes_subgraph_edges() {
             confidence: Some(0.95),
             source: "test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
     tools
@@ -585,6 +601,8 @@ fn recall_tool_confidence_floor_includes_subgraph_edges() {
             confidence: Some(0.4),
             source: "test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
 
@@ -697,6 +715,8 @@ fn add_triple_rejects_empty_subject() {
             confidence: None,
             source: "test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .expect_err("empty subjects should be rejected");
 
@@ -716,6 +736,8 @@ fn add_triple_rejects_empty_predicate() {
             confidence: None,
             source: "test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .expect_err("empty predicates should be rejected");
 
@@ -735,6 +757,8 @@ fn add_triple_rejects_empty_object() {
             confidence: None,
             source: "test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .expect_err("empty objects should be rejected");
 

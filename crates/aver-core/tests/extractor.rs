@@ -1,3 +1,4 @@
+use aver_core::EventWrite;
 use aver_core::{CandidateClaimDraft, ClaimExtractor, MockClaimExtractor, Store};
 
 #[test]
@@ -5,12 +6,12 @@ fn mock_claim_extractor_proposes_candidate_claims_from_events() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event_id = store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "explicit_remember",
             "Remember that Aver should batch memory extraction.",
             "conversation",
-        )
+        ))
         .unwrap();
     let event = store.get_event(event_id).unwrap();
     let extractor = MockClaimExtractor::new(vec![CandidateClaimDraft {
@@ -34,12 +35,12 @@ fn propose_claims_from_extractor_stages_candidate_claims() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event_id = store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "explicit_remember",
             "Remember that Aver should batch memory extraction.",
             "conversation",
-        )
+        ))
         .unwrap();
     let extractor = MockClaimExtractor::new(vec![CandidateClaimDraft {
         event_id,

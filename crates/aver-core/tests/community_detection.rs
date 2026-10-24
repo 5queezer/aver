@@ -1,3 +1,4 @@
+use aver_core::ClaimWrite;
 use aver_core::{HyperedgeInput, HyperedgeParticipantInput, Provenance, ScopeWalk, Store};
 
 fn community_members(communities: &[aver_core::Community]) -> Vec<Vec<String>> {
@@ -13,25 +14,25 @@ fn weighted_detection_splits_dense_groups_joined_only_by_weak_bridge() {
     let store = Store::open(dir.path()).unwrap();
 
     store
-        .add_claim_with_confidence("A1", "depends_on", "A2", "a12", 0.95)
+        .add_claim(ClaimWrite::new("A1", "depends_on", "A2", "a12").confidence(0.95))
         .unwrap();
     store
-        .add_claim_with_confidence("A2", "depends_on", "A3", "a23", 0.95)
+        .add_claim(ClaimWrite::new("A2", "depends_on", "A3", "a23").confidence(0.95))
         .unwrap();
     store
-        .add_claim_with_confidence("A1", "depends_on", "A3", "a13", 0.95)
+        .add_claim(ClaimWrite::new("A1", "depends_on", "A3", "a13").confidence(0.95))
         .unwrap();
     store
-        .add_claim_with_confidence("B1", "depends_on", "B2", "b12", 0.95)
+        .add_claim(ClaimWrite::new("B1", "depends_on", "B2", "b12").confidence(0.95))
         .unwrap();
     store
-        .add_claim_with_confidence("B2", "depends_on", "B3", "b23", 0.95)
+        .add_claim(ClaimWrite::new("B2", "depends_on", "B3", "b23").confidence(0.95))
         .unwrap();
     store
-        .add_claim_with_confidence("B1", "depends_on", "B3", "b13", 0.95)
+        .add_claim(ClaimWrite::new("B1", "depends_on", "B3", "b13").confidence(0.95))
         .unwrap();
     store
-        .add_claim_with_confidence("A3", "depends_on", "B1", "weak-bridge", 0.1)
+        .add_claim(ClaimWrite::new("A3", "depends_on", "B1", "weak-bridge").confidence(0.1))
         .unwrap();
 
     let communities = store.detect_communities().unwrap();
@@ -54,13 +55,13 @@ fn higher_confidence_edges_dominate_low_confidence_alternatives() {
     let store = Store::open(dir.path()).unwrap();
 
     store
-        .add_claim_with_confidence("Hub", "depends_on", "Weak", "low", 0.2)
+        .add_claim(ClaimWrite::new("Hub", "depends_on", "Weak", "low").confidence(0.2))
         .unwrap();
     store
-        .add_claim_with_confidence("Hub", "depends_on", "Strong", "high", 0.9)
+        .add_claim(ClaimWrite::new("Hub", "depends_on", "Strong", "high").confidence(0.9))
         .unwrap();
     store
-        .add_claim_with_confidence("Strong", "depends_on", "Partner", "high", 0.9)
+        .add_claim(ClaimWrite::new("Strong", "depends_on", "Partner", "high").confidence(0.9))
         .unwrap();
 
     let communities = store.detect_communities().unwrap();
@@ -120,13 +121,21 @@ fn scoped_detection_excludes_out_of_scope_entities_and_rescoring_follows() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     store
-        .add_claim_with_confidence_and_scope("A", "depends_on", "B", "ab", 0.95, "proj/x")
+        .add_claim(
+            ClaimWrite::new("A", "depends_on", "B", "ab")
+                .confidence(0.95)
+                .scope("proj/x"),
+        )
         .unwrap();
     store
-        .add_claim_with_confidence("B", "depends_on", "C", "bc", 0.7)
+        .add_claim(ClaimWrite::new("B", "depends_on", "C", "bc").confidence(0.7))
         .unwrap();
     store
-        .add_claim_with_confidence_and_scope("C", "depends_on", "D", "cd", 0.9, "proj/y")
+        .add_claim(
+            ClaimWrite::new("C", "depends_on", "D", "cd")
+                .confidence(0.9)
+                .scope("proj/y"),
+        )
         .unwrap();
 
     let unscoped = store.detect_communities().unwrap();

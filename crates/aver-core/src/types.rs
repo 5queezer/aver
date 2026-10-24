@@ -454,14 +454,14 @@ impl ObservationWrite {
         session_id: impl Into<String>,
         content: impl Into<String>,
         relevance: ObservationRelevance,
-        source_event_ids: impl Into<Vec<i64>>,
+        source_event_ids: &[i64],
         derivation: impl Into<String>,
     ) -> Self {
         Self {
             session_id: session_id.into(),
             content: content.into(),
             relevance,
-            source_event_ids: source_event_ids.into(),
+            source_event_ids: source_event_ids.to_vec(),
             derivation: derivation.into(),
             scope: "global".to_string(),
         }

@@ -21,6 +21,8 @@ fn seeded(dir: &std::path::Path) -> AverTools {
                 confidence: Some(confidence),
                 source: "graph-tools-test".to_string(),
                 scope: Some(scope.to_string()),
+                agent_id: None,
+                agent_kind: None,
             })
             .unwrap();
     }
@@ -260,6 +262,8 @@ fn path_step_carries_core_claim_id_from_add_triple() {
             confidence: Some(0.9),
             source: "graph-tools-test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
 

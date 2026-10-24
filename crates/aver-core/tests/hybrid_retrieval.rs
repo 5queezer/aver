@@ -1,6 +1,7 @@
 //! T16 — v0.2 HybridRAG starts with the hardcoded alpha from ADR-0004 before
 //! adaptive classification exists.
 
+use aver_core::ClaimWrite;
 use aver_core::Store;
 use aver_core::retrieval::{HybridWeights, RetrievalCandidate, rank_candidates, top_k_candidates};
 use aver_core::vector::MockEmbeddingClient;
@@ -164,10 +165,20 @@ fn hybrid_recall_alpha_zero_prefers_graph_match_over_vector_match() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let graph_match = store
-        .add_claim("auth_service", "calls", "validate_token", "test")
+        .add_claim(ClaimWrite::new(
+            "auth_service",
+            "calls",
+            "validate_token",
+            "test",
+        ))
         .unwrap();
     let vector_match = store
-        .add_claim("billing", "mentions", "token validation", "test")
+        .add_claim(ClaimWrite::new(
+            "billing",
+            "mentions",
+            "token validation",
+            "test",
+        ))
         .unwrap();
     store
         .add_vector_chunk_with_embedding(
@@ -204,10 +215,20 @@ fn hybrid_recall_alpha_one_prefers_vector_match_over_graph_match() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let graph_match = store
-        .add_claim("auth_service", "calls", "validate_token", "test")
+        .add_claim(ClaimWrite::new(
+            "auth_service",
+            "calls",
+            "validate_token",
+            "test",
+        ))
         .unwrap();
     let vector_match = store
-        .add_claim("billing", "mentions", "token validation", "test")
+        .add_claim(ClaimWrite::new(
+            "billing",
+            "mentions",
+            "token validation",
+            "test",
+        ))
         .unwrap();
     store
         .add_vector_chunk_with_embedding(

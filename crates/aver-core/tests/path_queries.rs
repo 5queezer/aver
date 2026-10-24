@@ -1,3 +1,4 @@
+use aver_core::ClaimWrite;
 use aver_core::{
     AgentKind, GraphPathMode, GraphPathQuery, HyperedgeInput, HyperedgeParticipantInput,
     Provenance, RelationshipKind, ScopeWalk, Store,
@@ -20,7 +21,9 @@ fn user_query(from: &str, to: &str) -> GraphPathQuery {
 fn directed_paths_preserve_claim_direction_unless_bidirectional() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    store.add_claim("A", "depends_on", "B", "s1").unwrap();
+    store
+        .add_claim(ClaimWrite::new("A", "depends_on", "B", "s1"))
+        .unwrap();
 
     assert!(store.graph_path(user_query("B", "A")).unwrap().is_none());
 
@@ -39,16 +42,16 @@ fn shortest_path_prefers_higher_confidence_when_hop_count_ties() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     store
-        .add_claim_with_confidence("A", "depends_on", "Low", "s-low", 0.6)
+        .add_claim(ClaimWrite::new("A", "depends_on", "Low", "s-low").confidence(0.6))
         .unwrap();
     store
-        .add_claim_with_confidence("Low", "depends_on", "D", "s-low", 0.6)
+        .add_claim(ClaimWrite::new("Low", "depends_on", "D", "s-low").confidence(0.6))
         .unwrap();
     store
-        .add_claim_with_confidence("A", "depends_on", "High", "s-high", 0.9)
+        .add_claim(ClaimWrite::new("A", "depends_on", "High", "s-high").confidence(0.9))
         .unwrap();
     store
-        .add_claim_with_confidence("High", "depends_on", "D", "s-high", 0.8)
+        .add_claim(ClaimWrite::new("High", "depends_on", "D", "s-high").confidence(0.8))
         .unwrap();
 
     let path = store.graph_path(user_query("A", "D")).unwrap().unwrap();
@@ -62,13 +65,13 @@ fn multi_hop_path_confidence_decays_multiplicatively() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     store
-        .add_claim_with_confidence("A", "depends_on", "B", "s1", 0.9)
+        .add_claim(ClaimWrite::new("A", "depends_on", "B", "s1").confidence(0.9))
         .unwrap();
     store
-        .add_claim_with_confidence("B", "depends_on", "C", "s2", 0.8)
+        .add_claim(ClaimWrite::new("B", "depends_on", "C", "s2").confidence(0.8))
         .unwrap();
     store
-        .add_claim_with_confidence("C", "depends_on", "D", "s3", 0.5)
+        .add_claim(ClaimWrite::new("C", "depends_on", "D", "s3").confidence(0.5))
         .unwrap();
 
     let path = store.graph_path(user_query("A", "D")).unwrap().unwrap();
@@ -82,7 +85,7 @@ fn confidence_floor_filters_claims_and_returns_no_path() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     store
-        .add_claim_with_confidence("A", "depends_on", "B", "s1", 0.4)
+        .add_claim(ClaimWrite::new("A", "depends_on", "B", "s1").confidence(0.4))
         .unwrap();
 
     let mut query = user_query("A", "B");
@@ -96,17 +99,17 @@ fn provenance_filter_limits_path_edges() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     store
-        .add_claim("A", "depends_on", "UserOnly", "s1")
+        .add_claim(ClaimWrite::new("A", "depends_on", "UserOnly", "s1"))
         .unwrap();
     store
-        .add_claim_from_agent(
+        .add_claim(ClaimWrite::from_agent(
             "parser_agent",
             AgentKind::DeterministicParser,
             "A",
             "depends_on",
             "ExtractedOnly",
             "s2",
-        )
+        ))
         .unwrap();
 
     let mut query = user_query("A", "ExtractedOnly");
@@ -160,8 +163,12 @@ fn path_can_traverse_active_hyperedges_between_participants() {
 fn no_path_returns_none_when_max_hops_exhausted() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    store.add_claim("A", "depends_on", "B", "s1").unwrap();
-    store.add_claim("B", "depends_on", "C", "s2").unwrap();
+    store
+        .add_claim(ClaimWrite::new("A", "depends_on", "B", "s1"))
+        .unwrap();
+    store
+        .add_claim(ClaimWrite::new("B", "depends_on", "C", "s2"))
+        .unwrap();
 
     let mut query = user_query("A", "C");
     query.max_hops = 1;
@@ -173,7 +180,9 @@ fn no_path_returns_none_when_max_hops_exhausted() {
 fn predicate_filter_matches_ontology_descendants() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    store.add_claim("A", "calls", "B", "s1").unwrap();
+    store
+        .add_claim(ClaimWrite::new("A", "calls", "B", "s1"))
+        .unwrap();
 
     let mut query = user_query("A", "B");
     query.predicates = Some(vec!["depends_on".to_string()]);
@@ -214,7 +223,7 @@ fn default_query_is_unscoped_and_rejects_invalid_scope() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     store
-        .add_claim_with_scope("A", "depends_on", "B", "s1", "proj/x")
+        .add_claim(ClaimWrite::new("A", "depends_on", "B", "s1").scope("proj/x"))
         .unwrap();
 
     let query = GraphPathQuery::new("A", "B");
@@ -233,9 +242,11 @@ fn scoped_path_follows_ancestor_walk_and_hides_from_other_scopes() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let project_claim = store
-        .add_claim_with_scope("A", "depends_on", "B", "s1", "proj/x")
+        .add_claim(ClaimWrite::new("A", "depends_on", "B", "s1").scope("proj/x"))
         .unwrap();
-    let global_claim = store.add_claim("B", "depends_on", "C", "s2").unwrap();
+    let global_claim = store
+        .add_claim(ClaimWrite::new("B", "depends_on", "C", "s2"))
+        .unwrap();
 
     // proj/x + ancestors sees its own claim plus the inherited global one.
     let path = store
@@ -333,7 +344,9 @@ fn hyperedges_are_treated_as_global_rows_for_scope_filtering() {
 fn claim_steps_carry_claim_id_and_scope() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    let id = store.add_claim("A", "depends_on", "B", "s1").unwrap();
+    let id = store
+        .add_claim(ClaimWrite::new("A", "depends_on", "B", "s1"))
+        .unwrap();
 
     let path = store.graph_path(user_query("A", "B")).unwrap().unwrap();
     assert_eq!(path.steps[0].claim_id, Some(id));
