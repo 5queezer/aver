@@ -990,7 +990,7 @@ impl AverTools {
                 decision
                     .reasons
                     .iter()
-                    .map(|reason| trigger_reason_name(*reason).to_string())
+                    .map(|reason| reason.as_str().to_string())
                     .collect(),
             ),
         })
@@ -1192,20 +1192,6 @@ fn parse_scope_walk(walk: Option<&str>, scope: &Option<String>) -> anyhow::Resul
         } else {
             ScopeWalk::Any
         }),
-    }
-}
-
-fn trigger_reason_name(reason: ExtractionTriggerReason) -> &'static str {
-    match reason {
-        ExtractionTriggerReason::ExplicitRemember => "explicit_remember",
-        ExtractionTriggerReason::EventCountThreshold => "event_count_threshold",
-        ExtractionTriggerReason::ObservationTokenThreshold => "observation_token_threshold",
-        ExtractionTriggerReason::UncoveredCoverageGap => "uncovered_coverage_gap",
-        ExtractionTriggerReason::SessionEnd => "session_end",
-        ExtractionTriggerReason::Correction => "correction",
-        ExtractionTriggerReason::CommitCompleted => "commit_completed",
-        ExtractionTriggerReason::IdleCompaction => "idle_compaction",
-        ExtractionTriggerReason::DecisionModel => "decision_model",
     }
 }
 
