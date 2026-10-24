@@ -169,6 +169,15 @@ fn extract_rust_calls_finds_called_function_name() {
 }
 
 #[test]
+fn extract_rust_calls_skip_chains_on_call_results_and_join_multiline_paths() {
+    let calls =
+        extract_rust_calls("fn main() { open(\"x\").unwrap(); items[0](); store\n    .recall(); }")
+            .unwrap();
+
+    assert_eq!(calls, vec!["open".to_string(), "store.recall".to_string()]);
+}
+
+#[test]
 fn extract_rust_structs_normalizes_raw_identifier_names() {
     let structs = extract_rust_structs("struct r#type { value: String }").unwrap();
 

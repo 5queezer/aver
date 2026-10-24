@@ -516,7 +516,13 @@ fn collect_calls(node: Node<'_>, source: &[u8], calls: &mut Vec<String>) -> Resu
     if node.kind() == "call_expression"
         && let Some(function) = node.child_by_field_name("function")
     {
-        calls.push(function.utf8_text(source)?.to_string());
+        // A callee containing a call or index (`f(x).unwrap`, `v[0]`) is a
+        // chain on a temporary, not a symbol name; the inner call is
+        // collected on its own. Whitespace in multi-line chains is dropped.
+        let callee: String = function.utf8_text(source)?.split_whitespace().collect();
+        if !callee.contains(['(', '[']) {
+            calls.push(callee);
+        }
     }
 
     let mut cursor = node.walk();

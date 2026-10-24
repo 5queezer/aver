@@ -1,5 +1,6 @@
 //! Deterministic source extractors (ADR-0007).
 
+pub mod bridge;
 pub mod lang;
 pub mod prose;
 
@@ -169,7 +170,26 @@ pub(crate) fn validate_facts(facts: &[ExtractedFact]) -> Result<(), Error> {
     Ok(())
 }
 
-pub fn extract_facts_for_path(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+/// Language names returned by [`language_for_path`], in dispatch order.
+pub const LANGUAGES: &[&str] = &[
+    "rust",
+    "python",
+    "typescript",
+    "javascript",
+    "go",
+    "java",
+    "c",
+    "cpp",
+    "csharp",
+    "ruby",
+    "php",
+    "kotlin",
+    "swift",
+];
+
+/// The extractor language for `path`, chosen by file extension, or `None`
+/// when no bundled grammar handles it.
+pub fn language_for_path(path: &str) -> Option<&'static str> {
     let extension = Path::new(path)
         .extension()
         .and_then(|extension| extension.to_str())
@@ -177,19 +197,38 @@ pub fn extract_facts_for_path(path: &str, source: &str) -> Result<Vec<ExtractedF
         .to_ascii_lowercase();
 
     match extension.as_str() {
-        "rs" => extract_rust_facts(path, source),
-        "py" => extract_python_facts(path, source),
-        "ts" | "tsx" => extract_typescript_facts(path, source),
-        "js" | "jsx" => extract_javascript_facts(path, source),
-        "go" => extract_go_facts(path, source),
-        "java" => extract_java_facts(path, source),
-        "c" | "h" => extract_c_facts(path, source),
-        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => extract_cpp_facts(path, source),
-        "cs" => extract_csharp_facts(path, source),
-        "rb" => extract_ruby_facts(path, source),
-        "php" => extract_php_facts(path, source),
-        "kt" | "kts" => extract_kotlin_facts(path, source),
-        "swift" => extract_swift_facts(path, source),
+        "rs" => Some("rust"),
+        "py" => Some("python"),
+        "ts" | "tsx" => Some("typescript"),
+        "js" | "jsx" => Some("javascript"),
+        "go" => Some("go"),
+        "java" => Some("java"),
+        "c" | "h" => Some("c"),
+        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => Some("cpp"),
+        "cs" => Some("csharp"),
+        "rb" => Some("ruby"),
+        "php" => Some("php"),
+        "kt" | "kts" => Some("kotlin"),
+        "swift" => Some("swift"),
+        _ => None,
+    }
+}
+
+pub fn extract_facts_for_path(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    match language_for_path(path) {
+        Some("rust") => extract_rust_facts(path, source),
+        Some("python") => extract_python_facts(path, source),
+        Some("typescript") => extract_typescript_facts(path, source),
+        Some("javascript") => extract_javascript_facts(path, source),
+        Some("go") => extract_go_facts(path, source),
+        Some("java") => extract_java_facts(path, source),
+        Some("c") => extract_c_facts(path, source),
+        Some("cpp") => extract_cpp_facts(path, source),
+        Some("csharp") => extract_csharp_facts(path, source),
+        Some("ruby") => extract_ruby_facts(path, source),
+        Some("php") => extract_php_facts(path, source),
+        Some("kotlin") => extract_kotlin_facts(path, source),
+        Some("swift") => extract_swift_facts(path, source),
         _ => Ok(Vec::new()),
     }
 }
