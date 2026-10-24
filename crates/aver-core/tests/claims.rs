@@ -855,10 +855,10 @@ fn consolidate_supersedes_older_conflicting_claim() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let older = store
-        .add_claim(ClaimWrite::new("feature", "status", "planned", "s1"))
+        .add_claim(ClaimWrite::new("feature", "prefers", "planned", "s1"))
         .unwrap();
     let newer = store
-        .add_claim(ClaimWrite::new("feature", "status", "shipped", "s2"))
+        .add_claim(ClaimWrite::new("feature", "prefers", "shipped", "s2"))
         .unwrap();
 
     let superseded = store.consolidate().unwrap();
@@ -1067,7 +1067,7 @@ fn consolidate_report_counts_merged_superseded_and_decayed_claims() {
     let stale = store
         .add_claim(ClaimWrite::new(
             "StripeSDK",
-            "status",
+            "prefers",
             "deprecated",
             "session-3",
         ))
@@ -1075,7 +1075,7 @@ fn consolidate_report_counts_merged_superseded_and_decayed_claims() {
     store
         .add_claim(ClaimWrite::new(
             "StripeSDK",
-            "status",
+            "prefers",
             "current",
             "session-4",
         ))

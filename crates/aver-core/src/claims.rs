@@ -537,10 +537,22 @@ impl Store {
                   ORDER BY id",
             )?;
             let duplicate_changed = self.supersede_claim_ids(&duplicate_ids, now)?;
+            // Only single-valued predicates (migration 0010 `cardinality`)
+            // treat a newer object as a replacement; multi-valued predicates
+            // such as `defines` or `calls` accumulate objects. Aliases follow
+            // the cardinality of the predicate they resolve to.
             let conflict_ids = self.claim_ids_matching(
                 "SELECT id
                    FROM claims
                   WHERE status = 'ACTIVE'
+                    AND predicate IN (
+                        SELECT name FROM predicate_types WHERE cardinality = 'single'
+                        UNION
+                        SELECT predicate_alias.alias
+                          FROM predicate_alias
+                          JOIN predicate_types ON predicate_types.id = predicate_alias.predicate_id
+                         WHERE predicate_types.cardinality = 'single'
+                    )
                     AND EXISTS (
                         SELECT 1
                           FROM claims newer

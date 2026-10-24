@@ -246,12 +246,13 @@ fn replay_preserves_consolidation_outcome() {
         store
             .add_claim(ClaimWrite::new("dup", "depends_on", "x", "src2"))
             .unwrap();
-        // Conflict pair -> the older claim is superseded by the newer.
+        // Conflict pair on a single-valued predicate -> the older claim is
+        // superseded by the newer.
         store
-            .add_claim(ClaimWrite::new("conflict", "depends_on", "old", "src"))
+            .add_claim(ClaimWrite::new("conflict", "prefers", "old", "src"))
             .unwrap();
         store
-            .add_claim(ClaimWrite::new("conflict", "depends_on", "new", "src"))
+            .add_claim(ClaimWrite::new("conflict", "prefers", "new", "src"))
             .unwrap();
         // Contradicted claim -> decayed by consolidation.
         let contradicted = store

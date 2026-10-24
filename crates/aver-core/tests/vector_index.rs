@@ -151,7 +151,8 @@ fn migration_backfills_existing_vector_chunks_rows() {
              ALTER TABLE claims DROP COLUMN scope;
              ALTER TABLE episodic_events DROP COLUMN scope;
              ALTER TABLE observations DROP COLUMN scope;
-             ALTER TABLE candidate_claims DROP COLUMN scope;",
+             ALTER TABLE candidate_claims DROP COLUMN scope;
+             ALTER TABLE predicate_types DROP COLUMN cardinality;",
         )
         .unwrap();
         conn.pragma_update(None, "user_version", 9i64).unwrap();

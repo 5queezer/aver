@@ -163,7 +163,7 @@ fn vector_claim_recall_skips_superseded_claims() {
     let stale = store
         .add_claim(ClaimWrite::new(
             "StripeSDK",
-            "status",
+            "prefers",
             "deprecated",
             "session-1",
         ))
@@ -171,7 +171,7 @@ fn vector_claim_recall_skips_superseded_claims() {
     let current = store
         .add_claim(ClaimWrite::new(
             "StripeSDK",
-            "status",
+            "prefers",
             "current",
             "session-2",
         ))

@@ -68,7 +68,7 @@ fn fresh_open_sets_user_version_to_baseline_schema_version() {
     assert_eq!(v, aver_core::SCHEMA_VERSION);
     // 0001..0008 + the 0009 baseline (legacy 0009..0119). Bump this when a
     // new migrations/0010_*.sql lands.
-    assert_eq!(v, 119);
+    assert_eq!(v, 120);
 }
 
 #[test]

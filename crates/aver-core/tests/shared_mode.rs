@@ -73,7 +73,7 @@ fn agent_trust_score_uses_bounded_agreement_rate() {
             "parser_agent",
             aver_core::AgentKind::DeterministicParser,
             "Parser",
-            "emits",
+            "prefers",
             "Facts",
             "s1",
         ))
@@ -83,7 +83,7 @@ fn agent_trust_score_uses_bounded_agreement_rate() {
             "parser_agent",
             aver_core::AgentKind::DeterministicParser,
             "Parser",
-            "emits",
+            "prefers",
             "Triples",
             "s2",
         ))

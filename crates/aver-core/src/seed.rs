@@ -70,9 +70,28 @@ const PREDICATE_ONTOLOGY: &[(&str, Option<&str>)] = &[
     ("emits", Some("relates_to")),
 ];
 
+/// Predicates that hold one object per subject (migration 0010
+/// `cardinality = 'single'`): consolidation supersedes the older object when
+/// a newer claim disagrees. Every other predicate — `defines`, `calls`,
+/// `imports`, `tests`, `uses`, `relates_to`, ... — accumulates objects, as do
+/// predicates created by ontology extension.
+const SINGLE_VALUED_PREDICATES: &[&str] = &[
+    "prefers",
+    "owned_by",
+    "binary_name",
+    "impl_stays_in",
+    "splits_by",
+];
+
 pub(crate) fn seed_ontology(conn: &Connection) -> Result<(), Error> {
     seed_type_table(conn, "entity_types", ENTITY_ONTOLOGY)?;
     seed_type_table(conn, "predicate_types", PREDICATE_ONTOLOGY)?;
+    for name in SINGLE_VALUED_PREDICATES {
+        conn.execute(
+            "UPDATE predicate_types SET cardinality = 'single' WHERE name = ?1",
+            [name],
+        )?;
+    }
     rebuild_closure(conn, "entity_types", "entity_type_closure")?;
     rebuild_closure(conn, "predicate_types", "predicate_closure")?;
     Ok(())
