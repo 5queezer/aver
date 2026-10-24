@@ -205,6 +205,8 @@ Default configuration:
 | `AVER_DECISION_MODEL` | *(unset)* | Ollama decision model (for example `tev1:4b`); setting it enables the ADR-0024 decision-model features. |
 | `AVER_DECISION_URL` | `http://localhost:11434` | Ollama base URL for the decision model. |
 | `AVER_DECISION_MIN_CONFIDENCE` | `0.6` | Confidence floor for decision-model choices; below it, or when the model reports no confidence, the deterministic behaviour applies (triage holds, suggestions fall back). |
+| `AVER_EMBEDDING_URL` | *(unset)* | Ollama base URL (for example `http://localhost:11434`) for embeddings; setting it makes MCP `recall` hybrid (ADR-0004) and makes `add_vector_chunk` store an embedding with each chunk. Requires the default `ollama` feature. |
+| `AVER_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model used with `AVER_EMBEDDING_URL` and recorded on vector chunks. |
 | `AVER_DECISION_TIMEOUT_SECS` | `30` | Timeout in whole seconds for one decision-model request; on timeout the deterministic behaviour applies. Zero or unparsable values are ignored. |
 
 
@@ -251,6 +253,8 @@ MCP currently exposes 19 tools through a progressive discovery card so agents ke
 - **Graph navigation:** progressively load `expand` after recall returns an entity or an anchor is already known; use `add_triple` instead of `remember_claim` only when explicit source/confidence control is required
 - **Observation audit:** progressively load `recall_observation`, `observation_coverage` for handoff, compaction, or provenance checks
 - **Maintenance/repair:** keep `contradict`, `retire_claim`, `consolidate`, `add_vector_chunk` hidden until there is an explicit repair or retrieval-tuning need
+
+`recall` is hybrid when embeddings are configured (`AVER_EMBEDDING_URL`) and the store holds embedded vector chunks: it embeds the query once, ranks claims with the ADR-0004 vector/graph blend (`alpha` parameter, default from the query-intent classifier), applies the scope and ADR-0023 filters to the ranked claims, and returns the matching chunk texts in `chunks`. Without embeddings, when the embedding call fails, or for a non-`ACTIVE` status filter it answers from keyword recall as before; the additive `retrieval` field (`"hybrid"` or `"keyword"`) says which path ran, and `alpha` is reported for hybrid results.
 
 Setting `AVER_DECISION_MODEL` opts the server and CLI into the ADR-0024 decision model (`aver-server` and `aver-cli` enable `aver-core`'s `ollama` feature by default; build with `--no-default-features` to leave it out, in which case the variable is ignored). `triage_candidate_claim` (CLI: `triage --candidate-id N`) then lets the model promote, reject, or hold a pending candidate; promoted claims carry `INFERRED` provenance with confidence 0.45, and without the variable the tool returns an error. The opt-in also lets `should_extract_memories` ask the model when only undigested events remain (the MCP result then adds `reasons`). `Store::suggest_scope` and `Store::normalize_predicate` exist in `aver-core` but are not wired to the MCP surface yet: the propose log line cannot carry the decision attribution, and error paths must not call the model under the tools mutex. Unset, every existing tool behaves as before.
 

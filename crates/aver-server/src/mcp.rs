@@ -79,6 +79,10 @@ pub struct RecallParams {
     /// ADR-0021 walk mode: "exact" | "ancestors" | "descendants" | "any".
     #[serde(default)]
     pub scope_walk: Option<String>,
+    /// ADR-0004 hybrid weight on the vector score (0..=1). Defaults to the
+    /// query-intent classifier; ignored when recall runs on the keyword path.
+    #[serde(default)]
+    pub alpha: Option<f64>,
 }
 
 fn default_top_k() -> usize {
@@ -494,7 +498,7 @@ impl AverMcpService {
 
     const RECALL: ToolScope = ToolScope::new("recall", Scope::ClaimsRead);
     #[tool(
-        description = "Search durable claims by text query. Start here for stored facts, preferences, project context, or when you do not know an exact entity id."
+        description = "Search durable claims by text query. Start here for stored facts, preferences, project context, or when you do not know an exact entity id. Hybrid vector + graph ranking (ADR-0004) when the server has embeddings configured; the result's `retrieval` field says which path ran."
     )]
     async fn recall(
         &self,
@@ -524,6 +528,7 @@ impl AverMcpService {
                 predicate_walk: None,
                 min_confidence: None,
                 status: None,
+                alpha: params.alpha,
             }
         });
         json_tool_result(&tools, result, "recall")
@@ -743,6 +748,7 @@ mod tests {
                 predicate_walk: None,
                 min_confidence: None,
                 status: None,
+                alpha: None,
             })
             .unwrap();
         let subjects: Vec<&str> = recalled

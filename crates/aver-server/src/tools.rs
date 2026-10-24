@@ -2,6 +2,8 @@ use std::path::Path;
 
 use aver_core::candidate_decision::CandidateTriage;
 use aver_core::decision::{DecisionClient, DecisionConfig, client_from_env};
+use aver_core::retrieval::HybridWeights;
+use aver_core::vector::{EmbeddingClient, EmbeddingError, VectorIndexConfig};
 use aver_core::{
     AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, Error,
     ExtractionTriggerReason, NewClaim, Observation, ObservationCoverage, ObservationRecall,
@@ -9,11 +11,53 @@ use aver_core::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Embedding-model label recorded on vector chunks written via
-/// `add_vector_chunk`. The server stores retrieval text only — embedding
-/// happens outside the MCP surface — so this names the model the chunk is
-/// tuned for rather than anything computed in-process.
-const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text";
+/// Query-embedding client for hybrid recall (ADR-0004), built at the server
+/// edge. `None` keeps recall on the keyword path.
+pub type Embedder = Box<dyn EmbeddingClient + Send + Sync>;
+
+/// How many hybrid candidates core ranks before the server applies the
+/// ADR-0021/0023 filters and truncates to `top_k`. Core's vector half asks
+/// the `vec0` index for `4 * top_k` neighbours and sqlite-vec caps `k` at
+/// 4096, so 1024 is the largest pool that stays on the indexed path.
+const HYBRID_CANDIDATE_POOL: usize = 1024;
+
+/// Reads the embedding configuration once. `AVER_EMBEDDING_URL` (an Ollama
+/// base URL) opts in; `AVER_EMBEDDING_MODEL` overrides the
+/// [`VectorIndexConfig`] default model. Returns the client (if enabled) and
+/// the model label recorded on vector chunks.
+pub fn embedding_from_env() -> (Option<Embedder>, String) {
+    let var = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    let model =
+        VectorIndexConfig::from_optional_config(None, var("AVER_EMBEDDING_MODEL").as_deref())
+            .unwrap_or_default()
+            .embedding_model;
+    (ollama_embedder(var("AVER_EMBEDDING_URL"), &model), model)
+}
+
+#[cfg(feature = "ollama")]
+fn ollama_embedder(url: Option<String>, model: &str) -> Option<Embedder> {
+    url.map(|url| Box::new(aver_core::vector::OllamaEmbeddingClient::new(url, model)) as Embedder)
+}
+
+#[cfg(not(feature = "ollama"))]
+fn ollama_embedder(_url: Option<String>, _model: &str) -> Option<Embedder> {
+    None
+}
+
+/// Hands core the query embedding the server already computed, so one recall
+/// embeds the query once even though claims and chunks are ranked separately.
+struct PrecomputedEmbedding<'a>(&'a [f32]);
+
+impl EmbeddingClient for PrecomputedEmbedding<'_> {
+    fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        Ok(self.0.to_vec())
+    }
+}
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RememberClaimParams {
@@ -74,6 +118,10 @@ pub struct RecallParams {
     /// "any" to drop the implicit ACTIVE filter. Defaults to ACTIVE.
     #[serde(default)]
     pub status: Option<String>,
+    /// ADR-0004 hybrid weight on the vector score (0..=1; the graph score
+    /// gets `1 - alpha`). Defaults to the query-intent classifier.
+    #[serde(default)]
+    pub alpha: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -379,6 +427,13 @@ pub struct RecallView {
     pub chunks: Vec<String>,
     pub subgraph: GraphView,
     pub confidence_floor: f64,
+    /// Which retrieval ran: "hybrid" (ADR-0004 vector + graph blend) or
+    /// "keyword" (text recall; no embedding client, no embedded chunks, a
+    /// non-ACTIVE status filter, or the embedding call failed).
+    pub retrieval: String,
+    /// The ADR-0004 alpha used; present only when `retrieval` is "hybrid".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -541,6 +596,10 @@ pub struct AverTools {
     /// ADR-0024 confidence floor (`AVER_DECISION_MIN_CONFIDENCE`); choices
     /// below it fall back to the deterministic behaviour.
     decision_min_confidence: f64,
+    /// ADR-0004 embedding client; `None` unless `AVER_EMBEDDING_URL` opts in.
+    embedder: Option<Embedder>,
+    /// Model label recorded on vector chunks (`AVER_EMBEDDING_MODEL`).
+    embedding_model: String,
 }
 
 impl AverTools {
@@ -554,11 +613,21 @@ impl AverTools {
         memory_dir: impl AsRef<Path>,
         decision: Option<Box<dyn DecisionClient + Send + Sync>>,
     ) -> anyhow::Result<Self> {
+        let (embedder, embedding_model) = embedding_from_env();
         Ok(Self {
             store: Store::open(memory_dir)?,
             decision,
             decision_min_confidence: DecisionConfig::from_env().min_confidence,
+            embedder,
+            embedding_model,
         })
+    }
+
+    /// Replaces the embedding client read from the environment (tests and
+    /// the BEAM parity harness inject a deterministic client here).
+    pub fn with_embedding_client(mut self, embedder: Option<Embedder>) -> Self {
+        self.embedder = embedder;
+        self
     }
 
     /// Agent-facing text for a tool error. Core validation errors are the
@@ -658,9 +727,27 @@ impl AverTools {
             min_confidence: params.min_confidence,
             status,
         };
-        let mut claims = self
-            .store
-            .recall_text_with_filters(&params.query, filters)?;
+        if let Some(min) = filters.min_confidence
+            && !(0.0..=1.0).contains(&min)
+        {
+            return Err(Error::InvalidConfidence { value: min }.into());
+        }
+        let weights = match params.alpha {
+            Some(alpha) => HybridWeights::try_new(alpha)
+                .map_err(|err| anyhow::anyhow!("invalid alpha: {err}"))?,
+            None => HybridWeights::for_query(&params.query),
+        };
+        let (mut claims, chunks, retrieval, alpha) =
+            match self.recall_hybrid(&params.query, &filters, top_k, weights)? {
+                Some((claims, chunks)) => (claims, chunks, "hybrid", Some(weights.alpha)),
+                None => (
+                    self.store
+                        .recall_text_with_filters(&params.query, filters)?,
+                    Vec::new(),
+                    "keyword",
+                    None,
+                ),
+            };
         claims.truncate(top_k);
         let hops = validate_hops(params.hops.unwrap_or(2))?;
         let mut subgraph = self
@@ -681,12 +768,110 @@ impl AverTools {
             .unwrap_or(0.0);
         Ok(RecallView {
             triples: claims.into_iter().map(ClaimView::from).collect(),
-            chunks: Vec::new(),
+            chunks,
             subgraph: GraphView {
                 nodes: subgraph.nodes,
                 edges: subgraph.edges.into_iter().map(ClaimView::from).collect(),
             },
             confidence_floor,
+            retrieval: retrieval.to_string(),
+            alpha,
+        })
+    }
+
+    /// ADR-0004 hybrid half of [`AverTools::recall`]: claims ranked by core's
+    /// `recall_hybrid_claims_with_alpha`, then filtered (core's hybrid recall
+    /// takes no ADR-0021/0023 filters) and truncated to `top_k`, plus the
+    /// vector-chunk texts of those claims ranked by similarity to the query.
+    ///
+    /// `Ok(None)` means "use the keyword path": no embedding client, no
+    /// embedded chunks, a status filter other than ACTIVE (core's hybrid
+    /// recall returns ACTIVE claims only), or the embedding call failed.
+    fn recall_hybrid(
+        &self,
+        query: &str,
+        filters: &RecallFilters,
+        top_k: usize,
+        weights: HybridWeights,
+    ) -> anyhow::Result<Option<(Vec<Claim>, Vec<String>)>> {
+        let Some(embedder) = self.embedder.as_deref() else {
+            return Ok(None);
+        };
+        if filters.status != Some(ClaimStatus::Active)
+            || self.store.vector_chunk_embedding_status()?.0 == 0
+        {
+            return Ok(None);
+        }
+        let query_embedding = match embedder.embed(query) {
+            Ok(embedding) => embedding,
+            Err(err) => {
+                eprintln!("aver-server: query embedding failed, using keyword recall: {err}");
+                return Ok(None);
+            }
+        };
+        let mut claims = Vec::new();
+        for claim in self.store.recall_hybrid_claims_with_alpha(
+            query,
+            &PrecomputedEmbedding(&query_embedding),
+            HYBRID_CANDIDATE_POOL,
+            weights,
+        )? {
+            if self.claim_matches_filters(&claim, filters)? {
+                claims.push(claim);
+                if claims.len() == top_k {
+                    break;
+                }
+            }
+        }
+        let mut chunks = Vec::new();
+        for claim in &claims {
+            for chunk in self.store.list_vector_chunks_for_claim(claim.id)? {
+                let score = chunk.embedding.as_deref().and_then(|embedding| {
+                    aver_core::vector::normalized_cosine_score(&query_embedding, embedding)
+                });
+                chunks.push((score.unwrap_or(0.0), chunk.id, chunk.text));
+            }
+        }
+        chunks.sort_by(|(a_score, a_id, _), (b_score, b_id, _)| {
+            b_score.total_cmp(a_score).then_with(|| a_id.cmp(b_id))
+        });
+        chunks.truncate(top_k);
+        Ok(Some((
+            claims,
+            chunks.into_iter().map(|(_, _, text)| text).collect(),
+        )))
+    }
+
+    /// Server-side mirror of the `recall_text_with_filters` WHERE clause for
+    /// hybrid results. Status is not checked: hybrid recall only runs for the
+    /// ACTIVE filter and core returns ACTIVE claims only.
+    fn claim_matches_filters(
+        &self,
+        claim: &Claim,
+        filters: &RecallFilters,
+    ) -> anyhow::Result<bool> {
+        if !scope_matches(&claim.scope, &filters.scope, filters.scope_walk)
+            || filters
+                .agent_id
+                .as_ref()
+                .is_some_and(|id| *id != claim.agent_id)
+            || filters
+                .agent_kind
+                .is_some_and(|kind| kind != claim.agent_kind)
+            || filters
+                .min_confidence
+                .is_some_and(|min| claim.confidence < min)
+        {
+            return Ok(false);
+        }
+        Ok(match filters.predicate.as_deref() {
+            None => true,
+            Some(predicate) if claim.predicate == predicate => true,
+            Some(predicate) => {
+                filters.predicate_walk == PredicateWalk::Descendants
+                    && !predicate.trim().is_empty()
+                    && self.store.predicate_implies(&claim.predicate, predicate)?
+            }
         })
     }
 
@@ -938,14 +1123,56 @@ impl AverTools {
         &self,
         params: AddVectorChunkParams,
     ) -> anyhow::Result<VectorChunkView> {
-        let chunk_id =
-            self.store
-                .add_vector_chunk(params.claim_id, &params.text, DEFAULT_EMBEDDING_MODEL)?;
+        // Embed only text that core's validation and privacy filter would
+        // accept, so rejected text never leaves the process. Without a client,
+        // or when embedding fails, the chunk is stored text-only.
+        let embedding = self
+            .embedder
+            .as_deref()
+            .filter(|_| {
+                !params.text.trim().is_empty() && aver_core::privacy_filter(&params.text).is_ok()
+            })
+            .and_then(|embedder| match embedder.embed(&params.text) {
+                Ok(embedding) => Some(embedding),
+                Err(err) => {
+                    eprintln!("aver-server: chunk embedding failed, storing text only: {err}");
+                    None
+                }
+            });
+        let chunk_id = match embedding {
+            Some(embedding) => self.store.add_vector_chunk_with_embedding(
+                params.claim_id,
+                &params.text,
+                &self.embedding_model,
+                &embedding,
+            )?,
+            None => {
+                self.store
+                    .add_vector_chunk(params.claim_id, &params.text, &self.embedding_model)?
+            }
+        };
         Ok(VectorChunkView {
             id: chunk_id,
             claim_id: params.claim_id,
             text: params.text,
         })
+    }
+}
+
+/// ADR-0021 scope walk over one claim's scope; the same rule as core's
+/// `scope_filter_sql`, applied to rows core's hybrid recall returns unfiltered.
+fn scope_matches(claim_scope: &str, scope: &str, walk: ScopeWalk) -> bool {
+    let is_strict_prefix = |prefix: &str, path: &str| {
+        path.strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
+    };
+    match walk {
+        ScopeWalk::Any => true,
+        ScopeWalk::Exact => claim_scope == scope,
+        ScopeWalk::Descendants => claim_scope == scope || is_strict_prefix(scope, claim_scope),
+        ScopeWalk::Ancestors => {
+            claim_scope == "global" || claim_scope == scope || is_strict_prefix(claim_scope, scope)
+        }
     }
 }
 
@@ -999,5 +1226,27 @@ fn validate_top_k(top_k: usize) -> anyhow::Result<usize> {
         Ok(top_k)
     } else {
         anyhow::bail!("invalid top_k: must be between 1 and 100")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scope_matches_follows_adr_0021_walks() {
+        assert!(scope_matches("proj/a", "proj/a", ScopeWalk::Exact));
+        assert!(!scope_matches("proj/a/x", "proj/a", ScopeWalk::Exact));
+        assert!(scope_matches("proj/a/x", "proj/a", ScopeWalk::Descendants));
+        assert!(!scope_matches("proj/ab", "proj/a", ScopeWalk::Descendants));
+        assert!(scope_matches("global", "proj/a/x", ScopeWalk::Ancestors));
+        assert!(scope_matches("proj", "proj/a/x", ScopeWalk::Ancestors));
+        assert!(!scope_matches(
+            "proj/a/x/y",
+            "proj/a/x",
+            ScopeWalk::Ancestors
+        ));
+        assert!(!scope_matches("pro", "proj/a", ScopeWalk::Ancestors));
+        assert!(scope_matches("anything", "proj/a", ScopeWalk::Any));
     }
 }
