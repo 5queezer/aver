@@ -83,6 +83,10 @@ install-service:
     systemctl --user enable aver-mcp
     echo "aver-mcp unit installed and enabled; run 'just deploy-server' to build, install and start it."
 
+# Rehearse the release: build as release.yml does, install into a clean container (doc/release-procedure.md)
+release-dry-run:
+    scripts/release-dry-run.sh
+
 # Create a local release tarball and checksum under target/dist
 dist: release
     mkdir -p target/dist
