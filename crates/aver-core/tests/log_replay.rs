@@ -123,14 +123,15 @@ fn replay_preserves_scope_for_claims_events_observations() {
 #[test]
 fn replay_preserves_retired_claim_status_and_reason() {
     let dir = tempfile::tempdir().unwrap();
-    {
+    let claim_id = {
         let store = Store::open(dir.path()).unwrap();
         let claim_id = store
             .add_claim("alpha", "depends_on", "beta", "src")
             .unwrap();
         store.retire_claim(claim_id, "superseded by docs").unwrap();
         store.close().unwrap();
-    }
+        claim_id
+    };
     let live = claims_rows(dir.path());
 
     delete_db(dir.path());
@@ -140,7 +141,7 @@ fn replay_preserves_retired_claim_status_and_reason() {
     let replayed = claims_rows(dir.path());
     assert_claim_rows_eq(&live, &replayed);
     let store = Store::open(dir.path()).unwrap();
-    let claim = store.get_claim(1).unwrap();
+    let claim = store.get_claim(claim_id).unwrap();
     assert_eq!(claim.status, ClaimStatus::Invalidated);
     assert!(
         claim
@@ -435,13 +436,12 @@ fn concurrent_writers_allocate_unique_claim_ids() {
         handle.join().unwrap();
     }
 
-    // 50 claims with dense, unique ids — no allocation race.
+    // 50 claims with unique writer-minted ids (ADR-0025) — no allocation
+    // race, no assumption about density or a starting value.
     let rows = claims_rows(dir.path());
     assert_eq!(rows.len(), 50);
     let ids: std::collections::BTreeSet<i64> = rows.iter().map(|row| row.0).collect();
     assert_eq!(ids.len(), 50, "claim ids must be unique");
-    assert_eq!(*ids.iter().next().unwrap(), 1);
-    assert_eq!(*ids.iter().next_back().unwrap(), 50);
 
     // The log carries exactly those 50 unique claim ids.
     let log = std::fs::read_to_string(dir.path().join("log.jsonl")).unwrap();
@@ -453,7 +453,10 @@ fn concurrent_writers_allocate_unique_claim_ids() {
             value["claim_id"].as_i64().unwrap()
         })
         .collect();
-    assert_eq!(logged_ids.len(), 50, "log must not contain duplicate ids");
+    assert_eq!(
+        logged_ids, ids,
+        "log and projection must carry the same ids"
+    );
 
     // And the log replays cleanly end to end.
     delete_db(dir.path());

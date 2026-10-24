@@ -268,18 +268,12 @@ impl Store {
         let extend_ontology = self.validate_ontology(write.predicate, write.provenance)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
-        // Pre-allocate the claim id inside a write transaction. The
         // BEGIN IMMEDIATE serializes cross-process writers (WAL single
-        // writer), so two processes can no longer compute the same
-        // MAX(id)+1 and poison the log with duplicate claim ids. The log
-        // append stays strictly before the SQLite INSERT (ADR-0005).
+        // writer) across log append + projection insert. The log append
+        // stays strictly before the SQLite INSERT (ADR-0005).
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
-            let claim_id: i64 =
-                self.conn
-                    .query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM claims", [], |r| {
-                        r.get(0)
-                    })?;
+            let claim_id = self.ids.mint();
 
             let entry = LogEntry {
                 kind: "add_claim",
@@ -386,15 +380,11 @@ impl Store {
         self.privacy_filter_recording(reason)?;
         self.ensure_claim_exists(claim_id)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        // The contradiction id is pre-allocated inside a write transaction so
-        // the log record pins the same id the projection uses (ADR-0005).
+        // The contradiction id is writer-minted (ADR-0025) so the log record
+        // pins the same id the projection uses (ADR-0005).
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
-            let contradiction_id: i64 = self.conn.query_row(
-                "SELECT COALESCE(MAX(id), 0) + 1 FROM contradictions",
-                [],
-                |r| r.get(0),
-            )?;
+            let contradiction_id = self.ids.mint();
             let entry = ContradictionLogEntry {
                 kind: "add_contradiction",
                 ts: now,
@@ -518,15 +508,11 @@ impl Store {
             None
         };
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        // Pre-allocate the contradiction id inside a write transaction so the
-        // log record pins the same id the projection uses (ADR-0005).
+        // The contradiction id is writer-minted (ADR-0025) so the log record
+        // pins the same id the projection uses (ADR-0005).
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
-            let contradiction_id: i64 = self.conn.query_row(
-                "SELECT COALESCE(MAX(id), 0) + 1 FROM contradictions",
-                [],
-                |r| r.get(0),
-            )?;
+            let contradiction_id = self.ids.mint();
             let entry = ContradictionLogEntry {
                 kind: "add_contradiction",
                 ts: now,

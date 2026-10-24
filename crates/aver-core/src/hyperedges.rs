@@ -62,16 +62,12 @@ impl Store {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let extend_ontology = self.validate_ontology(&input.predicate, input.provenance)?;
 
-        // BEGIN IMMEDIATE covers id allocation + log append + projection so
-        // concurrent processes cannot allocate duplicate hyperedge ids. The
-        // log append remains strictly before the SQLite INSERTs (ADR-0005).
+        // BEGIN IMMEDIATE covers log append + projection so concurrent
+        // processes serialize. The log append remains strictly before the
+        // SQLite INSERTs (ADR-0005).
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
-            let hyperedge_id: i64 = self.conn.query_row(
-                "SELECT COALESCE(MAX(id), 0) + 1 FROM hyperedges",
-                [],
-                |row| row.get(0),
-            )?;
+            let hyperedge_id = self.ids.mint();
 
             let entry = HyperedgeLogEntry {
                 kind: "add_hyperedge",

@@ -141,15 +141,11 @@ impl Store {
         ))?;
         self.privacy_filter_path_recording(source)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        // BEGIN IMMEDIATE serializes id allocation across processes (same
-        // race class as insert_claim). Log append stays before the INSERT.
+        // BEGIN IMMEDIATE serializes writers across processes (same race
+        // class as insert_claim). Log append stays before the INSERT.
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
-            let event_id: i64 = self.conn.query_row(
-                "SELECT COALESCE(MAX(id), 0) + 1 FROM episodic_events",
-                [],
-                |r| r.get(0),
-            )?;
+            let event_id = self.ids.mint();
             let entry = EventLogEntry {
                 kind: "record_event",
                 ts: now,

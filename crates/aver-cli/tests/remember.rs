@@ -23,13 +23,16 @@ fn remember_writes_claim_to_configured_store() {
 
     assert!(output.status.success(), "remember command should succeed");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout.contains("claim_id=1"),
-        "stdout should report inserted claim id, got {stdout:?}"
-    );
+    let reported_id: i64 = stdout
+        .split("claim_id=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|id| id.parse().ok())
+        .unwrap_or_else(|| panic!("stdout should report inserted claim id, got {stdout:?}"));
 
     let log = std::fs::read_to_string(dir.join("log.jsonl")).expect("remember should append log");
     let entry: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
+    assert_eq!(entry["claim_id"], serde_json::json!(reported_id));
     assert_eq!(entry["subject"], "auth_service");
     assert_eq!(entry["predicate"], "depends_on");
     assert_eq!(entry["object"], "stripe_sdk");

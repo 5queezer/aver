@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 
 use crate::error::Error;
-use crate::log::{ROTATED_LOG_SERIES, finalize_pending_rotations, maybe_rotate_log};
+use crate::ids::IdGen;
+use crate::log::{
+    ROTATED_LOG_SERIES, finalize_pending_rotations, max_id_in_log_tails, maybe_rotate_log,
+};
 use crate::seed::seed_ontology;
 use crate::types::ScopeWalk;
 // Schema versioning (ADR-0019 §6, `PRAGMA user_version`).
@@ -106,6 +109,8 @@ pub struct Store {
     pub(crate) log_path: PathBuf,
     pub(crate) event_log_path: PathBuf,
     pub(crate) observation_log_path: PathBuf,
+    /// Writer-minted id generator shared by every logged table (ADR-0025).
+    pub(crate) ids: IdGen,
 }
 
 /// Runtime availability of the bundled `sqlite-vec` extension (ADR-0017).
@@ -184,6 +189,9 @@ impl Store {
         // crash. Every log series rotates, not just the claims log, so
         // events.jsonl and observations.jsonl stay bounded too.
         finalize_pending_rotations(&memory_dir)?;
+        // ADR-0025: seed the id generator from the log tails before rotation
+        // empties the active files. The projection is never consulted.
+        let ids = IdGen::seeded(max_id_in_log_tails(&memory_dir)?);
         for series in ROTATED_LOG_SERIES {
             maybe_rotate_log(&memory_dir, series)?;
         }
@@ -213,6 +221,7 @@ impl Store {
             log_path,
             event_log_path,
             observation_log_path,
+            ids,
         })
     }
 

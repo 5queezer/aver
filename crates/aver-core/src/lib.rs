@@ -10,6 +10,7 @@ mod error;
 pub mod extractor;
 mod graph;
 mod hyperedges;
+mod ids;
 mod log;
 mod maintenance;
 mod ontology;

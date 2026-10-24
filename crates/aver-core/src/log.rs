@@ -206,6 +206,72 @@ pub(crate) fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), E
     Ok(())
 }
 
+/// Last non-empty line of a file, read from the tail without loading the
+/// whole file. `Ok(None)` for a missing or empty file.
+pub(crate) fn last_line(path: &Path) -> std::io::Result<Option<String>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    let mut end = file.metadata()?.len();
+    let mut tail: Vec<u8> = Vec::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    while end > 0 {
+        let start = end.saturating_sub(buf.len() as u64);
+        let len = (end - start) as usize;
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut buf[..len])?;
+        tail.splice(0..0, buf[..len].iter().copied());
+        end = start;
+        // Stop once a newline precedes some non-whitespace content: the
+        // last line is complete.
+        let trimmed_len = tail
+            .iter()
+            .rposition(|b| !b.is_ascii_whitespace())
+            .map_or(0, |i| i + 1);
+        if tail[..trimmed_len].contains(&b'\n') {
+            break;
+        }
+    }
+    let text = String::from_utf8_lossy(&tail);
+    Ok(text
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .map(str::to_owned))
+}
+
+/// Largest writer-minted id in the last line of each active log series
+/// (ADR-0025). Seeds the id generator so ids stay monotonic across process
+/// restarts even if the clock moved backwards; the projection is never
+/// consulted. Unparseable tails are ignored (the clock still orders ids).
+pub(crate) fn max_id_in_log_tails(memory_dir: &Path) -> Result<i64, Error> {
+    let mut max = 0;
+    for series in ROTATED_LOG_SERIES {
+        let Some(line) = last_line(&memory_dir.join(format!("{series}.jsonl")))? else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        for field in [
+            "claim_id",
+            "hyperedge_id",
+            "event_id",
+            "candidate_id",
+            "contradiction_id",
+            "chunk_id",
+        ] {
+            if let Some(id) = value.get(field).and_then(|v| v.as_i64()) {
+                max = max.max(id);
+            }
+        }
+    }
+    Ok(max)
+}
+
 /// Acquire the advisory `.aver/.lock` PID file (ADR-0019 §2/§5).
 /// Returns a guard whose drop releases the lock by deleting the file.
 pub struct AverLock {
@@ -480,4 +546,28 @@ pub(crate) fn maybe_rotate_log(memory_dir: &Path, series: &str) -> Result<(), Er
         .append(true)
         .open(&log_path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tail_tests {
+    use super::last_line;
+
+    #[test]
+    fn last_line_reads_tail_without_whole_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        assert_eq!(last_line(&path).unwrap(), None);
+        std::fs::write(&path, "").unwrap();
+        assert_eq!(last_line(&path).unwrap(), None);
+        std::fs::write(&path, "only\n").unwrap();
+        assert_eq!(last_line(&path).unwrap().as_deref(), Some("only"));
+        // A line longer than one read block, followed by a short last line
+        // and trailing blank lines.
+        let long = "x".repeat(200 * 1024);
+        std::fs::write(&path, format!("{long}\nlast\n\n")).unwrap();
+        assert_eq!(last_line(&path).unwrap().as_deref(), Some("last"));
+        // Last line itself longer than one block.
+        std::fs::write(&path, format!("first\n{long}")).unwrap();
+        assert_eq!(last_line(&path).unwrap().as_deref(), Some(long.as_str()));
+    }
 }

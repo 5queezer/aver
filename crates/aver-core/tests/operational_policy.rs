@@ -146,9 +146,9 @@ fn vacuum_into_writes_a_copy() {
 fn replay_rebuilds_hyperedges_from_append_only_log() {
     let dir = tempfile::tempdir().unwrap();
 
-    {
+    let hyperedge_id = {
         let store = Store::open(dir.path()).unwrap();
-        store
+        let hyperedge_id = store
             .add_hyperedge(HyperedgeInput {
                 predicate: "deployment".to_string(),
                 provenance: Provenance::UserAsserted,
@@ -167,7 +167,8 @@ fn replay_rebuilds_hyperedges_from_append_only_log() {
             })
             .unwrap();
         store.close().unwrap();
-    }
+        hyperedge_id
+    };
 
     std::fs::remove_file(dir.path().join("db.sqlite")).unwrap();
     let _ = std::fs::remove_file(dir.path().join("db.sqlite-wal"));
@@ -177,7 +178,7 @@ fn replay_rebuilds_hyperedges_from_append_only_log() {
     assert_eq!(report.hyperedges, 1);
 
     let store = Store::open(dir.path()).unwrap();
-    let hyperedge = store.get_hyperedge(1).unwrap();
+    let hyperedge = store.get_hyperedge(hyperedge_id).unwrap();
     assert_eq!(hyperedge.predicate, "deployment");
     assert_eq!(hyperedge.provenance, Provenance::UserAsserted);
     assert!((hyperedge.confidence - 0.87).abs() < 1e-9);
@@ -228,9 +229,9 @@ fn replay_rebuilds_db_from_logs() {
     let dir = tempfile::tempdir().unwrap();
 
     // Build a small db.
-    {
+    let alpha_id = {
         let store = Store::open(dir.path()).unwrap();
-        store.add_claim("alpha", "rel", "beta", "src").unwrap();
+        let alpha_id = store.add_claim("alpha", "rel", "beta", "src").unwrap();
         store.add_claim("gamma", "rel", "delta", "src").unwrap();
         let event_id = store
             .record_event_from_agent(
@@ -252,7 +253,8 @@ fn replay_rebuilds_db_from_logs() {
             )
             .unwrap();
         store.close().unwrap();
-    }
+        alpha_id
+    };
 
     // Capture row counts.
     let (claims, events, observations) = {
@@ -299,7 +301,7 @@ fn replay_rebuilds_db_from_logs() {
 
     // Reopen via Store to exercise full validation.
     let store = Store::open(dir.path()).unwrap();
-    let claim = store.get_claim(1).unwrap();
+    let claim = store.get_claim(alpha_id).unwrap();
     assert_eq!(claim.subject, "alpha");
     assert_eq!(claim.object, "beta");
     drop(store);

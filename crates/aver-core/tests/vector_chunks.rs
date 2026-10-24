@@ -30,7 +30,9 @@ fn add_vector_chunk_returns_chunk_id_for_claim() {
         )
         .expect("chunk metadata insert should succeed");
 
-    assert_eq!(chunk_id, 1);
+    let chunk = store.get_vector_chunk(chunk_id).unwrap();
+    assert_eq!(chunk.id, chunk_id);
+    assert_eq!(chunk.claim_id, claim_id);
 }
 
 #[test]

@@ -30,12 +30,13 @@ impl Store {
         self.privacy_filter_recording(text)?;
         self.privacy_filter_path_recording(embedding_model)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let chunk_id = self.ids.mint();
         self.conn.execute(
-            "INSERT INTO vector_chunks (claim_id, text, embedding_model, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![claim_id, text, embedding_model, now],
+            "INSERT INTO vector_chunks (id, claim_id, text, embedding_model, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![chunk_id, claim_id, text, embedding_model, now],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(chunk_id)
     }
 
     /// Insert vector chunk metadata with its embedding vector serialized for
@@ -61,12 +62,12 @@ impl Store {
         let embedding_json = serde_json::to_string(embedding)?;
 
         let tx = self.conn.unchecked_transaction()?;
+        let chunk_id = self.ids.mint();
         tx.execute(
-            "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![claim_id, text, embedding_model, embedding_json, now],
+            "INSERT INTO vector_chunks (id, claim_id, text, embedding_model, embedding_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![chunk_id, claim_id, text, embedding_model, embedding_json, now],
         )?;
-        let chunk_id = tx.last_insert_rowid();
         if embedding.len() == VECTOR_INDEX_DIM && self.has_table("vector_index") {
             tx.execute(
                 "INSERT INTO vector_index(chunk_id, embedding) VALUES (?1, ?2)",

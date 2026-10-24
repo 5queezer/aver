@@ -101,19 +101,14 @@ impl Store {
             self.privacy_filter_path_recording(possible_path)?;
         }
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        // The candidate id is pre-allocated inside a write transaction so the
-        // append-only log can pin it (ADR-0005) and cross-process writers
-        // cannot allocate the same id. Candidate records go to the episodic
+        // The candidate id is writer-minted (ADR-0025) so the append-only log
+        // can pin it (ADR-0005). Candidate records go to the episodic
         // log: they FK-reference episodic_events, which replay in the same
         // phase (ADR-0019 §4 input order replays events.jsonl after
         // log.jsonl, so log.jsonl must not carry event-dependent records).
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
-            let candidate_id: i64 = self.conn.query_row(
-                "SELECT COALESCE(MAX(id), 0) + 1 FROM candidate_claims",
-                [],
-                |r| r.get(0),
-            )?;
+            let candidate_id = self.ids.mint();
             let entry = CandidateClaimLogEntry {
                 kind: "propose_candidate_claim",
                 ts: now,
@@ -192,16 +187,12 @@ impl Store {
         // time, so there is nothing new to filter here.)
         let extend_ontology = self.validate_ontology(&candidate.predicate, provenance)?;
 
-        // Id allocation, log appends, and projection updates in one write
-        // transaction (same race class as insert_claim). Log-first ordering
-        // is preserved: both log lines precede the SQLite writes.
+        // Log appends and projection updates in one write transaction (same
+        // race class as insert_claim). Log-first ordering is preserved: both
+        // log lines precede the SQLite writes.
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
-            let claim_id: i64 =
-                self.conn
-                    .query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM claims", [], |r| {
-                        r.get(0)
-                    })?;
+            let claim_id = self.ids.mint();
 
             let entry = LogEntry {
                 kind: "add_claim",
