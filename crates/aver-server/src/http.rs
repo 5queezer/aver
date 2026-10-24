@@ -124,6 +124,9 @@ pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
             "/.well-known/oauth-authorization-server",
             get(oauth_metadata),
         )
+        // Unauthenticated liveness probe for systemd/deploy scripts; the
+        // bearer-gated `/api/health` stays for authenticated clients.
+        .route("/healthz", get(health))
         .route("/oauth/register", post(oauth_register))
         .route("/oauth/authorize", get(oauth_authorize))
         .route("/oauth/authorize/decision", post(oauth_authorize_decision))

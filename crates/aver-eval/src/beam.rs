@@ -5,6 +5,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use aver_core::{
     Store,
+    decision::{Decision, DecisionClient, OllamaDecisionClient},
     vector::{EmbeddingClient, EmbeddingError, OllamaEmbeddingClient},
 };
 use serde::{Deserialize, Serialize};
@@ -66,6 +67,34 @@ impl FromStr for BeamProvider {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BeamJudgeMode {
+    #[default]
+    Generative,
+    Decision,
+}
+
+impl FromStr for BeamJudgeMode {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "generative" => Ok(Self::Generative),
+            "decision" => Ok(Self::Decision),
+            other => anyhow::bail!("unknown BEAM judge mode: {other}"),
+        }
+    }
+}
+
+impl BeamJudgeMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Generative => "generative",
+            Self::Decision => "decision",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BeamRunConfig {
     pub dataset_path: PathBuf,
@@ -80,11 +109,14 @@ pub struct BeamRunConfig {
     pub limit_conversations: Option<usize>,
     pub limit_questions: Option<usize>,
     pub data_dir: Option<PathBuf>,
+    pub judge_mode: BeamJudgeMode,
+    pub decision_model: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct BeamRunReport {
     pub split: String,
+    pub judge_mode: String,
     pub conversations: usize,
     pub questions: usize,
     pub rubric_checks: usize,
@@ -183,6 +215,36 @@ pub fn judge_prompt(question: &str, answer: &str, rubric_item: &str) -> String {
         .replace("<llm_response>", safe_truncate(answer, 12000))
 }
 
+pub const DECISION_JUDGE_QUESTION: &str =
+    "How completely does the response to evaluate comply with the rubric criterion?";
+
+pub const DECISION_JUDGE_OPTIONS: [&str; 3] = ["yes", "partial", "no"];
+
+/// Criteria for [`DECISION_JUDGE_OPTIONS`], matching the 1.0 / 0.5 / 0.0
+/// scale of [`BEAM_JUDGE_PROMPT`].
+pub const DECISION_JUDGE_DESCRIPTIONS: [&str; 3] = [
+    "complete compliance: the response fully satisfies the rubric criterion",
+    "partial compliance: the response satisfies only part of the rubric criterion",
+    "no compliance: the response does not satisfy the rubric criterion",
+];
+
+pub fn decision_judge_state(question: &str, answer: &str, rubric_item: &str) -> String {
+    format!(
+        "QUESTION: {question}\nRUBRIC CRITERION: {rubric_item}\nRESPONSE TO EVALUATE: {}",
+        safe_truncate(answer, 12000)
+    )
+}
+
+/// Maps an index into [`DECISION_JUDGE_OPTIONS`] to the same buckets as
+/// [`parse_judge_score`].
+pub fn score_from_choice(index: usize) -> f64 {
+    match index {
+        0 => 1.0,
+        1 => 0.5,
+        _ => 0.0,
+    }
+}
+
 pub fn parse_judge_score(response: &str) -> f64 {
     let Ok(json) = serde_json::from_str::<serde_json::Value>(response) else {
         return 0.0;
@@ -218,6 +280,15 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
 
     let embedder = BeamEmbeddingClient::from_config(&config)?;
     let judge = BeamGenerateClient::from_config(&config)?;
+    let decision_judge = match config.judge_mode {
+        BeamJudgeMode::Generative => None,
+        BeamJudgeMode::Decision if config.provider == BeamProvider::Ollama => Some(
+            OllamaDecisionClient::new(&config.ollama_base_url, &config.decision_model),
+        ),
+        BeamJudgeMode::Decision => {
+            anyhow::bail!("--judge decision requires --provider ollama")
+        }
+    };
 
     let mut conversations = 0;
     let mut questions = 0;
@@ -270,11 +341,20 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
             eprintln!("    A: {}", safe_truncate(&answer.replace('\n', " "), 240));
 
             for rubric_item in question.rubric_items() {
-                let judge_response = judge.generate(
-                    &judge_prompt(&question.question, &answer, &rubric_item),
-                    true,
-                )?;
-                let score = parse_judge_score(&judge_response);
+                let score = if let Some(decision_judge) = &decision_judge {
+                    let state = decision_judge_state(&question.question, &answer, &rubric_item);
+                    let choice = decision_judge.decide(
+                        &Decision::new(&state, DECISION_JUDGE_QUESTION, &DECISION_JUDGE_OPTIONS)
+                            .with_descriptions(&DECISION_JUDGE_DESCRIPTIONS),
+                    )?;
+                    score_from_choice(choice.index)
+                } else {
+                    let judge_response = judge.generate(
+                        &judge_prompt(&question.question, &answer, &rubric_item),
+                        true,
+                    )?;
+                    parse_judge_score(&judge_response)
+                };
                 rubric_checks += 1;
                 score_sum += score;
                 let ability = ability_scores.entry(question.ability.clone()).or_default();
@@ -298,6 +378,7 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
 
     Ok(BeamRunReport {
         split: dataset.split,
+        judge_mode: config.judge_mode.as_str().to_string(),
         conversations,
         questions,
         rubric_checks,
@@ -754,4 +835,58 @@ fn safe_truncate(s: &str, max_bytes: usize) -> &str {
         end -= 1;
     }
     &s[..end]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn judge_mode_parses_known_values_and_rejects_others() {
+        assert_eq!(
+            "generative".parse::<BeamJudgeMode>().unwrap(),
+            BeamJudgeMode::Generative
+        );
+        assert_eq!(
+            "decision".parse::<BeamJudgeMode>().unwrap(),
+            BeamJudgeMode::Decision
+        );
+        assert!("bogus".parse::<BeamJudgeMode>().is_err());
+        assert_eq!(BeamJudgeMode::default(), BeamJudgeMode::Generative);
+    }
+
+    #[test]
+    fn decision_judge_state_contains_inputs_and_truncates_answer() {
+        let state = decision_judge_state("What port?", "It is 8080.", "Mentions 8080");
+        assert!(state.contains("What port?"));
+        assert!(state.contains("It is 8080."));
+        assert!(state.contains("Mentions 8080"));
+
+        let long = "x".repeat(13000);
+        let state = decision_judge_state("q", &long, "r");
+        assert!(state.contains(&"x".repeat(12000)));
+        assert!(!state.contains(&"x".repeat(12001)));
+    }
+
+    #[test]
+    fn score_from_choice_maps_buckets() {
+        assert_eq!(score_from_choice(0), 1.0);
+        assert_eq!(score_from_choice(1), 0.5);
+        assert_eq!(score_from_choice(2), 0.0);
+    }
+
+    #[test]
+    fn decision_judge_options_has_three_entries() {
+        assert_eq!(DECISION_JUDGE_OPTIONS.len(), 3);
+    }
+
+    #[test]
+    fn decision_judge_descriptions_follow_judge_scale() {
+        let decision = Decision::new("s", DECISION_JUDGE_QUESTION, &DECISION_JUDGE_OPTIONS)
+            .with_descriptions(&DECISION_JUDGE_DESCRIPTIONS);
+        assert!(decision.validate().is_ok());
+        for (index, prefix) in ["complete", "partial", "no compliance"].iter().enumerate() {
+            assert!(DECISION_JUDGE_DESCRIPTIONS[index].starts_with(prefix));
+        }
+    }
 }

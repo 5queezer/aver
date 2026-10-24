@@ -322,6 +322,37 @@ async fn protected_health_requires_bearer_token() {
 }
 
 #[tokio::test]
+async fn healthz_is_public_and_reports_ok() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = ServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 3317,
+        base_url: "https://aver.example.com".to_string(),
+        memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
+        auth_db_path: dir.path().join("auth.db").to_string_lossy().to_string(),
+        cors_origins: Vec::new(),
+        trusted_auth_header: None,
+    };
+    let app = build_router(config).unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json, serde_json::json!({ "status": "ok" }));
+}
+
+#[tokio::test]
 async fn oauth_register_route_creates_public_client() {
     let dir = tempfile::tempdir().unwrap();
     let config = ServerConfig {

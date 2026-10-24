@@ -52,14 +52,17 @@ fn close_truncates_wal() {
 }
 
 #[test]
-fn schema_version_set_to_migrations_len_after_open() {
+fn fresh_open_sets_user_version_to_baseline_schema_version() {
     let dir = tempfile::tempdir().unwrap();
     let _store = Store::open(dir.path()).unwrap();
     let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
     let v: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert!(v > 0, "user_version should be set after migrations apply");
+    assert_eq!(v, aver_core::SCHEMA_VERSION);
+    // 0001..0008 + the 0009 baseline (legacy 0009..0119). Bump this when a
+    // new migrations/0010_*.sql lands.
+    assert_eq!(v, 119);
 }
 
 #[test]
@@ -70,19 +73,23 @@ fn schema_too_new_refuses_to_open() {
         let _store = Store::open(dir.path()).unwrap();
     }
     {
-        // Bump user_version to an impossibly high value to simulate a newer db.
+        // Bump user_version one past this binary's schema (120 today) to
+        // simulate a db written by a newer release.
         let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
-        conn.pragma_update(None, "user_version", 9_999i64).unwrap();
+        conn.pragma_update(None, "user_version", aver_core::SCHEMA_VERSION + 1)
+            .unwrap();
     }
     let err = match Store::open(dir.path()) {
         Ok(_) => panic!("expected schema-too-new refusal"),
         Err(err) => err,
     };
-    let msg = err.to_string();
-    assert!(
-        msg.contains("schema too new") || msg.contains("user_version"),
-        "expected schema-too-new error, got: {msg}"
-    );
+    match err {
+        aver_core::Error::SchemaTooNew { found, supported } => {
+            assert_eq!(found, aver_core::SCHEMA_VERSION + 1);
+            assert_eq!(supported, aver_core::SCHEMA_VERSION);
+        }
+        other => panic!("expected schema-too-new error, got: {other}"),
+    }
 }
 
 #[test]

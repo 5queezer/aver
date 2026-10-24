@@ -20,6 +20,7 @@ use crate::tools::{
     RecallObservationParams, RecallParams as CoreRecallParams, RecordEventParams,
     RecordObservationParams, RejectCandidateClaimParams,
     RememberClaimParams as CoreRememberClaimParams, RetireClaimParams, ShouldExtractMemoriesParams,
+    TriageCandidateClaimParams,
 };
 
 /// Looks up the scope required for `tool_name` and verifies the request's
@@ -284,10 +285,10 @@ impl AverMcpService {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "propose_candidate_claim")?;
-        if params.scope.is_none() {
-            params.scope = Some(request_scope(&ctx).scope);
-        }
         let tools = self.lock_tools()?;
+        if params.scope.is_none() {
+            params.scope = Some(tools.candidate_scope(&params, &request_scope(&ctx).scope));
+        }
         let result = tools.propose_candidate_claim(params);
         json_tool_result(&tools, result, "propose_candidate_claim")
     }
@@ -318,6 +319,20 @@ impl AverMcpService {
         let tools = self.lock_tools()?;
         let result = tools.promote_candidate_claim(params);
         json_tool_result(&tools, result, "promote_candidate_claim")
+    }
+
+    #[tool(
+        description = "Let the local decision model promote, reject, or hold one staged candidate claim; promoted claims carry INFERRED provenance with confidence 0.45, and the tool errors unless AVER_DECISION_MODEL is set."
+    )]
+    async fn triage_candidate_claim(
+        &self,
+        Parameters(params): Parameters<TriageCandidateClaimParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, "triage_candidate_claim")?;
+        let tools = self.lock_tools()?;
+        let result = tools.triage_candidate_claim(params);
+        json_tool_result(&tools, result, "triage_candidate_claim")
     }
 
     #[tool(

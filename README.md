@@ -59,7 +59,15 @@ Prerequisites:
 just install
 ```
 
-When run from the Aver git repository, `install.sh` detects the checkout and installs from source. This installs the `aver` CLI to `~/.cargo/bin` by default. For local MCP/OAuth service deployments that execute `target/release/aver-server`, run `just release-server` to build and strip the server binary before restarting the service.
+When run from the Aver git repository, `install.sh` detects the checkout and installs from source. This installs the `aver` CLI to `~/.cargo/bin` by default.
+
+To run `aver-server` as a systemd user service (unit in [`contrib/systemd/aver-mcp.service`](contrib/systemd/aver-mcp.service), binary at `~/.local/bin/aver-server`):
+
+```bash
+just install-service   # once: install + enable the aver-mcp user unit
+just deploy-server     # after every change: release build, install, restart, probe
+just health            # probe GET /healthz on the running server
+```
 
 ### Store and recall a claim
 
@@ -143,6 +151,7 @@ Current CLI commands:
 | `propose` | Propose a candidate claim from an event. |
 | `list-candidates` | List candidate claims with optional session/status filters. |
 | `promote` | Promote a candidate claim into durable memory. |
+| `triage` | Let the opt-in ADR-0024 decision model promote, reject, or hold a candidate claim. |
 | `reject` | Reject a candidate claim with a reason. |
 | `record-observation` | Record a session observation from source events. |
 | `recall-observation` | Recall an observation with its supporting event payloads and audit status. |
@@ -176,6 +185,9 @@ Default configuration:
 | `AVER_AUTH_DB_PATH` | `<AVER_MEMORY_DIR>/auth.db` | SQLite auth database path. |
 | `AVER_CORS_ORIGINS` | *(allow any origin)* | Optional comma-separated allowed origins for protected MCP CORS responses. |
 | `AVER_TRUSTED_AUTH_HEADER` | *(unset)* | Optional reverse-proxy header name (for example `X-Forwarded-User`) that enables non-loopback OAuth authorization using Profile C trusted-header auth. |
+| `AVER_DECISION_MODEL` | *(unset)* | Ollama decision model (for example `tev1:4b`); setting it enables the ADR-0024 decision-model features. |
+| `AVER_DECISION_URL` | `http://localhost:11434` | Ollama base URL for the decision model. |
+| `AVER_DECISION_MIN_CONFIDENCE` | `0.6` | Confidence floor for decision-model choices; below it the deterministic behaviour applies (triage holds, suggestions fall back). |
 
 
 Useful endpoints:
@@ -186,6 +198,7 @@ Useful endpoints:
 - `POST /oauth/authorize/decision` (consent-screen form submission)
 - `POST /oauth/consent/revoke` (browser-session form; revokes a client's consent and its live tokens, after which `/oauth/authorize` re-renders the consent screen)
 - `POST /oauth/token` for authorization-code + PKCE token exchange and refresh-token grants (RFC 6749 §5.2 JSON error bodies)
+- `GET /healthz` (unauthenticated liveness probe)
 - `GET /api/health` with `Authorization: Bearer <token>`
 - `/mcp` with `Authorization: Bearer <token>`
 
@@ -210,13 +223,16 @@ For Visual Studio Code, drop a workspace-level `.vscode/mcp.json` similar to:
 
 Then run **MCP: Add Server** from the command palette and pick `aver`. VS Code dynamic-registers with `POST /oauth/register`, opens the consent screen in your browser, and — after you click **Approve** — receives the authorization code and exchanges it for an access token automatically. Other MCP clients that support the OAuth 2.1 + PKCE discovery profile (`/.well-known/oauth-authorization-server`) follow the same path.
 
-MCP currently exposes 18 tools through a progressive discovery card so agents keep the active choice set small:
+MCP currently exposes 19 tools through a progressive discovery card so agents keep the active choice set small:
 
 - **Default active set:** `recall`, `remember_claim`, `record_event`, `record_observation`, `assemble_compaction_summary`
 - **Event-to-claim workflow:** progressively load `should_extract_memories`, `propose_candidate_claim`, `list_candidate_claims`, `promote_candidate_claim`, `reject_candidate_claim` only when converting raw events into reviewed durable claims
+- **Decision-model triage:** `triage_candidate_claim` (ADR-0024, opt-in) asks the local decision model to promote, reject, or hold one candidate
 - **Graph navigation:** progressively load `expand` after recall returns an entity or an anchor is already known; use `add_triple` instead of `remember_claim` only when explicit source/confidence control is required
 - **Observation audit:** progressively load `recall_observation`, `observation_coverage` for handoff, compaction, or provenance checks
 - **Maintenance/repair:** keep `contradict`, `retire_claim`, `consolidate`, `add_vector_chunk` hidden until there is an explicit repair or retrieval-tuning need
+
+Setting `AVER_DECISION_MODEL` opts the server and CLI into the ADR-0024 decision model (`aver-server` and `aver-cli` enable `aver-core`'s `ollama` feature by default; build with `--no-default-features` to leave it out, in which case the variable is ignored). `triage_candidate_claim` (CLI: `triage --candidate-id N`) then lets the model promote, reject, or hold a pending candidate; promoted claims carry `INFERRED` provenance with confidence 0.45, and without the variable the tool returns an error. The opt-in also lets `should_extract_memories` ask the model when only undigested events remain (the MCP result then adds `reasons`), lets `propose_candidate_claim` without an explicit `scope` choose between the resolved scope and `global`, and adds the model's pick to unknown-predicate errors. Unset, every existing tool behaves as before.
 
 Aver's MCP guide is intentionally proactive but selective: agents should recall first, then record durable user-shared preferences, project facts, and long-lived working context even when the user does not say "remember this" explicitly. Identity details should be recorded only when they are necessary, user-shared, and not sensitive personal data. When durability is uncertain, agents should prefer `record_event` over `remember_claim`, and they must not store secrets, credentials, sensitive personal data, transient chat, or facts they cannot explain with provenance.
 
@@ -297,10 +313,12 @@ aver/
 ├── doc/
 │   ├── adr/             # Architecture decision records
 │   └── how-it-works.md  # Current implementation walkthrough
-├── migrations/          # Embedded SQLite migrations
+├── migrations/          # Embedded SQLite migrations (0001-0008 + 0009 baseline)
 ├── install.sh           # Source/release installer
 └── justfile             # Development automation
 ```
+
+`crates/aver-core/migrations-legacy/` holds the pre-baseline chain (0009-0119), applied only when upgrading stores created before the baseline.
 
 ## Development
 
@@ -311,7 +329,7 @@ just build       # cargo build --workspace --locked
 just test        # cargo test --workspace --locked
 just fmt         # cargo fmt --all
 just clippy      # cargo clippy --workspace --no-deps -- -D warnings
-just check       # format check + clippy + tests + autoresearch checks
+just check       # format check + clippy + tests + policy checks
 just release     # release build for aver-cli
 just dist        # local release tarball and SHA256SUMS under target/dist
 ```
@@ -353,7 +371,6 @@ Partial or planned:
 
 - [`doc/how-it-works.md`](doc/how-it-works.md) — current runtime flow and ADR mapping.
 - [`doc/adr/`](doc/adr/) — architecture decisions.
-- [`autoresearch.md`](autoresearch.md) — active experimental protocol and guardrails.
 
 ## License
 

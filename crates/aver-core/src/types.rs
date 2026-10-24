@@ -453,6 +453,8 @@ pub enum ExtractionTriggerReason {
     Correction,
     CommitCompleted,
     IdleCompaction,
+    /// ADR-0024: a decision model chose `extract` for undigested events.
+    DecisionModel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
