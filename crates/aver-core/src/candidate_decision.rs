@@ -74,34 +74,6 @@ pub(crate) struct DecisionLogField<'a> {
     pub(crate) choice: &'a str,
 }
 
-/// Validates the optional `decision` field of a candidate lifecycle line.
-/// Absent is fine (manual promotion/rejection and pre-ADR-0024 lines); when
-/// present it must name a model and the choice matching the line's kind.
-pub(crate) fn replay_decision(
-    value: &serde_json::Value,
-    expected_choice: &str,
-    path: &str,
-    lineno: usize,
-) -> Result<(), Error> {
-    let Some(raw) = value.get("decision") else {
-        return Ok(());
-    };
-    let model = raw.get("model").and_then(|v| v.as_str());
-    let choice = raw.get("choice").and_then(|v| v.as_str());
-    match (model, choice) {
-        (Some(model), Some(choice)) if !model.trim().is_empty() && choice == expected_choice => {
-            Ok(())
-        }
-        _ => Err(Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: format!(
-                "'decision' must be {{\"model\": <non-empty string>, \"choice\": \"{expected_choice}\"}}, got {raw}"
-            ),
-        }),
-    }
-}
-
 impl Store {
     /// ADR-0024 candidate triage. Asks `client` whether a PENDING candidate
     /// should be promoted, rejected or held. Promotion records provenance

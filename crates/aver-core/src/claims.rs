@@ -4,11 +4,9 @@ use std::path::Path;
 
 use rusqlite::{OptionalExtension, params};
 
+use crate::apply::apply;
 use crate::error::Error;
-use crate::log::{
-    ConfidenceChange, ContradictionLogEntry, DecayLogEntry, LogEntry, MergeSourceRefsLogEntry,
-    RetireClaimLogEntry, SupersedeLogEntry, append_jsonl,
-};
+use crate::log::{ConfidenceChange, LogRecord, append_jsonl};
 use crate::privacy::{PrivacyRejection, privacy_filter, privacy_filter_path};
 use crate::recall::{query_tokens_for_recall, recall_token_score};
 use crate::store::{Store, scope_filter_sql};
@@ -263,63 +261,35 @@ impl Store {
             .map(|_| ())
     }
 
+    /// The one claim write path (ADR-0025): validate → privacy gate → mint
+    /// the id → build the record → append it to the log → `apply` it to the
+    /// projection, all inside one write transaction.
     fn insert_claim(&self, write: ClaimWrite<'_>) -> Result<i64, Error> {
         self.validate_claim_write(&write)?;
-        let extend_ontology = self.validate_ontology(write.predicate, write.provenance)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
         // BEGIN IMMEDIATE serializes cross-process writers (WAL single
-        // writer) across log append + projection insert. The log append
-        // stays strictly before the SQLite INSERT (ADR-0005).
+        // writer) across log append + projection write. The log append
+        // stays strictly before the projection write (ADR-0005).
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
             let claim_id = self.ids.mint();
-
-            let entry = LogEntry {
-                kind: "add_claim",
+            let record = LogRecord::AddClaim {
                 ts: now,
                 claim_id,
-                subject: write.subject,
-                predicate: write.predicate,
-                object: write.object,
-                source: write.source,
-                agent_id: write.agent_id,
-                agent_kind: write.agent_kind.as_str(),
+                subject: write.subject.to_string(),
+                predicate: write.predicate.to_string(),
+                object: write.object.to_string(),
+                source: write.source.to_string(),
+                agent_id: write.agent_id.to_string(),
+                agent_kind: write.agent_kind.as_str().to_string(),
                 confidence: write.confidence,
-                provenance: write.provenance.as_str(),
-                scope: write.scope,
+                provenance: Some(write.provenance.as_str().to_string()),
+                scope: write.scope.to_string(),
             };
-            append_jsonl(&self.log_path, &entry)?;
-            append_jsonl(&self.agent_log_path(write.agent_id)?, &entry)?;
-
-            if extend_ontology {
-                self.apply_ontology_extension(write.predicate, write.agent_id, now)?;
-            }
-
-            self.ensure_entity(write.subject, now)?;
-            self.ensure_entity(write.object, now)?;
-
-            let source_refs = serde_json::to_string(&[write.source])?;
-            self.conn.execute(
-                "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
-                                     status, source_refs, agent_id, agent_kind, write_ts,
-                                     created_at, last_seen_at, last_verified_at, scope)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7,
-                         ?8, ?9, ?10, ?10, ?10, ?10, ?11)",
-                params![
-                    claim_id,
-                    write.subject,
-                    write.predicate,
-                    write.object,
-                    write.provenance.as_str(),
-                    write.confidence,
-                    source_refs,
-                    write.agent_id,
-                    write.agent_kind.as_str(),
-                    now,
-                    write.scope,
-                ],
-            )?;
+            append_jsonl(&self.log_path, &record)?;
+            append_jsonl(&self.agent_log_path(write.agent_id)?, &record)?;
+            apply(&self.conn, &record)?;
             Ok(claim_id)
         })();
         match result {
@@ -385,20 +355,15 @@ impl Store {
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
             let contradiction_id = self.ids.mint();
-            let entry = ContradictionLogEntry {
-                kind: "add_contradiction",
+            let record = LogRecord::AddContradiction {
                 ts: now,
                 contradiction_id,
                 claim_id,
-                reason,
+                reason: reason.to_string(),
                 new_claim_id: None,
             };
-            append_jsonl(&self.log_path, &entry)?;
-            self.conn.execute(
-                "INSERT INTO contradictions (id, claim_id, reason, created_at)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![contradiction_id, claim_id, reason, now],
-            )?;
+            append_jsonl(&self.log_path, &record)?;
+            apply(&self.conn, &record)?;
             Ok(contradiction_id)
         })();
         match result {
@@ -513,20 +478,15 @@ impl Store {
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
             let contradiction_id = self.ids.mint();
-            let entry = ContradictionLogEntry {
-                kind: "add_contradiction",
+            let record = LogRecord::AddContradiction {
                 ts: now,
                 contradiction_id,
                 claim_id,
-                reason,
+                reason: reason.to_string(),
                 new_claim_id,
             };
-            append_jsonl(&self.log_path, &entry)?;
-            self.conn.execute(
-                "INSERT INTO contradictions (id, claim_id, reason, new_claim_id, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![contradiction_id, claim_id, reason, new_claim_id, now],
-            )?;
+            append_jsonl(&self.log_path, &record)?;
+            apply(&self.conn, &record)?;
             Ok(contradiction_id)
         })();
         let id = match result {
@@ -621,19 +581,11 @@ impl Store {
             if changes.is_empty() {
                 return Ok(0);
             }
-            let entry = DecayLogEntry {
-                kind: "decay_confidence",
-                ts: now,
-                changes: &changes,
-            };
-            append_jsonl(&self.log_path, &entry)?;
-            for change in &changes {
-                self.conn.execute(
-                    "UPDATE claims SET confidence = ?1 WHERE id = ?2",
-                    params![change.confidence, change.claim_id],
-                )?;
-            }
-            Ok(changes.len())
+            let changed = changes.len();
+            let record = LogRecord::DecayConfidence { ts: now, changes };
+            append_jsonl(&self.log_path, &record)?;
+            apply(&self.conn, &record)?;
+            Ok(changed)
         })();
         match result {
             Ok(changed) => {
@@ -687,19 +639,14 @@ impl Store {
             if changes.is_empty() {
                 return Ok(0);
             }
-            let entry = DecayLogEntry {
-                kind: "decay_confidence",
+            let changed = changes.len();
+            let record = LogRecord::DecayConfidence {
                 ts: log_ts,
-                changes: &changes,
+                changes,
             };
-            append_jsonl(&self.log_path, &entry)?;
-            for change in &changes {
-                self.conn.execute(
-                    "UPDATE claims SET confidence = ?1 WHERE id = ?2",
-                    params![change.confidence, change.claim_id],
-                )?;
-            }
-            Ok(changes.len())
+            append_jsonl(&self.log_path, &record)?;
+            apply(&self.conn, &record)?;
+            Ok(changed)
         })();
         match result {
             Ok(changed) => {
@@ -784,18 +731,12 @@ impl Store {
         if claim_ids.is_empty() {
             return Ok(0);
         }
-        let entry = SupersedeLogEntry {
-            kind: "supersede_claims",
+        let record = LogRecord::SupersedeClaims {
             ts: now,
-            claim_ids,
+            claim_ids: claim_ids.to_vec(),
         };
-        append_jsonl(&self.log_path, &entry)?;
-        for claim_id in claim_ids {
-            self.conn.execute(
-                "UPDATE claims SET status = 'SUPERSEDED' WHERE id = ?1",
-                [claim_id],
-            )?;
-        }
+        append_jsonl(&self.log_path, &record)?;
+        apply(&self.conn, &record)?;
         Ok(claim_ids.len())
     }
 
@@ -844,31 +785,17 @@ impl Store {
                         }
                     }
                 }
-                let merged = serde_json::to_string(&source_refs)?;
                 let survivor = self.get_claim(survivor_id)?;
                 let should_promote =
                     survivor.provenance == Provenance::Inferred && source_refs.len() >= 2;
-                let entry = MergeSourceRefsLogEntry {
-                    kind: "merge_source_refs",
+                let record = LogRecord::MergeSourceRefs {
                     ts: now,
                     claim_id: survivor_id,
-                    source_refs: &source_refs,
+                    source_refs,
                     promote: should_promote,
                 };
-                append_jsonl(&self.log_path, &entry)?;
-                if should_promote {
-                    self.conn.execute(
-                        "UPDATE claims
-                            SET source_refs = ?1, provenance = 'EXTRACTED', confidence = MAX(confidence, 0.75)
-                          WHERE id = ?2",
-                        params![merged, survivor_id],
-                    )?;
-                } else {
-                    self.conn.execute(
-                        "UPDATE claims SET source_refs = ?1 WHERE id = ?2",
-                        params![merged, survivor_id],
-                    )?;
-                }
+                append_jsonl(&self.log_path, &record)?;
+                apply(&self.conn, &record)?;
                 merged_groups += 1;
             }
             Ok(merged_groups)
@@ -1125,12 +1052,12 @@ impl Store {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<(), Error> {
-            let (status, source_refs_json): (String, String) = self
+            let status: String = self
                 .conn
                 .query_row(
-                    "SELECT status, source_refs FROM claims WHERE id = ?1",
+                    "SELECT status FROM claims WHERE id = ?1",
                     [claim_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| row.get(0),
                 )
                 .map_err(|err| match err {
                     rusqlite::Error::QueryReturnedNoRows => Error::MissingClaim { claim_id },
@@ -1139,24 +1066,13 @@ impl Store {
             if status == "INVALIDATED" {
                 return Err(Error::AlreadyRetired { claim_id });
             }
-            let entry = RetireClaimLogEntry {
-                kind: "retire_claim",
+            let record = LogRecord::RetireClaim {
                 ts: now,
                 claim_id,
-                reason,
+                reason: reason.to_string(),
             };
-            append_jsonl(&self.log_path, &entry)?;
-            let mut refs: Vec<String> = serde_json::from_str(&source_refs_json)?;
-            refs.push(format!("retired:{reason}"));
-            let new_refs = serde_json::to_string(&refs)?;
-            self.conn.execute(
-                "UPDATE claims
-                    SET status = 'INVALIDATED',
-                        source_refs = ?1,
-                        last_seen_at = ?2
-                  WHERE id = ?3",
-                params![new_refs, now, claim_id],
-            )?;
+            append_jsonl(&self.log_path, &record)?;
+            apply(&self.conn, &record)?;
             Ok(())
         })();
         match result {

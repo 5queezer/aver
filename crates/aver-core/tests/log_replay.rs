@@ -538,50 +538,43 @@ fn lenient_replay_quarantines_bad_lines() {
 }
 
 #[test]
-fn vector_chunks_are_rebuildable_after_replay() {
+fn vector_chunks_are_rebuilt_by_replay() {
     let dir = tempfile::tempdir().unwrap();
-    let claim_id = {
+    let (claim_id, chunk_id, plain_chunk_id) = {
         let store = Store::open(dir.path()).unwrap();
         let claim_id = store
             .add_claim("alpha", "depends_on", "beta", "src")
             .unwrap();
-        let client = MockEmbeddingClient::new(vec![0.5; 8]);
-        store
+        let client = MockEmbeddingClient::new(vec![0.5; aver_core::VECTOR_INDEX_DIM]);
+        let chunk_id = store
             .add_embedded_vector_chunk_for_claim(claim_id, "test-model", &client)
             .unwrap();
-        assert_eq!(
-            store.list_vector_chunks_for_claim(claim_id).unwrap().len(),
-            1
-        );
+        // A chunk logged without an embedding, then backfilled: both the
+        // chunk and the backfill are records of their own.
+        let plain_chunk_id = store
+            .add_vector_chunk(claim_id, "alpha depends_on beta (plain)", "test-model")
+            .unwrap();
+        assert_eq!(store.backfill_vector_embeddings(&client).unwrap(), 1);
+        assert_eq!(store.vector_index_row_count().unwrap(), 2);
         store.close().unwrap();
-        claim_id
+        (claim_id, chunk_id, plain_chunk_id)
     };
 
-    // Vector chunks are a derived projection: replay rebuilds claims and
-    // leaves the chunk tables empty rather than bloating the log with
-    // embedding arrays.
+    // ADR-0025: vector chunks are logged, so replay rebuilds `vector_chunks`
+    // and the `vec0` index instead of leaving them for a re-embed pass.
     delete_db(dir.path());
-    replay(dir.path(), false).expect("replay should succeed");
+    let report = replay(dir.path(), false).expect("replay should succeed");
+    assert_eq!(report.vector_chunks, 3, "two chunks + one backfill");
 
     let store = Store::open(dir.path()).unwrap();
-    assert!(
-        store
-            .list_vector_chunks_for_claim(claim_id)
-            .unwrap()
-            .is_empty(),
-        "replay must not resurrect vector chunks"
-    );
-    // Recall keeps working over the rebuilt claims, and the chunks can be
-    // re-derived from claim text with the same embedding client.
-    assert!(!store.recall_text("alpha").unwrap().is_empty());
-    let client = MockEmbeddingClient::new(vec![0.5; 8]);
-    store
-        .add_embedded_vector_chunk_for_claim(claim_id, "test-model", &client)
-        .unwrap();
+    let chunks = store.list_vector_chunks_for_claim(claim_id).unwrap();
     assert_eq!(
-        store.list_vector_chunks_for_claim(claim_id).unwrap().len(),
-        1
+        chunks.iter().map(|chunk| chunk.id).collect::<Vec<_>>(),
+        vec![chunk_id, plain_chunk_id]
     );
+    assert!(chunks.iter().all(|chunk| chunk.embedding.is_some()));
+    assert_eq!(store.vector_index_row_count().unwrap(), 2);
+    assert_eq!(store.vector_chunk_embedding_status().unwrap(), (2, 2));
 }
 
 #[test]

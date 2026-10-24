@@ -5,7 +5,6 @@ use std::collections::HashSet;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::Error;
-use crate::seed;
 use crate::store::Store;
 use crate::types::Provenance;
 use crate::validation::validate_claim_field;
@@ -308,10 +307,6 @@ impl Store {
         Ok(allowed)
     }
 
-    pub(crate) fn ensure_entity(&self, entity: &str, now: i64) -> Result<(), Error> {
-        ensure_entity_on(&self.conn, entity, now)
-    }
-
     /// ADR-0018: count of entities currently flagged `requires_review = 1`.
     /// Surfaces the silent-`Thing`-fallback queue for consolidation.
     pub fn requires_review_count(&self) -> Result<i64, Error> {
@@ -336,20 +331,19 @@ impl Store {
     }
 
     /// ADR-0018: resolve a predicate against `predicate_types.name` and the
-    /// `predicate_alias` table.
+    /// `predicate_alias` table before a write is logged.
     ///
-    /// Returns `Ok(false)` if the predicate is canonical or aliased. On a
-    /// `USER_ASSERTED` miss, returns `Ok(true)` so the caller can append first
-    /// and then extend `predicate_types` with parent `relates_to` plus an
-    /// `ontology_extension_log` record. Every other miss returns
-    /// `Err(Error::UnknownPredicate)`.
+    /// Canonical or aliased predicates pass. A `USER_ASSERTED` miss passes
+    /// too: `apply` extends `predicate_types` with parent `relates_to` plus an
+    /// `ontology_extension_log` record when the logged record is applied.
+    /// Every other miss returns `Err(Error::UnknownPredicate)`.
     pub(crate) fn validate_ontology(
         &self,
         predicate: &str,
         provenance: Provenance,
-    ) -> Result<bool, Error> {
+    ) -> Result<(), Error> {
         if self.predicate_type_id(predicate)?.is_some() {
-            return Ok(false);
+            return Ok(());
         }
         let alias_hit: Option<i64> = self
             .conn
@@ -360,40 +354,16 @@ impl Store {
             )
             .optional()?;
         if alias_hit.is_some() {
-            return Ok(false);
+            return Ok(());
         }
         match provenance {
-            Provenance::UserAsserted => Ok(true),
+            Provenance::UserAsserted => Ok(()),
             Provenance::Extracted | Provenance::Inferred | Provenance::Ambiguous => {
                 Err(Error::UnknownPredicate {
                     name: predicate.to_string(),
                 })
             }
         }
-    }
-
-    pub(crate) fn apply_ontology_extension(
-        &self,
-        predicate: &str,
-        agent_id: &str,
-        now: i64,
-    ) -> Result<(), Error> {
-        let parent_id = self
-            .predicate_type_id("relates_to")?
-            .expect("ontology bootstrap should seed relates_to");
-        self.conn.execute(
-            "INSERT INTO predicate_types (name, parent_id, created_via, created_at)
-             VALUES (?1, ?2, 'user_assertion', ?3)",
-            params![predicate, parent_id, now],
-        )?;
-        seed::rebuild_closure(&self.conn, "predicate_types", "predicate_closure")?;
-        self.conn.execute(
-            "INSERT INTO ontology_extension_log
-               (predicate, parent, agent_id, created_at)
-             VALUES (?1, 'relates_to', ?2, ?3)",
-            params![predicate, agent_id, now],
-        )?;
-        Ok(())
     }
 
     pub(crate) fn predicate_vocabulary(&self) -> Result<PredicateVocabulary, Error> {
@@ -486,11 +456,9 @@ fn infer_entity_type_name_on(conn: &Connection, entity: &str) -> Result<String, 
     }
 }
 
-/// Single `ensure_entity` implementation shared by `Store` writes and log
-/// replay (ADR-0018 §"Subject/object policy"). Replay must reproduce the
-/// same entity classifications (`prefix:` inference, Thing fallback,
-/// requires_review flag) as the live write path; a replayed DB that typed
-/// every entity as Thing would silently lose that information.
+/// Entity upsert used by `apply` for every logged claim/hyperedge write
+/// (ADR-0018 §"Subject/object policy"): `prefix:` inference, Thing
+/// fallback, requires_review flag. `now` is the record timestamp.
 pub(crate) fn ensure_entity_on(conn: &Connection, entity: &str, now: i64) -> Result<(), Error> {
     let inferred_type = infer_entity_type_name_on(conn, entity)?;
     // `Thing` is seeded by the ontology bootstrap; a missing row means a
