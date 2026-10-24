@@ -176,6 +176,7 @@ fn recall_with_scope_filters_by_walk() {
             predicate_walk: None,
             min_confidence: None,
             status: None,
+            alpha: None,
         })
         .unwrap();
     let scopes: Vec<String> = view.triples.iter().map(|c| c.scope.clone()).collect();

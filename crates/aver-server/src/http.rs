@@ -62,6 +62,14 @@ fn is_loopback_host(host: &str) -> bool {
 }
 
 pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
+    let tools = AverTools::open(&config.memory_dir)?;
+    build_router_with_tools(config, tools)
+}
+
+/// [`build_router`] over an already-open [`AverTools`], so tests and the BEAM
+/// parity harness can inject clients (for example a deterministic
+/// embedding client) that the environment would otherwise configure.
+pub fn build_router_with_tools(config: ServerConfig, tools: AverTools) -> anyhow::Result<Router> {
     let auth_db = Arc::new(Mutex::new(AuthDb::open(&config.auth_db_path)?));
     let consent_deps = Arc::new(ConsentDeps {
         auth_db: auth_db.clone(),
@@ -85,7 +93,7 @@ pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
     // race). rusqlite connections are Send-but-not-Sync, so the store sits
     // behind the same `Arc<Mutex<_>>` pattern used for `AuthDb`; per-session
     // state is limited to auth/scope context carried in request extensions.
-    let shared_tools = Arc::new(Mutex::new(AverTools::open(&state.config.memory_dir)?));
+    let shared_tools = Arc::new(Mutex::new(tools));
     let base_url = state.config.base_url.clone();
     let mcp_service: StreamableHttpService<AverMcpService, LocalSessionManager> =
         StreamableHttpService::new(
