@@ -56,6 +56,7 @@ pub struct Decision<'a> {
 pub struct Choice {
     pub index: usize,            // always a valid index into `options`
     pub model: String,           // model identifier, e.g. "tev1:4b"
+    pub confidence: Option<f64>, // reported by the model when available
 }
 
 pub trait DecisionClient {
@@ -65,9 +66,11 @@ pub trait DecisionClient {
 
 - Lives next to `EmbeddingClient` in `aver-core` (new module `decision.rs`).
 - `OllamaDecisionClient` behind the existing `ollama` feature, using the
-  `ureq` client already present. Model name and base URL are configuration,
-  never literals (the design review flagged `"nomic-embed-text"` for the same
-  reason).
+  `ureq` client already present. It posts to Ollama's `/v1/systemone`
+  endpoint (TypeSafe's Jev API) with one `choice` question. Ollama documents
+  that Tev1 "tends to reply in prose" over `/api/chat`, so the chat endpoint
+  is not used. Model name and base URL are configuration, never literals (the
+  design review flagged `"nomic-embed-text"` for the same reason).
 - `NoopDecisionClient` (always returns an error or a configured default) and
   `MockDecisionClient` (scripted answers) ship for offline tests. No test may
   require a running Ollama.
