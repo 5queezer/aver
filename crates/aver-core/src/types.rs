@@ -457,6 +457,62 @@ pub enum ExtractionTriggerReason {
     DecisionModel,
 }
 
+impl ExtractionTriggerReason {
+    /// Stable snake_case name. For the five event-driven reasons this is
+    /// also the episodic event `kind` that triggers them.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ExplicitRemember => "explicit_remember",
+            Self::EventCountThreshold => "event_count_threshold",
+            Self::ObservationTokenThreshold => "observation_token_threshold",
+            Self::UncoveredCoverageGap => "uncovered_coverage_gap",
+            Self::SessionEnd => "session_end",
+            Self::Correction => "correction",
+            Self::CommitCompleted => "commit_completed",
+            Self::IdleCompaction => "idle_compaction",
+            Self::DecisionModel => "decision_model",
+        }
+    }
+}
+
+#[cfg(test)]
+mod extraction_trigger_reason_tests {
+    use super::ExtractionTriggerReason;
+
+    #[test]
+    fn as_str_is_unique_and_matches_the_historical_literals() {
+        let expected = [
+            (
+                ExtractionTriggerReason::ExplicitRemember,
+                "explicit_remember",
+            ),
+            (
+                ExtractionTriggerReason::EventCountThreshold,
+                "event_count_threshold",
+            ),
+            (
+                ExtractionTriggerReason::ObservationTokenThreshold,
+                "observation_token_threshold",
+            ),
+            (
+                ExtractionTriggerReason::UncoveredCoverageGap,
+                "uncovered_coverage_gap",
+            ),
+            (ExtractionTriggerReason::SessionEnd, "session_end"),
+            (ExtractionTriggerReason::Correction, "correction"),
+            (ExtractionTriggerReason::CommitCompleted, "commit_completed"),
+            (ExtractionTriggerReason::IdleCompaction, "idle_compaction"),
+            (ExtractionTriggerReason::DecisionModel, "decision_model"),
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for (reason, literal) in expected {
+            assert_eq!(reason.as_str(), literal);
+            assert!(seen.insert(reason.as_str()), "duplicate name {literal}");
+        }
+        assert_eq!(seen.len(), 9);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractionDecision {
     pub should_extract: bool,

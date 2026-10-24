@@ -2,17 +2,13 @@
 
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::Connection;
 
-use crate::candidate_decision;
-use crate::claims::provenance_for_agent_kind;
+use crate::apply::{Applied, apply};
 use crate::error::Error;
-use crate::log::{AverLock, ConfidenceChange, ROTATED_LOG_SERIES};
-use crate::ontology::ensure_entity_on;
-use crate::seed;
+use crate::log::{AverLock, LogRecord, ROTATED_LOG_SERIES};
 use crate::seed::seed_ontology;
 use crate::store::{SCHEMA_VERSION, ensure_sqlite_vec_registered, pending_migrations};
-use crate::types::{AgentKind, HyperedgeParticipantInput, Provenance};
 /// Stats reported by `aver replay`. ADR-0019 §4.
 #[derive(Debug, Clone, Default)]
 pub struct ReplayReport {
@@ -20,6 +16,8 @@ pub struct ReplayReport {
     pub hyperedges: u64,
     pub events: u64,
     pub observations: u64,
+    /// Vector chunk records applied (`add_vector_chunk` + `embed_vector_chunk`).
+    pub vector_chunks: u64,
     pub files_walked: u64,
     /// Lifecycle records applied (retire/contradiction/candidate/supersede/
     /// decay/merge transitions).
@@ -52,10 +50,11 @@ pub enum ReplayMode {
 
 /// Replay logs in the deterministic order specified by ADR-0019 §4:
 /// rotated `log.{N}.jsonl.gz` (numeric ascending) → `log.jsonl` →
-/// `events.jsonl` → `observations.jsonl` → `agents/<id>/log.jsonl`
-/// (lexicographic by agent id). Per-agent log records duplicate the global
-/// log; replay treats matching content as idempotent and only errors on
-/// genuine id-with-different-content collisions.
+/// `events.jsonl` → `observations.jsonl`. The per-agent mirror
+/// (`agents/<id>/log.jsonl`) is gone (ADR-0026); existing `agents/`
+/// directories are ignored. Replay treats a record whose id already exists
+/// with identical content as idempotent and only errors on genuine
+/// id-with-different-content collisions.
 ///
 /// Replay BYPASSES the privacy filter — the log is presumed already filtered
 /// at write time (ADR-0019 §4).
@@ -211,20 +210,6 @@ fn collect_replay_inputs(memory_dir: &Path) -> Result<Vec<PathBuf>, Error> {
             inputs.push(active);
         }
     }
-    let agents_dir = memory_dir.join("agents");
-    if agents_dir.exists() {
-        let mut agent_dirs: Vec<PathBuf> = std::fs::read_dir(&agents_dir)?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_dir())
-            .collect();
-        agent_dirs.sort();
-        for agent_dir in agent_dirs {
-            let log = agent_dir.join("log.jsonl");
-            if log.exists() {
-                inputs.push(log);
-            }
-        }
-    }
     Ok(inputs)
 }
 
@@ -243,6 +228,33 @@ fn open_log_reader(path: &Path) -> Result<Box<dyn std::io::BufRead>, Error> {
     }
 }
 
+/// Parse one log line. Unknown `kind` tags and malformed lines are told
+/// apart so operators see `E_REPLAY_UNKNOWN_KIND` for the former.
+fn parse_log_line(line: &str, path: &str, lineno: usize) -> Result<LogRecord, Error> {
+    let malformed = |detail: String| Error::ReplayMalformed {
+        path: path.to_string(),
+        line: lineno,
+        detail,
+    };
+    match serde_json::from_str::<LogRecord>(line) {
+        Ok(record) => Ok(record),
+        Err(err) => {
+            let value: serde_json::Value =
+                serde_json::from_str(line).map_err(|err| malformed(err.to_string()))?;
+            match value.get("kind").and_then(|v| v.as_str()) {
+                None => Err(malformed("missing 'kind'".to_string())),
+                Some(kind) if !LogRecord::KINDS.contains(&kind) => Err(Error::ReplayUnknownKind {
+                    kind: kind.to_string(),
+                }),
+                Some(_) => Err(malformed(err.to_string())),
+            }
+        }
+    }
+}
+
+/// Parse and apply one line through the single projection writer
+/// (`apply::apply`), then count it. Identical duplicates are skipped and not
+/// counted; apply's record-level errors are located to `path:line`.
 fn apply_log_line(
     conn: &Connection,
     line: &str,
@@ -250,1011 +262,39 @@ fn apply_log_line(
     lineno: usize,
     report: &mut ReplayReport,
 ) -> Result<(), Error> {
-    let value: serde_json::Value =
-        serde_json::from_str(line).map_err(|err| Error::ReplayMalformed {
+    let record = parse_log_line(line, path, lineno)?;
+    let applied = apply(conn, &record).map_err(|err| match err {
+        Error::InvalidRecord { detail } => Error::ReplayMalformed {
             path: path.to_string(),
             line: lineno,
-            detail: err.to_string(),
-        })?;
-    let kind = value
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: "missing 'kind'".to_string(),
-        })?
-        .to_string();
-
-    match kind.as_str() {
-        "add_claim" => apply_add_claim(conn, &value, path, lineno, report),
-        "add_hyperedge" => apply_add_hyperedge(conn, &value, path, lineno, report),
-        "record_event" => apply_record_event(conn, &value, path, lineno, report),
-        "record_observation" => apply_record_observation(conn, &value, path, lineno, report),
-        "prune_observations" => apply_prune_observations(conn, &value, path, lineno, report),
-        "retire_claim" => apply_retire_claim(conn, &value, path, lineno, report),
-        "add_contradiction" => apply_add_contradiction(conn, &value, path, lineno, report),
-        "propose_candidate_claim" => {
-            apply_propose_candidate_claim(conn, &value, path, lineno, report)
-        }
-        "promote_candidate_claim" => {
-            apply_promote_candidate_claim(conn, &value, path, lineno, report)
-        }
-        "reject_candidate_claim" => {
-            apply_reject_candidate_claim(conn, &value, path, lineno, report)
-        }
-        "supersede_claims" => apply_supersede_claims(conn, &value, path, lineno, report),
-        "decay_confidence" => apply_decay_confidence(conn, &value, path, lineno, report),
-        "merge_source_refs" => apply_merge_source_refs(conn, &value, path, lineno, report),
-        other => Err(Error::ReplayUnknownKind {
-            kind: other.to_string(),
-        }),
-    }
-}
-
-fn replay_field<'a>(
-    value: &'a serde_json::Value,
-    field: &str,
-    path: &str,
-    lineno: usize,
-) -> Result<&'a serde_json::Value, Error> {
-    value.get(field).ok_or_else(|| Error::ReplayMalformed {
-        path: path.to_string(),
-        line: lineno,
-        detail: format!("missing '{field}'"),
-    })
-}
-
-fn replay_str<'a>(
-    value: &'a serde_json::Value,
-    field: &str,
-    path: &str,
-    lineno: usize,
-) -> Result<&'a str, Error> {
-    replay_field(value, field, path, lineno)?
-        .as_str()
-        .ok_or_else(|| Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: format!("'{field}' is not a string"),
-        })
-}
-
-fn replay_i64(
-    value: &serde_json::Value,
-    field: &str,
-    path: &str,
-    lineno: usize,
-) -> Result<i64, Error> {
-    replay_field(value, field, path, lineno)?
-        .as_i64()
-        .ok_or_else(|| Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: format!("'{field}' is not an integer"),
-        })
-}
-
-fn replay_f64(
-    value: &serde_json::Value,
-    field: &str,
-    path: &str,
-    lineno: usize,
-) -> Result<f64, Error> {
-    replay_field(value, field, path, lineno)?
-        .as_f64()
-        .ok_or_else(|| Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: format!("'{field}' is not a number"),
-        })
-}
-
-/// ADR-0021: scope is optional in the log for backward compatibility —
-/// lines written before the field existed replay as 'global', matching the
-/// migration-0085 column default.
-fn replay_scope<'a>(
-    value: &'a serde_json::Value,
-    path: &str,
-    lineno: usize,
-) -> Result<&'a str, Error> {
-    match value.get("scope") {
-        None => Ok("global"),
-        Some(raw) => raw.as_str().ok_or_else(|| Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: "'scope' is not a string".to_string(),
-        }),
-    }
-}
-
-fn replay_i64_list(
-    value: &serde_json::Value,
-    field: &str,
-    path: &str,
-    lineno: usize,
-) -> Result<Vec<i64>, Error> {
-    serde_json::from_value(replay_field(value, field, path, lineno)?.clone()).map_err(|err| {
-        Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: format!("'{field}' is not an integer array: {err}"),
-        }
-    })
-}
-
-fn replay_string_list(
-    value: &serde_json::Value,
-    field: &str,
-    path: &str,
-    lineno: usize,
-) -> Result<Vec<String>, Error> {
-    serde_json::from_value(replay_field(value, field, path, lineno)?.clone()).map_err(|err| {
-        Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: format!("'{field}' is not a string array: {err}"),
-        }
-    })
-}
-
-pub(crate) fn apply_add_claim(
-    conn: &Connection,
-    value: &serde_json::Value,
-    path: &str,
-    lineno: usize,
-    report: &mut ReplayReport,
-) -> Result<(), Error> {
-    let claim_id = replay_i64(value, "claim_id", path, lineno)?;
-    let ts = replay_i64(value, "ts", path, lineno)?;
-    let subject = replay_str(value, "subject", path, lineno)?;
-    let predicate = replay_str(value, "predicate", path, lineno)?;
-    let object = replay_str(value, "object", path, lineno)?;
-    let source = replay_str(value, "source", path, lineno)?;
-    let agent_id = replay_str(value, "agent_id", path, lineno)?;
-    let agent_kind_str = replay_str(value, "agent_kind", path, lineno)?;
-    let confidence = replay_f64(value, "confidence", path, lineno)?;
-    let agent_kind: AgentKind = agent_kind_str.parse()?;
-    // Provenance is explicit in current log lines; fall back to the
-    // agent_kind derivation for lines written before the field existed.
-    let provenance = match value.get("provenance") {
-        None => provenance_for_agent_kind(agent_kind),
-        Some(_) => {
-            let raw = replay_str(value, "provenance", path, lineno)?;
-            raw.parse::<Provenance>()
-                .map_err(|_| Error::ReplayMalformed {
-                    path: path.to_string(),
-                    line: lineno,
-                    detail: format!("unknown 'provenance' value: {raw}"),
-                })?
-        }
-    };
-    // Scope is explicit in current log lines; pre-scope lines replay as
-    // 'global', matching the migration-0085 column default (ADR-0021).
-    let scope = replay_scope(value, path, lineno)?;
-
-    // Idempotency: if claim already exists, accept identical content,
-    // otherwise fail loudly with E_REPLAY_DUPLICATE_ID. Only write-time
-    // immutable fields are compared: lifecycle records (decay, merge,
-    // retire) legitimately change provenance/confidence/source_refs/status
-    // after the add_claim line, and per-agent log duplicates of the line
-    // replay after those mutations.
-    let existing: Option<(String, String, String, String, String, String)> = conn
-        .query_row(
-            "SELECT subject, predicate, object, agent_id, agent_kind, scope
-               FROM claims WHERE id = ?1",
-            [claim_id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
-            },
-        )
-        .optional()?;
-    if let Some(existing) = existing {
-        let matches = existing.0 == subject
-            && existing.1 == predicate
-            && existing.2 == object
-            && existing.3 == agent_id
-            && existing.4 == agent_kind.as_str()
-            && existing.5 == scope;
-        if !matches {
-            return Err(Error::ReplayDuplicateId {
-                detail: format!("claim_id={claim_id} content mismatch at {path}:{lineno}"),
-            });
-        }
-        return Ok(());
-    }
-
-    // Ensure entities exist, mirroring insert_claim's behavior through the
-    // shared ensure_entity implementation (type inference + requires_review).
-    ensure_entity_on(conn, subject, ts)?;
-    ensure_entity_on(conn, object, ts)?;
-
-    // ADR-0018: replay must rebuild the same `predicate_types` rows the
-    // original write produced. USER_ASSERTED writes auto-extended the
-    // ontology; replay applies the same policy so the trigger does not
-    // fire on the subsequent INSERT. EXTRACTED/INFERRED rows in the log
-    // were already accepted under the original ontology — replay accepts
-    // them too (the log is the source of truth, ADR-0005).
-    ontology_check_for_replay(conn, predicate, provenance, agent_id, ts)?;
-
-    let source_refs = serde_json::to_string(&[source])?;
-    conn.execute(
-        "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
-                             status, source_refs, agent_id, agent_kind, write_ts,
-                             created_at, last_seen_at, last_verified_at, scope)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7,
-                 ?8, ?9, ?10, ?10, ?10, ?10, ?11)",
-        params![
-            claim_id,
-            subject,
-            predicate,
-            object,
-            provenance.as_str(),
-            confidence,
-            source_refs,
-            agent_id,
-            agent_kind.as_str(),
-            ts,
-            scope
-        ],
-    )?;
-    report.claims += 1;
-    Ok(())
-}
-
-fn apply_add_hyperedge(
-    conn: &Connection,
-    value: &serde_json::Value,
-    path: &str,
-    lineno: usize,
-    report: &mut ReplayReport,
-) -> Result<(), Error> {
-    let hyperedge_id = replay_i64(value, "hyperedge_id", path, lineno)?;
-    let ts = replay_i64(value, "ts", path, lineno)?;
-    let predicate = replay_str(value, "predicate", path, lineno)?;
-    let provenance_str = replay_str(value, "provenance", path, lineno)?;
-    let provenance: Provenance = provenance_str.parse()?;
-    let confidence = replay_f64(value, "confidence", path, lineno)?;
-    let source_refs: Vec<String> = serde_json::from_value(
-        replay_field(value, "source_refs", path, lineno)?.clone(),
-    )
-    .map_err(|err| Error::ReplayMalformed {
-        path: path.to_string(),
-        line: lineno,
-        detail: format!("'source_refs' is not a string array: {err}"),
+            detail,
+        },
+        Error::ReplayDuplicateId { detail } => Error::ReplayDuplicateId {
+            detail: format!("{detail} at {path}:{lineno}"),
+        },
+        other => other,
     })?;
-    let participants: Vec<HyperedgeParticipantInput> =
-        serde_json::from_value(replay_field(value, "participants", path, lineno)?.clone())
-            .map_err(|err| Error::ReplayMalformed {
-                path: path.to_string(),
-                line: lineno,
-                detail: format!("'participants' is not a participant array: {err}"),
-            })?;
-
-    let existing: Option<(String, String, f64, String)> = conn
-        .query_row(
-            "SELECT predicate, provenance, confidence, source_refs
-               FROM hyperedges WHERE id = ?1",
-            [hyperedge_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .optional()?;
-    if let Some(existing) = existing {
-        let existing_sources: Vec<String> = serde_json::from_str(&existing.3)?;
-        let existing_participants = replay_hyperedge_participants(conn, hyperedge_id)?;
-        let matches = existing.0 == predicate
-            && existing.1 == provenance.as_str()
-            && (existing.2 - confidence).abs() < 1e-9
-            && existing_sources == source_refs
-            && existing_participants == participants;
-        if !matches {
-            return Err(Error::ReplayDuplicateId {
-                detail: format!("hyperedge_id={hyperedge_id} content mismatch at {path}:{lineno}"),
-            });
-        }
+    if applied == Applied::Duplicate {
         return Ok(());
     }
-
-    ontology_check_for_replay(conn, predicate, provenance, "local", ts)?;
-    let source_refs_json = serde_json::to_string(&source_refs)?;
-    conn.execute(
-            "INSERT INTO hyperedges (id, predicate, provenance, confidence, source_refs, status, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'ACTIVE', ?6, ?6)",
-            params![
-                hyperedge_id,
-                predicate,
-                provenance.as_str(),
-                confidence,
-                source_refs_json,
-                ts,
-            ],
-        )?;
-    for participant in &participants {
-        ensure_entity_on(conn, &participant.entity, ts)?;
-        conn.execute(
-            "INSERT INTO hyperedge_participants (hyperedge_id, role, entity)
-                 VALUES (?1, ?2, ?3)",
-            params![hyperedge_id, participant.role, participant.entity],
-        )?;
-    }
-    report.hyperedges += 1;
-    Ok(())
-}
-
-fn replay_hyperedge_participants(
-    conn: &Connection,
-    hyperedge_id: i64,
-) -> Result<Vec<HyperedgeParticipantInput>, Error> {
-    let mut stmt = conn.prepare(
-        "SELECT role, entity
-           FROM hyperedge_participants
-          WHERE hyperedge_id = ?1
-          ORDER BY id",
-    )?;
-    Ok(stmt
-        .query_map([hyperedge_id], |row| {
-            Ok(HyperedgeParticipantInput {
-                role: row.get(0)?,
-                entity: row.get(1)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?)
-}
-
-/// Replay-side ontology check (ADR-0018). Mirrors `Store::ontology_check`
-/// but works on a bare `Connection` because replay does not own a `Store`.
-/// Replay must accept whatever the log says; for predicates absent from
-/// `predicate_types` and `predicate_alias` it auto-extends regardless of
-/// provenance, because the log records that the original write was
-/// accepted at the time. This is more permissive than the live writer,
-/// but it's the price of "log is source of truth" (ADR-0005).
-fn ontology_check_for_replay(
-    conn: &Connection,
-    predicate: &str,
-    _provenance: Provenance,
-    agent_id: &str,
-    ts: i64,
-) -> Result<(), Error> {
-    let known: Option<i64> = conn
-        .query_row(
-            "SELECT id FROM predicate_types WHERE name = ?1",
-            [predicate],
-            |row| row.get(0),
-        )
-        .optional()?;
-    if known.is_some() {
-        return Ok(());
-    }
-    let alias_hit: Option<i64> = conn
-        .query_row(
-            "SELECT predicate_id FROM predicate_alias WHERE alias = ?1",
-            [predicate],
-            |row| row.get(0),
-        )
-        .optional()?;
-    if alias_hit.is_some() {
-        return Ok(());
-    }
-    let parent_id: i64 = conn.query_row(
-        "SELECT id FROM predicate_types WHERE name = 'relates_to'",
-        [],
-        |row| row.get(0),
-    )?;
-    conn.execute(
-        "INSERT INTO predicate_types (name, parent_id, created_via, created_at)
-         VALUES (?1, ?2, 'replay', ?3)",
-        params![predicate, parent_id, ts],
-    )?;
-    seed::rebuild_closure(conn, "predicate_types", "predicate_closure")?;
-    conn.execute(
-        "INSERT INTO ontology_extension_log (predicate, parent, agent_id, created_at)
-         VALUES (?1, 'relates_to', ?2, ?3)",
-        params![predicate, agent_id, ts],
-    )?;
-    Ok(())
-}
-
-fn apply_record_event(
-    conn: &Connection,
-    value: &serde_json::Value,
-    path: &str,
-    lineno: usize,
-    report: &mut ReplayReport,
-) -> Result<(), Error> {
-    let event_id = replay_i64(value, "event_id", path, lineno)?;
-    let ts = replay_i64(value, "ts", path, lineno)?;
-    let session_id = replay_str(value, "session_id", path, lineno)?;
-    let event_kind = replay_str(value, "event_kind", path, lineno)?;
-    let payload = replay_str(value, "payload", path, lineno)?;
-    let source = replay_str(value, "source", path, lineno)?;
-    let agent_id = replay_str(value, "agent_id", path, lineno)?;
-    let agent_kind = replay_str(value, "agent_kind", path, lineno)?;
-    let scope = replay_scope(value, path, lineno)?;
-
-    let existing: Option<(String, String, String, String, String, String)> = conn
-        .query_row(
-            "SELECT session_id, kind, payload, source, agent_id, agent_kind
-               FROM episodic_events WHERE id = ?1",
-            [event_id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
-            },
-        )
-        .optional()?;
-    if let Some(existing) = existing {
-        let matches = existing.0 == session_id
-            && existing.1 == event_kind
-            && existing.2 == payload
-            && existing.3 == source
-            && existing.4 == agent_id
-            && existing.5 == agent_kind;
-        if !matches {
-            return Err(Error::ReplayDuplicateId {
-                detail: format!("event_id={event_id} content mismatch at {path}:{lineno}"),
-            });
+    match record {
+        LogRecord::AddClaim { .. } => report.claims += 1,
+        LogRecord::AddHyperedge { .. } => report.hyperedges += 1,
+        LogRecord::RecordEvent { .. } => report.events += 1,
+        LogRecord::RecordObservation { .. } => report.observations += 1,
+        LogRecord::AddVectorChunk { .. } | LogRecord::EmbedVectorChunk { .. } => {
+            report.vector_chunks += 1
         }
-        return Ok(());
+        // Prune markers were never counted; keep the report contract.
+        LogRecord::PruneObservations { .. } => {}
+        LogRecord::RetireClaim { .. }
+        | LogRecord::AddContradiction { .. }
+        | LogRecord::ProposeCandidateClaim { .. }
+        | LogRecord::PromoteCandidateClaim { .. }
+        | LogRecord::RejectCandidateClaim { .. }
+        | LogRecord::SupersedeClaims { .. }
+        | LogRecord::DecayConfidence { .. }
+        | LogRecord::MergeSourceRefs { .. } => report.lifecycle += 1,
     }
-    conn.execute(
-        "INSERT INTO episodic_events (id, session_id, kind, payload, source, agent_id, agent_kind, ts, scope)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![
-            event_id,
-            session_id,
-            event_kind,
-            payload,
-            source,
-            agent_id,
-            agent_kind,
-            ts,
-            scope
-        ],
-    )?;
-    report.events += 1;
-    Ok(())
-}
-
-fn apply_record_observation(
-    conn: &Connection,
-    value: &serde_json::Value,
-    path: &str,
-    lineno: usize,
-    report: &mut ReplayReport,
-) -> Result<(), Error> {
-    let id = replay_str(value, "observation_id", path, lineno)?;
-    let ts = replay_i64(value, "ts", path, lineno)?;
-    let session_id = replay_str(value, "session_id", path, lineno)?;
-    let content = replay_str(value, "content", path, lineno)?;
-    let relevance = replay_str(value, "relevance", path, lineno)?;
-    let source_event_ids = replay_field(value, "source_event_ids", path, lineno)?;
-    let source_event_ids_json = source_event_ids.to_string();
-    let agent_id = replay_str(value, "agent_id", path, lineno)?;
-    let agent_kind = replay_str(value, "agent_kind", path, lineno)?;
-    let derivation = replay_str(value, "derivation", path, lineno)?;
-    let scope = replay_scope(value, path, lineno)?;
-
-    let existing: Option<(String, String, String, String, String, String, String)> = conn
-        .query_row(
-            "SELECT session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation
-               FROM observations WHERE id = ?1",
-            [id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
-        )
-        .optional()?;
-    if let Some(existing) = existing {
-        let matches = existing.0 == session_id
-            && existing.1 == content
-            && existing.2 == relevance
-            && existing.3 == source_event_ids_json
-            && existing.4 == agent_id
-            && existing.5 == agent_kind
-            && existing.6 == derivation;
-        if !matches {
-            return Err(Error::ReplayDuplicateId {
-                detail: format!("observation_id={id} content mismatch at {path}:{lineno}"),
-            });
-        }
-        return Ok(());
-    }
-    conn.execute(
-        "INSERT INTO observations
-         (id, session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation, ts, scope)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![
-            id,
-            session_id,
-            content,
-            relevance,
-            source_event_ids_json,
-            agent_id,
-            agent_kind,
-            derivation,
-            ts,
-            scope
-        ],
-    )?;
-    report.observations += 1;
-    Ok(())
-}
-
-fn apply_prune_observations(
-    conn: &Connection,
-    value: &serde_json::Value,
-    path: &str,
-    lineno: usize,
-    _report: &mut ReplayReport,
-) -> Result<(), Error> {
-    let marker_id = replay_str(value, "prune_marker_id", path, lineno)?;
-    let ts = replay_i64(value, "ts", path, lineno)?;
-    let session_id = replay_str(value, "session_id", path, lineno)?;
-    let pruned_observation_ids = replay_field(value, "pruned_observation_ids", path, lineno)?;
-    let pruned_observation_ids_json = pruned_observation_ids.to_string();
-
-    let existing: Option<(String, String, String)> = conn
-        .query_row(
-            "SELECT session_id, pruned_observation_ids, ts
-               FROM observation_prune_markers WHERE id = ?1",
-            [marker_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)?.to_string())),
-        )
-        .optional()?;
-    if let Some(existing) = existing {
-        let matches = existing.0 == session_id
-            && existing.1 == pruned_observation_ids_json
-            && existing.2 == ts.to_string();
-        if !matches {
-            return Err(Error::ReplayDuplicateId {
-                detail: format!("prune_marker_id={marker_id} content mismatch at {path}:{lineno}"),
-            });
-        }
-        return Ok(());
-    }
-    conn.execute(
-        "INSERT INTO observation_prune_markers
-         (id, session_id, pruned_observation_ids, ts)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![marker_id, session_id, pruned_observation_ids_json, ts],
-    )?;
-    Ok(())
-}
-
-/// Replay a `retire_claim` record (ADR-0023): reproduce the live path's
-/// source_refs marker append + INVALIDATED flip against the already-replayed
-/// claim state.
-fn apply_retire_claim(
-    conn: &Connection,
-    value: &serde_json::Value,
-    path: &str,
-    lineno: usize,
-    report: &mut ReplayReport,
-) -> Result<(), Error> {
-    let claim_id = replay_i64(value, "claim_id", path, lineno)?;
-    let ts = replay_i64(value, "ts", path, lineno)?;
-    let reason = replay_str(value, "reason", path, lineno)?;
-
-    let existing: Option<(String, String)> = conn
-        .query_row(
-            "SELECT status, source_refs FROM claims WHERE id = ?1",
-            [claim_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()?;
-    let Some((status, source_refs_json)) = existing else {
-        return Err(Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: format!("retire_claim references missing claim {claim_id}"),
-        });
-    };
-    let marker = format!("retired:{reason}");
-    if status == "INVALIDATED" {
-        // Idempotency: the same retirement is only valid once.
-        let refs: Vec<String> = serde_json::from_str(&source_refs_json)?;
-        if refs.iter().any(|source_ref| source_ref == &marker) {
-            return Ok(());
-        }
-        return Err(Error::ReplayDuplicateId {
-            detail: format!("claim_id={claim_id} already INVALIDATED at {path}:{lineno}"),
-        });
-    }
-    let mut refs: Vec<String> = serde_json::from_str(&source_refs_json)?;
-    refs.push(marker);
-    conn.execute(
-        "UPDATE claims
-            SET status = 'INVALIDATED',
-                source_refs = ?1,
-                last_seen_at = ?2
-          WHERE id = ?3",
-        params![serde_json::to_string(&refs)?, ts, claim_id],
-    )?;
-    report.lifecycle += 1;
-    Ok(())
-}
-
-fn apply_add_contradiction(
-    conn: &Connection,
-    value: &serde_json::Value,
-    path: &str,
-    lineno: usize,
-    report: &mut ReplayReport,
-) -> Result<(), Error> {
-    let contradiction_id = replay_i64(value, "contradiction_id", path, lineno)?;
-    let ts = replay_i64(value, "ts", path, lineno)?;
-    let claim_id = replay_i64(value, "claim_id", path, lineno)?;
-    let reason = replay_str(value, "reason", path, lineno)?;
-    let new_claim_id: Option<i64> = match value.get("new_claim_id") {
-        None => {
-            return Err(Error::ReplayMalformed {
-                path: path.to_string(),
-                line: lineno,
-                detail: "missing 'new_claim_id'".to_string(),
-            });
-        }
-        Some(raw) if raw.is_null() => None,
-        Some(raw) => Some(raw.as_i64().ok_or_else(|| Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: "'new_claim_id' is not an integer".to_string(),
-        })?),
-    };
-
-    let existing: Option<(i64, String, Option<i64>)> = conn
-        .query_row(
-            "SELECT claim_id, reason, new_claim_id FROM contradictions WHERE id = ?1",
-            [contradiction_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()?;
-    if let Some(existing) = existing {
-        let matches = existing.0 == claim_id && existing.1 == reason && existing.2 == new_claim_id;
-        if !matches {
-            return Err(Error::ReplayDuplicateId {
-                detail: format!(
-                    "contradiction_id={contradiction_id} content mismatch at {path}:{lineno}"
-                ),
-            });
-        }
-        return Ok(());
-    }
-    conn.execute(
-        "INSERT INTO contradictions (id, claim_id, reason, new_claim_id, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![contradiction_id, claim_id, reason, new_claim_id, ts],
-    )?;
-    report.lifecycle += 1;
-    Ok(())
-}
-
-fn apply_propose_candidate_claim(
-    conn: &Connection,
-    value: &serde_json::Value,
-    path: &str,
-    lineno: usize,
-    report: &mut ReplayReport,
-) -> Result<(), Error> {
-    let candidate_id = replay_i64(value, "candidate_id", path, lineno)?;
-    let ts = replay_i64(value, "ts", path, lineno)?;
-    let event_id = replay_i64(value, "event_id", path, lineno)?;
-    let subject = replay_str(value, "subject", path, lineno)?;
-    let predicate = replay_str(value, "predicate", path, lineno)?;
-    let object = replay_str(value, "object", path, lineno)?;
-    let scope = replay_scope(value, path, lineno)?;
-
-    let existing: Option<(i64, String, String, String, String)> = conn
-        .query_row(
-            "SELECT event_id, subject, predicate, object, scope
-               FROM candidate_claims WHERE id = ?1",
-            [candidate_id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            },
-        )
-        .optional()?;
-    if let Some(existing) = existing {
-        let matches = existing.0 == event_id
-            && existing.1 == subject
-            && existing.2 == predicate
-            && existing.3 == object
-            && existing.4 == scope;
-        if !matches {
-            return Err(Error::ReplayDuplicateId {
-                detail: format!("candidate_id={candidate_id} content mismatch at {path}:{lineno}"),
-            });
-        }
-        return Ok(());
-    }
-    // provenance/confidence/status stay at the schema defaults (INFERRED,
-    // 0.45, PENDING) — the live proposal path never overrides them.
-    conn.execute(
-        "INSERT INTO candidate_claims (id, event_id, subject, predicate, object, created_at, scope)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![
-            candidate_id,
-            event_id,
-            subject,
-            predicate,
-            object,
-            ts,
-            scope
-        ],
-    )?;
-    report.lifecycle += 1;
-    Ok(())
-}
-
-fn apply_promote_candidate_claim(
-    conn: &Connection,
-    value: &serde_json::Value,
-    path: &str,
-    lineno: usize,
-    report: &mut ReplayReport,
-) -> Result<(), Error> {
-    let candidate_id = replay_i64(value, "candidate_id", path, lineno)?;
-    let _ts = replay_i64(value, "ts", path, lineno)?;
-    let claim_id = replay_i64(value, "claim_id", path, lineno)?;
-    candidate_decision::replay_decision(value, "promote", path, lineno)?;
-
-    let existing: Option<(String, Option<i64>)> = conn
-        .query_row(
-            "SELECT status, promoted_claim_id FROM candidate_claims WHERE id = ?1",
-            [candidate_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()?;
-    let Some((status, promoted_claim_id)) = existing else {
-        return Err(Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: format!("promote_candidate_claim references missing candidate {candidate_id}"),
-        });
-    };
-    if status == "PROMOTED" {
-        if promoted_claim_id == Some(claim_id) {
-            return Ok(());
-        }
-        return Err(Error::ReplayDuplicateId {
-            detail: format!(
-                "candidate_id={candidate_id} already PROMOTED to a different claim at {path}:{lineno}"
-            ),
-        });
-    }
-    if status != "PENDING" {
-        return Err(Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: format!("cannot promote candidate {candidate_id} from status {status}"),
-        });
-    }
-    let claim_exists = conn
-        .query_row("SELECT 1 FROM claims WHERE id = ?1", [claim_id], |_| Ok(()))
-        .optional()?
-        .is_some();
-    if !claim_exists {
-        return Err(Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: format!("promotion references missing claim {claim_id}"),
-        });
-    }
-    let rows_changed = conn.execute(
-        "UPDATE candidate_claims
-            SET status = 'PROMOTED', promoted_claim_id = ?1
-          WHERE id = ?2 AND status = 'PENDING'",
-        params![claim_id, candidate_id],
-    )?;
-    if rows_changed != 1 {
-        return Err(Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: format!("promotion changed {rows_changed} rows for candidate {candidate_id}"),
-        });
-    }
-    report.lifecycle += 1;
-    Ok(())
-}
-
-fn apply_reject_candidate_claim(
-    conn: &Connection,
-    value: &serde_json::Value,
-    path: &str,
-    lineno: usize,
-    report: &mut ReplayReport,
-) -> Result<(), Error> {
-    let candidate_id = replay_i64(value, "candidate_id", path, lineno)?;
-    let _ts = replay_i64(value, "ts", path, lineno)?;
-    let reason = replay_str(value, "reason", path, lineno)?;
-    candidate_decision::replay_decision(value, "reject", path, lineno)?;
-
-    let existing: Option<(String, Option<String>)> = conn
-        .query_row(
-            "SELECT status, rejection_reason FROM candidate_claims WHERE id = ?1",
-            [candidate_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()?;
-    let Some((status, rejection_reason)) = existing else {
-        return Err(Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: format!("reject_candidate_claim references missing candidate {candidate_id}"),
-        });
-    };
-    if status == "REJECTED" {
-        if rejection_reason.as_deref() == Some(reason) {
-            return Ok(());
-        }
-        return Err(Error::ReplayDuplicateId {
-            detail: format!(
-                "candidate_id={candidate_id} already REJECTED with a different reason at {path}:{lineno}"
-            ),
-        });
-    }
-    if status != "PENDING" {
-        return Err(Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: format!("cannot reject candidate {candidate_id} from status {status}"),
-        });
-    }
-    let rows_changed = conn.execute(
-        "UPDATE candidate_claims
-            SET status = 'REJECTED', rejection_reason = ?1
-          WHERE id = ?2 AND status = 'PENDING'",
-        params![reason, candidate_id],
-    )?;
-    if rows_changed != 1 {
-        return Err(Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: format!("rejection changed {rows_changed} rows for candidate {candidate_id}"),
-        });
-    }
-    report.lifecycle += 1;
-    Ok(())
-}
-
-/// Replay a `supersede_claims` record: assert the logged lifecycle
-/// transitions. Naturally idempotent (the UPDATE is a no-op once the claim
-/// is SUPERSEDED) and tolerant of claims quarantined in lenient mode.
-fn apply_supersede_claims(
-    conn: &Connection,
-    value: &serde_json::Value,
-    path: &str,
-    lineno: usize,
-    report: &mut ReplayReport,
-) -> Result<(), Error> {
-    let _ts = replay_i64(value, "ts", path, lineno)?;
-    let claim_ids = replay_i64_list(value, "claim_ids", path, lineno)?;
-    for claim_id in &claim_ids {
-        let status: Option<String> = conn
-            .query_row(
-                "SELECT status FROM claims WHERE id = ?1",
-                [claim_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(status) = status else {
-            return Err(Error::ReplayMalformed {
-                path: path.to_string(),
-                line: lineno,
-                detail: format!("supersede_claims references missing claim {claim_id}"),
-            });
-        };
-        if status == "SUPERSEDED" {
-            continue;
-        }
-        let rows_changed = conn.execute(
-            "UPDATE claims SET status = 'SUPERSEDED' WHERE id = ?1",
-            [claim_id],
-        )?;
-        if rows_changed != 1 {
-            return Err(Error::ReplayMalformed {
-                path: path.to_string(),
-                line: lineno,
-                detail: format!("supersede changed {rows_changed} rows for claim {claim_id}"),
-            });
-        }
-    }
-    report.lifecycle += 1;
-    Ok(())
-}
-
-/// Replay a `decay_confidence` record: apply the logged post-decay values
-/// verbatim — the log records outcomes, not formulas.
-fn apply_decay_confidence(
-    conn: &Connection,
-    value: &serde_json::Value,
-    path: &str,
-    lineno: usize,
-    report: &mut ReplayReport,
-) -> Result<(), Error> {
-    let _ts = replay_i64(value, "ts", path, lineno)?;
-    let changes: Vec<ConfidenceChange> = serde_json::from_value(
-        replay_field(value, "changes", path, lineno)?.clone(),
-    )
-    .map_err(|err| Error::ReplayMalformed {
-        path: path.to_string(),
-        line: lineno,
-        detail: format!("'changes' is not a confidence-change array: {err}"),
-    })?;
-    for change in &changes {
-        let rows_changed = conn.execute(
-            "UPDATE claims SET confidence = ?1 WHERE id = ?2",
-            params![change.confidence, change.claim_id],
-        )?;
-        if rows_changed != 1 {
-            return Err(Error::ReplayMalformed {
-                path: path.to_string(),
-                line: lineno,
-                detail: format!(
-                    "decay_confidence references missing claim {}",
-                    change.claim_id
-                ),
-            });
-        }
-    }
-    report.lifecycle += 1;
-    Ok(())
-}
-
-fn apply_merge_source_refs(
-    conn: &Connection,
-    value: &serde_json::Value,
-    path: &str,
-    lineno: usize,
-    report: &mut ReplayReport,
-) -> Result<(), Error> {
-    let _ts = replay_i64(value, "ts", path, lineno)?;
-    let claim_id = replay_i64(value, "claim_id", path, lineno)?;
-    let source_refs = replay_string_list(value, "source_refs", path, lineno)?;
-    let promote = replay_field(value, "promote", path, lineno)?
-        .as_bool()
-        .ok_or_else(|| Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: "'promote' is not a boolean".to_string(),
-        })?;
-    let merged = serde_json::to_string(&source_refs)?;
-    let rows_changed = if promote {
-        conn.execute(
-            "UPDATE claims
-                SET source_refs = ?1, provenance = 'EXTRACTED', confidence = MAX(confidence, 0.75)
-              WHERE id = ?2",
-            params![merged, claim_id],
-        )?
-    } else {
-        conn.execute(
-            "UPDATE claims SET source_refs = ?1 WHERE id = ?2",
-            params![merged, claim_id],
-        )?
-    };
-    if rows_changed != 1 {
-        return Err(Error::ReplayMalformed {
-            path: path.to_string(),
-            line: lineno,
-            detail: format!("merge_source_refs references missing claim {claim_id}"),
-        });
-    }
-    report.lifecycle += 1;
     Ok(())
 }

@@ -592,7 +592,7 @@ fn add_claim_records_last_verified_at_for_policy_scoring() {
 }
 
 #[test]
-fn add_claim_from_agent_appends_to_agent_partition_log() {
+fn add_claim_from_agent_logs_agent_attribution_in_the_single_log() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
 
@@ -607,13 +607,17 @@ fn add_claim_from_agent_appends_to_agent_partition_log() {
         )
         .unwrap();
 
-    let log_path = dir.path().join("agents/parser_agent/log.jsonl");
-    let log = std::fs::read_to_string(log_path).expect("agent partition log should exist");
+    // ADR-0026: one log. Agent attribution lives on the record itself; no
+    // per-agent mirror is written.
+    let log = std::fs::read_to_string(dir.path().join("log.jsonl")).unwrap();
     let entry: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();
-
     assert_eq!(entry["claim_id"], serde_json::json!(claim_id));
     assert_eq!(entry["agent_id"], "parser_agent");
     assert_eq!(entry["agent_kind"], "DETERMINISTIC_PARSER");
+    assert!(
+        !dir.path().join("agents").exists(),
+        "per-agent log directory must not be created"
+    );
 }
 
 #[test]

@@ -1,12 +1,12 @@
 //! Episodic events, observations, coverage, compaction, extraction triggers.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
 
 use rusqlite::{OptionalExtension, params, types::Type};
 
+use crate::apply::apply;
 use crate::error::Error;
-use crate::log::{EventLogEntry, ObservationLogEntry, ObservationPruneLogEntry, append_jsonl};
+use crate::log::{LogRecord, append_jsonl};
 use crate::store::Store;
 use crate::types::{
     AgentKind, EpisodicEvent, ExtractionDecision, ExtractionTriggerReason, Observation,
@@ -37,17 +37,6 @@ impl Observer for MockObserver {
 }
 
 impl Store {
-    pub(crate) fn agent_log_path(&self, agent_id: &str) -> Result<PathBuf, Error> {
-        validate_agent_id(agent_id)?;
-        Ok(self
-            .log_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("agents")
-            .join(agent_id)
-            .join("log.jsonl"))
-    }
-
     pub fn record_event(
         &self,
         session_id: &str,
@@ -141,43 +130,24 @@ impl Store {
         ))?;
         self.privacy_filter_path_recording(source)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        // BEGIN IMMEDIATE serializes id allocation across processes (same
-        // race class as insert_claim). Log append stays before the INSERT.
+        // BEGIN IMMEDIATE serializes writers across processes (same race
+        // class as insert_claim). Log append stays before the INSERT.
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
-            let event_id: i64 = self.conn.query_row(
-                "SELECT COALESCE(MAX(id), 0) + 1 FROM episodic_events",
-                [],
-                |r| r.get(0),
-            )?;
-            let entry = EventLogEntry {
-                kind: "record_event",
+            let event_id = self.ids.mint();
+            let record = LogRecord::RecordEvent {
                 ts: now,
                 event_id,
-                session_id,
-                event_kind: kind,
-                payload,
-                source,
-                agent_id,
-                agent_kind: agent_kind.as_str(),
-                scope,
+                session_id: session_id.to_string(),
+                event_kind: kind.to_string(),
+                payload: payload.to_string(),
+                source: source.to_string(),
+                agent_id: agent_id.to_string(),
+                agent_kind: agent_kind.as_str().to_string(),
+                scope: scope.to_string(),
             };
-            append_jsonl(&self.event_log_path, &entry)?;
-            self.conn.execute(
-                "INSERT INTO episodic_events (id, session_id, kind, payload, source, agent_id, agent_kind, ts, scope)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![
-                    event_id,
-                    session_id,
-                    kind,
-                    payload,
-                    source,
-                    agent_id,
-                    agent_kind.as_str(),
-                    now,
-                    scope,
-                ],
-            )?;
+            append_jsonl(&self.event_log_path, &record)?;
+            apply(&self.conn, &record)?;
             Ok(event_id)
         })();
         match result {
@@ -243,15 +213,28 @@ impl Store {
 
     pub fn list_events_for_session(&self, session_id: &str) -> Result<Vec<EpisodicEvent>, Error> {
         validate_event_field("session_id", session_id)?;
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id FROM episodic_events WHERE session_id = ?1 ORDER BY id")?;
-        let rows = stmt.query_map([session_id], |row| row.get::<_, i64>(0))?;
-        let mut events = Vec::new();
-        for row in rows {
-            events.push(self.get_event(row?)?);
-        }
-        Ok(events)
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, kind, payload, source, agent_id, agent_kind, ts, scope
+               FROM episodic_events WHERE session_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map([session_id], |row| {
+            let agent_kind: String = row.get(6)?;
+            let agent_kind = agent_kind.parse().map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(6, Type::Text, Box::new(err))
+            })?;
+            Ok(EpisodicEvent {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                kind: row.get(2)?,
+                payload: row.get(3)?,
+                source: row.get(4)?,
+                agent_id: row.get(5)?,
+                agent_kind,
+                ts: row.get(7)?,
+                scope: row.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     pub fn record_observation(
@@ -350,37 +333,20 @@ impl Store {
             }
             return Err(Error::ObservationIdCollision { observation_id: id });
         }
-        let entry = ObservationLogEntry {
-            kind: "record_observation",
+        let record = LogRecord::RecordObservation {
             ts: now,
-            observation_id: &id,
-            session_id,
-            content,
-            relevance: relevance.as_str(),
-            source_event_ids,
-            agent_id: &first_event.agent_id,
-            agent_kind: first_event.agent_kind.as_str(),
-            derivation,
-            scope,
+            observation_id: id.clone(),
+            session_id: session_id.to_string(),
+            content: content.to_string(),
+            relevance: relevance.as_str().to_string(),
+            source_event_ids: source_event_ids.to_vec(),
+            agent_id: first_event.agent_id.clone(),
+            agent_kind: first_event.agent_kind.as_str().to_string(),
+            derivation: derivation.to_string(),
+            scope: scope.to_string(),
         };
-        append_jsonl(&self.observation_log_path, &entry)?;
-        self.conn.execute(
-            "INSERT INTO observations
-             (id, session_id, content, relevance, source_event_ids, agent_id, agent_kind, derivation, ts, scope)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
-                id,
-                session_id,
-                content,
-                relevance.as_str(),
-                source_event_ids_json,
-                first_event.agent_id,
-                first_event.agent_kind.as_str(),
-                derivation,
-                now,
-                scope,
-            ],
-        )?;
+        append_jsonl(&self.observation_log_path, &record)?;
+        apply(&self.conn, &record)?;
         Ok(id)
     }
 
@@ -589,27 +555,28 @@ impl Store {
 
         let coverage = self.observation_coverage(session_id)?;
         if !coverage.uncovered_event_ids.is_empty() {
-            let mut ranges = Vec::new();
-            let mut range_start = coverage.uncovered_event_ids[0];
-            let mut range_end = coverage.uncovered_event_ids[0];
-
-            for event_id in coverage.uncovered_event_ids.iter().skip(1).copied() {
-                if event_id == range_end + 1 {
-                    range_end = event_id;
+            // Group uncovered events that are adjacent in session order into
+            // `first-last` ranges. Ids are writer-minted and sparse
+            // (ADR-0026), so adjacency is by position, not by `id + 1`.
+            let uncovered: HashSet<i64> = coverage.uncovered_event_ids.iter().copied().collect();
+            let format_range = |start: i64, end: i64| {
+                if start == end {
+                    start.to_string()
                 } else {
-                    if range_start == range_end {
-                        ranges.push(range_start.to_string());
-                    } else {
-                        ranges.push(format!("{range_start}-{range_end}"));
-                    }
-                    range_start = event_id;
-                    range_end = event_id;
+                    format!("{start}-{end}")
+                }
+            };
+            let mut ranges = Vec::new();
+            let mut run: Option<(i64, i64)> = None;
+            for event_id in &coverage.event_ids {
+                if uncovered.contains(event_id) {
+                    run = Some(run.map_or((*event_id, *event_id), |(start, _)| (start, *event_id)));
+                } else if let Some((start, end)) = run.take() {
+                    ranges.push(format_range(start, end));
                 }
             }
-            if range_start == range_end {
-                ranges.push(range_start.to_string());
-            } else {
-                ranges.push(format!("{range_start}-{range_end}"));
+            if let Some((start, end)) = run {
+                ranges.push(format_range(start, end));
             }
 
             summary.push_str(&format!(
@@ -649,25 +616,14 @@ impl Store {
             .collect();
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let marker_id = observation_prune_marker_id(session_id, &pruned_observation_ids, now);
-        let entry = ObservationPruneLogEntry {
-            kind: "prune_observations",
+        let record = LogRecord::PruneObservations {
             ts: now,
-            prune_marker_id: &marker_id,
-            session_id,
-            pruned_observation_ids: &pruned_observation_ids,
+            prune_marker_id: marker_id,
+            session_id: session_id.to_string(),
+            pruned_observation_ids,
         };
-        append_jsonl(&self.observation_log_path, &entry)?;
-        self.conn.execute(
-            "INSERT INTO observation_prune_markers
-             (id, session_id, pruned_observation_ids, ts)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![
-                marker_id,
-                session_id,
-                serde_json::to_string(&pruned_observation_ids)?,
-                now,
-            ],
-        )?;
+        append_jsonl(&self.observation_log_path, &record)?;
+        apply(&self.conn, &record)?;
         Ok(drop_count)
     }
 
@@ -703,16 +659,15 @@ impl Store {
         }
 
         let mut reasons = Vec::new();
-        for (kind, reason) in [
-            (
-                "explicit_remember",
-                ExtractionTriggerReason::ExplicitRemember,
-            ),
-            ("session_end", ExtractionTriggerReason::SessionEnd),
-            ("correction", ExtractionTriggerReason::Correction),
-            ("commit_completed", ExtractionTriggerReason::CommitCompleted),
-            ("idle_compaction", ExtractionTriggerReason::IdleCompaction),
+        // The event `kind` that fires each reason is the reason's own name.
+        for reason in [
+            ExtractionTriggerReason::ExplicitRemember,
+            ExtractionTriggerReason::SessionEnd,
+            ExtractionTriggerReason::Correction,
+            ExtractionTriggerReason::CommitCompleted,
+            ExtractionTriggerReason::IdleCompaction,
         ] {
+            let kind = reason.as_str();
             if self
                 .conn
                 .query_row(

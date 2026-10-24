@@ -123,14 +123,15 @@ fn replay_preserves_scope_for_claims_events_observations() {
 #[test]
 fn replay_preserves_retired_claim_status_and_reason() {
     let dir = tempfile::tempdir().unwrap();
-    {
+    let claim_id = {
         let store = Store::open(dir.path()).unwrap();
         let claim_id = store
             .add_claim("alpha", "depends_on", "beta", "src")
             .unwrap();
         store.retire_claim(claim_id, "superseded by docs").unwrap();
         store.close().unwrap();
-    }
+        claim_id
+    };
     let live = claims_rows(dir.path());
 
     delete_db(dir.path());
@@ -140,7 +141,7 @@ fn replay_preserves_retired_claim_status_and_reason() {
     let replayed = claims_rows(dir.path());
     assert_claim_rows_eq(&live, &replayed);
     let store = Store::open(dir.path()).unwrap();
-    let claim = store.get_claim(1).unwrap();
+    let claim = store.get_claim(claim_id).unwrap();
     assert_eq!(claim.status, ClaimStatus::Invalidated);
     assert!(
         claim
@@ -297,18 +298,12 @@ fn promote_rejects_unknown_predicate_before_logging() {
         store.close().unwrap();
     }
 
-    // No poisoned add_claim line may reference the rejected predicate, in
-    // any log file. (A failed first promote leaves no claims behind, so
-    // log.jsonl itself may not exist yet.)
-    let mut claim_lines = Vec::new();
-    for path in [
-        dir.path().join("log.jsonl"),
-        dir.path().join("agents/agent-llm/log.jsonl"),
-    ] {
-        if let Ok(contents) = std::fs::read_to_string(&path) {
-            claim_lines.extend(contents.lines().map(str::to_owned).collect::<Vec<_>>());
-        }
-    }
+    // No poisoned add_claim line may reference the rejected predicate. (A
+    // failed first promote leaves no claims behind, so log.jsonl itself may
+    // not exist yet.)
+    let claim_lines: Vec<String> = std::fs::read_to_string(dir.path().join("log.jsonl"))
+        .map(|contents| contents.lines().map(str::to_owned).collect())
+        .unwrap_or_default();
     for line in &claim_lines {
         let value: serde_json::Value = serde_json::from_str(line).unwrap();
         if value["kind"] == "add_claim" {
@@ -435,13 +430,12 @@ fn concurrent_writers_allocate_unique_claim_ids() {
         handle.join().unwrap();
     }
 
-    // 50 claims with dense, unique ids — no allocation race.
+    // 50 claims with unique writer-minted ids (ADR-0026) — no allocation
+    // race, no assumption about density or a starting value.
     let rows = claims_rows(dir.path());
     assert_eq!(rows.len(), 50);
     let ids: std::collections::BTreeSet<i64> = rows.iter().map(|row| row.0).collect();
     assert_eq!(ids.len(), 50, "claim ids must be unique");
-    assert_eq!(*ids.iter().next().unwrap(), 1);
-    assert_eq!(*ids.iter().next_back().unwrap(), 50);
 
     // The log carries exactly those 50 unique claim ids.
     let log = std::fs::read_to_string(dir.path().join("log.jsonl")).unwrap();
@@ -453,7 +447,10 @@ fn concurrent_writers_allocate_unique_claim_ids() {
             value["claim_id"].as_i64().unwrap()
         })
         .collect();
-    assert_eq!(logged_ids.len(), 50, "log must not contain duplicate ids");
+    assert_eq!(
+        logged_ids, ids,
+        "log and projection must carry the same ids"
+    );
 
     // And the log replays cleanly end to end.
     delete_db(dir.path());
@@ -535,50 +532,43 @@ fn lenient_replay_quarantines_bad_lines() {
 }
 
 #[test]
-fn vector_chunks_are_rebuildable_after_replay() {
+fn vector_chunks_are_rebuilt_by_replay() {
     let dir = tempfile::tempdir().unwrap();
-    let claim_id = {
+    let (claim_id, chunk_id, plain_chunk_id) = {
         let store = Store::open(dir.path()).unwrap();
         let claim_id = store
             .add_claim("alpha", "depends_on", "beta", "src")
             .unwrap();
-        let client = MockEmbeddingClient::new(vec![0.5; 8]);
-        store
+        let client = MockEmbeddingClient::new(vec![0.5; aver_core::VECTOR_INDEX_DIM]);
+        let chunk_id = store
             .add_embedded_vector_chunk_for_claim(claim_id, "test-model", &client)
             .unwrap();
-        assert_eq!(
-            store.list_vector_chunks_for_claim(claim_id).unwrap().len(),
-            1
-        );
+        // A chunk logged without an embedding, then backfilled: both the
+        // chunk and the backfill are records of their own.
+        let plain_chunk_id = store
+            .add_vector_chunk(claim_id, "alpha depends_on beta (plain)", "test-model")
+            .unwrap();
+        assert_eq!(store.backfill_vector_embeddings(&client).unwrap(), 1);
+        assert_eq!(store.vector_index_row_count().unwrap(), 2);
         store.close().unwrap();
-        claim_id
+        (claim_id, chunk_id, plain_chunk_id)
     };
 
-    // Vector chunks are a derived projection: replay rebuilds claims and
-    // leaves the chunk tables empty rather than bloating the log with
-    // embedding arrays.
+    // ADR-0026: vector chunks are logged, so replay rebuilds `vector_chunks`
+    // and the `vec0` index instead of leaving them for a re-embed pass.
     delete_db(dir.path());
-    replay(dir.path(), false).expect("replay should succeed");
+    let report = replay(dir.path(), false).expect("replay should succeed");
+    assert_eq!(report.vector_chunks, 3, "two chunks + one backfill");
 
     let store = Store::open(dir.path()).unwrap();
-    assert!(
-        store
-            .list_vector_chunks_for_claim(claim_id)
-            .unwrap()
-            .is_empty(),
-        "replay must not resurrect vector chunks"
-    );
-    // Recall keeps working over the rebuilt claims, and the chunks can be
-    // re-derived from claim text with the same embedding client.
-    assert!(!store.recall_text("alpha").unwrap().is_empty());
-    let client = MockEmbeddingClient::new(vec![0.5; 8]);
-    store
-        .add_embedded_vector_chunk_for_claim(claim_id, "test-model", &client)
-        .unwrap();
+    let chunks = store.list_vector_chunks_for_claim(claim_id).unwrap();
     assert_eq!(
-        store.list_vector_chunks_for_claim(claim_id).unwrap().len(),
-        1
+        chunks.iter().map(|chunk| chunk.id).collect::<Vec<_>>(),
+        vec![chunk_id, plain_chunk_id]
     );
+    assert!(chunks.iter().all(|chunk| chunk.embedding.is_some()));
+    assert_eq!(store.vector_index_row_count().unwrap(), 2);
+    assert_eq!(store.vector_chunk_embedding_status().unwrap(), (2, 2));
 }
 
 #[test]

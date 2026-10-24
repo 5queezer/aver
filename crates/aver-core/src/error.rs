@@ -91,6 +91,8 @@ pub enum Error {
     SchemaTooNew { found: i64, supported: i64 },
     #[error("replay: duplicate id with conflicting content: {detail}")]
     ReplayDuplicateId { detail: String },
+    #[error("invalid log record: {detail}")]
+    InvalidRecord { detail: String },
     #[error("replay: unknown record kind: {kind}")]
     ReplayUnknownKind { kind: String },
     #[error("replay: malformed log record at {path}:{line}: {detail}")]

@@ -4,7 +4,9 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, types::Type};
 
+use crate::apply::apply;
 use crate::error::Error;
+use crate::log::{LogRecord, append_jsonl};
 use crate::recall::graph_score_for_query_claim;
 use crate::retrieval;
 use crate::store::{Store, VECTOR_INDEX_DIM};
@@ -15,9 +17,10 @@ use crate::validation::{
 };
 use crate::vector;
 impl Store {
-    /// Insert vector chunk metadata for a claim. The `sqlite-vec`/`vec0` ANN
-    /// table is maintained separately; this table is the durable join point
-    /// between claims and embeddings.
+    /// Insert vector chunk metadata for a claim without an embedding (to be
+    /// backfilled by [`Store::backfill_vector_embeddings`]). `vector_chunks`
+    /// is the durable join point between claims and embeddings; the chunk is
+    /// logged (ADR-0026) so replay rebuilds it.
     pub fn add_vector_chunk(
         &self,
         claim_id: i64,
@@ -29,13 +32,7 @@ impl Store {
         validate_embedding_model(embedding_model)?;
         self.privacy_filter_recording(text)?;
         self.privacy_filter_path_recording(embedding_model)?;
-        let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        self.conn.execute(
-            "INSERT INTO vector_chunks (claim_id, text, embedding_model, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![claim_id, text, embedding_model, now],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        self.insert_vector_chunk(claim_id, text, embedding_model, None)
     }
 
     /// Insert vector chunk metadata with its embedding vector serialized for
@@ -57,24 +54,45 @@ impl Store {
         validate_embedding_vector(embedding)?;
         self.privacy_filter_recording(text)?;
         self.privacy_filter_path_recording(embedding_model)?;
-        let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        let embedding_json = serde_json::to_string(embedding)?;
+        self.insert_vector_chunk(claim_id, text, embedding_model, Some(embedding.to_vec()))
+    }
 
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![claim_id, text, embedding_model, embedding_json, now],
-        )?;
-        let chunk_id = tx.last_insert_rowid();
-        if embedding.len() == VECTOR_INDEX_DIM && self.has_table("vector_index") {
-            tx.execute(
-                "INSERT INTO vector_index(chunk_id, embedding) VALUES (?1, ?2)",
-                params![chunk_id, embedding_json],
-            )?;
+    /// Log-first chunk write (ADR-0005/0026): mint the id, append the record
+    /// to the claims log (chunks reference claims, which replay first), then
+    /// apply inside one write transaction.
+    fn insert_vector_chunk(
+        &self,
+        claim_id: i64,
+        text: &str,
+        embedding_model: &str,
+        embedding: Option<Vec<f32>>,
+    ) -> Result<i64, Error> {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<i64, Error> {
+            let chunk_id = self.ids.mint();
+            let record = LogRecord::AddVectorChunk {
+                ts: now,
+                chunk_id,
+                claim_id,
+                text: text.to_string(),
+                embedding_model: embedding_model.to_string(),
+                embedding,
+            };
+            append_jsonl(&self.log_path, &record)?;
+            apply(&self.conn, &record)?;
+            Ok(chunk_id)
+        })();
+        match result {
+            Ok(chunk_id) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(chunk_id)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
         }
-        tx.commit()?;
-        Ok(chunk_id)
     }
 
     pub(crate) fn ensure_claim_exists(&self, claim_id: i64) -> Result<(), Error> {
@@ -171,34 +189,42 @@ impl Store {
     }
 
     /// Backfill stored embeddings for any vector_chunks that have no embedding yet,
-    /// using the provided EmbeddingClient. Returns how many were backfilled.
+    /// using the provided EmbeddingClient. Each backfilled embedding is logged
+    /// as an `embed_vector_chunk` record (ADR-0026) so replay rebuilds the
+    /// same `vector_chunks` and `vector_index` rows. Returns how many were
+    /// backfilled.
     pub fn backfill_vector_embeddings(
         &self,
         client: &dyn crate::vector::EmbeddingClient,
     ) -> Result<usize, Error> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, text FROM vector_chunks WHERE embedding_json IS NULL")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, text FROM vector_chunks WHERE embedding_json IS NULL ORDER BY id",
+        )?;
         let rows: Vec<(i64, String)> = stmt
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<Result<_, _>>()?;
+        drop(stmt);
         let mut count = 0;
-        let index_present = self.has_table("vector_index");
-        for (id, text) in rows {
+        for (chunk_id, text) in rows {
             let embedding = client.embed(&text)?;
-            let embedding_json = serde_json::to_string(&embedding)?;
-            self.conn.execute(
-                "UPDATE vector_chunks SET embedding_json = ?1 WHERE id = ?2",
-                params![embedding_json, id],
-            )?;
-            // ADR-0017: keep `vector_index` in sync for matching-dim rows.
-            // `INSERT OR IGNORE` makes the call idempotent if the row was
-            // already backfilled by migration 0010.
-            if index_present && embedding.len() == VECTOR_INDEX_DIM {
-                self.conn.execute(
-                    "INSERT OR IGNORE INTO vector_index(chunk_id, embedding) VALUES (?1, ?2)",
-                    params![id, embedding_json],
-                )?;
+            let now = time::OffsetDateTime::now_utc().unix_timestamp();
+            self.conn.execute_batch("BEGIN IMMEDIATE")?;
+            let result = (|| -> Result<(), Error> {
+                let record = LogRecord::EmbedVectorChunk {
+                    ts: now,
+                    chunk_id,
+                    embedding,
+                };
+                append_jsonl(&self.log_path, &record)?;
+                apply(&self.conn, &record)?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => self.conn.execute_batch("COMMIT")?,
+                Err(err) => {
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                    return Err(err);
+                }
             }
             count += 1;
         }

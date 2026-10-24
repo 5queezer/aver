@@ -1,9 +1,8 @@
 //! Hyperedge writes, reads and traversal.
 
-use rusqlite::params;
-
+use crate::apply::apply;
 use crate::error::Error;
-use crate::log::{HyperedgeLogEntry, append_jsonl};
+use crate::log::{LogRecord, append_jsonl};
 use crate::privacy::privacy_filter;
 use crate::store::Store;
 use crate::types::{Hyperedge, HyperedgeInput, HyperedgeParticipant};
@@ -60,56 +59,25 @@ impl Store {
         }
 
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        let extend_ontology = self.validate_ontology(&input.predicate, input.provenance)?;
+        self.validate_ontology(&input.predicate, input.provenance)?;
 
-        // BEGIN IMMEDIATE covers id allocation + log append + projection so
-        // concurrent processes cannot allocate duplicate hyperedge ids. The
-        // log append remains strictly before the SQLite INSERTs (ADR-0005).
+        // BEGIN IMMEDIATE covers log append + projection so concurrent
+        // processes serialize. The log append remains strictly before the
+        // projection write (ADR-0005).
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
-            let hyperedge_id: i64 = self.conn.query_row(
-                "SELECT COALESCE(MAX(id), 0) + 1 FROM hyperedges",
-                [],
-                |row| row.get(0),
-            )?;
-
-            let entry = HyperedgeLogEntry {
-                kind: "add_hyperedge",
+            let hyperedge_id = self.ids.mint();
+            let record = LogRecord::AddHyperedge {
                 ts: now,
                 hyperedge_id,
-                predicate: &input.predicate,
-                provenance: input.provenance.as_str(),
+                predicate: input.predicate,
+                provenance: input.provenance.as_str().to_string(),
                 confidence: input.confidence,
-                source_refs: &input.source_refs,
-                participants: &input.participants,
+                source_refs: input.source_refs,
+                participants: input.participants,
             };
-            append_jsonl(&self.log_path, &entry)?;
-
-            if extend_ontology {
-                self.apply_ontology_extension(&input.predicate, "local", now)?;
-            }
-
-            let source_refs_json = serde_json::to_string(&input.source_refs)?;
-            self.conn.execute(
-                "INSERT INTO hyperedges (id, predicate, provenance, confidence, source_refs, status, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'ACTIVE', ?6, ?6)",
-                params![
-                    hyperedge_id,
-                    input.predicate,
-                    input.provenance.as_str(),
-                    input.confidence,
-                    source_refs_json,
-                    now,
-                ],
-            )?;
-            for participant in &input.participants {
-                self.ensure_entity(&participant.entity, now)?;
-                self.conn.execute(
-                    "INSERT INTO hyperedge_participants (hyperedge_id, role, entity)
-                     VALUES (?1, ?2, ?3)",
-                    params![hyperedge_id, participant.role, participant.entity],
-                )?;
-            }
+            append_jsonl(&self.log_path, &record)?;
+            apply(&self.conn, &record)?;
             Ok(hyperedge_id)
         })();
         match result {

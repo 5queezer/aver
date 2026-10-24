@@ -4,12 +4,10 @@ use std::str::FromStr;
 
 use rusqlite::{OptionalExtension, params, types::Type};
 
+use crate::apply::apply;
 use crate::candidate_decision;
 use crate::error::Error;
-use crate::log::{
-    CandidateClaimLogEntry, LogEntry, PromoteCandidateLogEntry, RejectCandidateLogEntry,
-    append_jsonl,
-};
+use crate::log::{LogRecord, append_jsonl};
 use crate::store::Store;
 use crate::types::{CandidateClaim, CandidateClaimDraft, EpisodicEvent, Provenance};
 use crate::validation::{
@@ -101,35 +99,25 @@ impl Store {
             self.privacy_filter_path_recording(possible_path)?;
         }
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        // The candidate id is pre-allocated inside a write transaction so the
-        // append-only log can pin it (ADR-0005) and cross-process writers
-        // cannot allocate the same id. Candidate records go to the episodic
+        // The candidate id is writer-minted (ADR-0026) so the append-only log
+        // can pin it (ADR-0005). Candidate records go to the episodic
         // log: they FK-reference episodic_events, which replay in the same
         // phase (ADR-0019 §4 input order replays events.jsonl after
         // log.jsonl, so log.jsonl must not carry event-dependent records).
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
-            let candidate_id: i64 = self.conn.query_row(
-                "SELECT COALESCE(MAX(id), 0) + 1 FROM candidate_claims",
-                [],
-                |r| r.get(0),
-            )?;
-            let entry = CandidateClaimLogEntry {
-                kind: "propose_candidate_claim",
+            let candidate_id = self.ids.mint();
+            let record = LogRecord::ProposeCandidateClaim {
                 ts: now,
                 candidate_id,
                 event_id,
-                subject,
-                predicate,
-                object,
-                scope,
+                subject: subject.to_string(),
+                predicate: predicate.to_string(),
+                object: object.to_string(),
+                scope: scope.to_string(),
             };
-            append_jsonl(&self.event_log_path, &entry)?;
-            self.conn.execute(
-                "INSERT INTO candidate_claims (id, event_id, subject, predicate, object, created_at, scope)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![candidate_id, event_id, subject, predicate, object, now, scope],
-            )?;
+            append_jsonl(&self.event_log_path, &record)?;
+            apply(&self.conn, &record)?;
             Ok(candidate_id)
         })();
         match result {
@@ -190,82 +178,40 @@ impl Store {
         // record whose projection INSERT later fails at the ontology
         // trigger. (The candidate content was privacy-filtered at proposal
         // time, so there is nothing new to filter here.)
-        let extend_ontology = self.validate_ontology(&candidate.predicate, provenance)?;
+        self.validate_ontology(&candidate.predicate, provenance)?;
 
-        // Id allocation, log appends, and projection updates in one write
-        // transaction (same race class as insert_claim). Log-first ordering
-        // is preserved: both log lines precede the SQLite writes.
+        // Log appends and projection updates in one write transaction (same
+        // race class as insert_claim). Log-first ordering is preserved: both
+        // log lines precede the projection writes.
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
-            let claim_id: i64 =
-                self.conn
-                    .query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM claims", [], |r| {
-                        r.get(0)
-                    })?;
-
-            let entry = LogEntry {
-                kind: "add_claim",
+            let claim_id = self.ids.mint();
+            let claim = LogRecord::AddClaim {
                 ts: now,
                 claim_id,
-                subject: &candidate.subject,
-                predicate: &candidate.predicate,
-                object: &candidate.object,
-                source: &source,
-                agent_id: &event.agent_id,
-                agent_kind: event.agent_kind.as_str(),
+                subject: candidate.subject,
+                predicate: candidate.predicate,
+                object: candidate.object,
+                source,
+                agent_id: event.agent_id,
+                agent_kind: event.agent_kind.as_str().to_string(),
                 confidence,
-                provenance: provenance.as_str(),
-                scope: &candidate.scope,
+                provenance: Some(provenance.as_str().to_string()),
+                scope: candidate.scope,
             };
-            append_jsonl(&self.log_path, &entry)?;
-            append_jsonl(&self.agent_log_path(&event.agent_id)?, &entry)?;
+            append_jsonl(&self.log_path, &claim)?;
             // The promotion marker joins the candidate in the episodic log
             // (FK dependency on candidate_claims, which replays in the
             // events phase; the paired add_claim line replays earlier).
-            let promote_entry = PromoteCandidateLogEntry {
-                kind: "promote_candidate_claim",
+            let promotion = LogRecord::PromoteCandidateClaim {
                 ts: now,
                 candidate_id,
                 claim_id,
-                decision,
+                decision: decision.map(Into::into),
             };
-            append_jsonl(&self.event_log_path, &promote_entry)?;
-
-            if extend_ontology {
-                self.apply_ontology_extension(&candidate.predicate, &event.agent_id, now)?;
-            }
-
-            self.ensure_entity(&candidate.subject, now)?;
-            self.ensure_entity(&candidate.object, now)?;
-
-            let source_refs = serde_json::to_string(&[source])?;
-            // last_verified_at starts at creation, same as add_claim and as
-            // replay's apply_add_claim (which only sees the add_claim line).
-            self.conn.execute(
-                "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
-                                     status, source_refs, agent_id, agent_kind, write_ts,
-                                     created_at, last_seen_at, last_verified_at, scope)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7, ?8, ?9, ?10, ?10, ?10, ?10, ?11)",
-                params![
-                    claim_id,
-                    candidate.subject,
-                    candidate.predicate,
-                    candidate.object,
-                    provenance.as_str(),
-                    confidence,
-                    source_refs,
-                    event.agent_id,
-                    event.agent_kind.as_str(),
-                    now,
-                    candidate.scope,
-                ],
-            )?;
-            self.conn.execute(
-                "UPDATE candidate_claims
-                    SET status = 'PROMOTED', promoted_claim_id = ?1
-                  WHERE id = ?2",
-                params![claim_id, candidate_id],
-            )?;
+            append_jsonl(&self.event_log_path, &promotion)?;
+            apply(&self.conn, &claim)?;
+            apply(&self.conn, &promotion)?;
             Ok(claim_id)
         })();
         match result {
@@ -334,23 +280,14 @@ impl Store {
 
             // Candidate lifecycle records live in the episodic log so replay
             // applies them in the same phase as the candidate proposal.
-            let entry = RejectCandidateLogEntry {
-                kind: "reject_candidate_claim",
+            let record = LogRecord::RejectCandidateClaim {
                 ts: now,
                 candidate_id,
-                reason,
-                decision,
+                reason: reason.to_string(),
+                decision: decision.map(Into::into),
             };
-            append_jsonl(&self.event_log_path, &entry)?;
-            let rows_changed = self.conn.execute(
-                "UPDATE candidate_claims
-                    SET status = 'REJECTED', rejection_reason = ?1
-                  WHERE id = ?2",
-                params![reason, candidate_id],
-            )?;
-            if rows_changed == 0 {
-                return Err(Error::MissingCandidate { candidate_id });
-            }
+            append_jsonl(&self.event_log_path, &record)?;
+            apply(&self.conn, &record)?;
             Ok(())
         })();
         match result {

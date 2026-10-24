@@ -1,6 +1,7 @@
 //! Aver core: storage, episodic log, claim CRUD.
 //! See doc/adr/ for architecture decisions.
 
+mod apply;
 pub mod candidate_decision;
 mod candidates;
 mod claims;
@@ -10,6 +11,7 @@ mod error;
 pub mod extractor;
 mod graph;
 mod hyperedges;
+mod ids;
 mod log;
 mod maintenance;
 mod ontology;
