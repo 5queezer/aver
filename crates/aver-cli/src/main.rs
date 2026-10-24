@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use aver_core::candidate_decision::CandidateTriage;
-use aver_core::decision::client_from_env;
+use aver_core::decision::{DecisionConfig, client_from_env};
 use aver_core::{
     AgentKind, ExtractionTriggerReason, ObservationRelevance, ReplayMode, ScopeWalk, Store,
     replay_with_mode, vacuum,
@@ -351,6 +351,7 @@ fn main() -> anyhow::Result<()> {
                         event_threshold,
                         None,
                         client.as_ref(),
+                        DecisionConfig::from_env().min_confidence,
                     )?
                     .reasons
                     .iter()
@@ -399,7 +400,11 @@ fn main() -> anyhow::Result<()> {
             let client = client_from_env().ok_or_else(|| {
                 anyhow::anyhow!("decision model not configured (set AVER_DECISION_MODEL)")
             })?;
-            match store.triage_candidate_claim(candidate_id, client.as_ref())? {
+            match store.triage_candidate_claim(
+                candidate_id,
+                client.as_ref(),
+                DecisionConfig::from_env().min_confidence,
+            )? {
                 CandidateTriage::Promote => {
                     let claim_id = store
                         .get_candidate_claim(candidate_id)?

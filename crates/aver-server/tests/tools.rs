@@ -991,7 +991,7 @@ fn unknown_predicate_error_leads_with_decision_model_suggestion() {
     let probe = MockDecisionClient::with_indices(vec![]);
     Store::open(probe_dir.path())
         .unwrap()
-        .normalize_predicate("deprioritizes", &probe)
+        .normalize_predicate("deprioritizes", None, &probe, 0.5)
         .unwrap();
     let options = probe.received()[0].options.clone();
     let (index, pick) = options

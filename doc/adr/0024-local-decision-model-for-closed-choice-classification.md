@@ -123,7 +123,9 @@ recall call"). Classifying intent for a weight nobody reads changes nothing.
 
 The decision model is opt-in. `decision::client_from_env()` returns a client
 only when `AVER_DECISION_MODEL` is set and non-blank (and `aver-core` is built
-with the `ollama` feature); `AVER_DECISION_URL` overrides the Ollama base URL.
+with the `ollama` feature, which `aver-server` and `aver-cli` enable by
+default); `AVER_DECISION_URL` overrides the Ollama base URL and
+`AVER_DECISION_MIN_CONFIDENCE` sets the confidence floor (default 0.5).
 Without a client every surface below keeps its deterministic behaviour, except
 `triage_candidate_claim` / `aver triage`, which fail with "decision model not
 configured (set AVER_DECISION_MODEL)".

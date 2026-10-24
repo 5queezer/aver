@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use aver_core::candidate_decision::CandidateTriage;
-use aver_core::decision::{DecisionClient, client_from_env};
+use aver_core::decision::{DecisionClient, DecisionConfig, client_from_env};
 use aver_core::{
     AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, Error,
     ExtractionTriggerReason, NewClaim, Observation, ObservationCoverage, ObservationRecall,
@@ -533,6 +533,9 @@ pub struct AverTools {
     store: Store,
     /// ADR-0024 decision model; `None` unless `AVER_DECISION_MODEL` opts in.
     decision: Option<Box<dyn DecisionClient + Send + Sync>>,
+    /// ADR-0024 confidence floor (`AVER_DECISION_MIN_CONFIDENCE`); choices
+    /// below it fall back to the deterministic behaviour.
+    decision_min_confidence: f64,
 }
 
 impl AverTools {
@@ -549,6 +552,7 @@ impl AverTools {
         Ok(Self {
             store: Store::open(memory_dir)?,
             decision,
+            decision_min_confidence: DecisionConfig::from_env().min_confidence,
         })
     }
 
@@ -565,7 +569,9 @@ impl AverTools {
             // ADR-0024: surface the decision model's pick ahead of the fuzzy
             // suggestion; the write itself is never rewritten.
             if let Some(client) = self.decision.as_deref()
-                && let Ok(Some(suggestion)) = self.store.normalize_predicate(name, client)
+                && let Ok(Some(suggestion)) =
+                    self.store
+                        .normalize_predicate(name, None, client, self.decision_min_confidence)
                 && !message.contains(&format!("did you mean `{}`", suggestion.accepted))
             {
                 let hint = match suggestion.canonical.as_deref() {
@@ -812,6 +818,7 @@ impl AverTools {
             params.event_threshold,
             None,
             client,
+            self.decision_min_confidence,
         )?;
         // Same rule as `Store::should_extract_memories`: a coverage gap alone
         // does not justify extraction.
@@ -855,6 +862,7 @@ impl AverTools {
             &event.payload,
             &[resolved_scope, "global"],
             client,
+            self.decision_min_confidence,
         ) {
             Ok(Some(scope)) => scope,
             _ => resolved_scope.to_string(),
@@ -903,10 +911,11 @@ impl AverTools {
         let client = self.decision.as_deref().ok_or_else(|| {
             anyhow::anyhow!("decision model not configured (set AVER_DECISION_MODEL)")
         })?;
-        let (triage, claim_id) = match self
-            .store
-            .triage_candidate_claim(params.candidate_id, client)?
-        {
+        let (triage, claim_id) = match self.store.triage_candidate_claim(
+            params.candidate_id,
+            client,
+            self.decision_min_confidence,
+        )? {
             CandidateTriage::Promote => (
                 "promote",
                 self.store
