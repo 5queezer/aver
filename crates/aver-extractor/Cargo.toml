@@ -13,6 +13,9 @@ keywords.workspace     = true
 categories.workspace   = true
 
 [dependencies]
+# ADR-0027: the bridge converts into core's `ExtractorFact`. aver-core must
+# never depend on this crate (that would be a cycle).
+aver-core = { path = "../aver-core", default-features = false }
 tree-sitter.workspace = true
 tree-sitter-rust.workspace = true
 tree-sitter-python.workspace = true
@@ -30,3 +33,6 @@ tree-sitter-swift.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -172,8 +172,10 @@ dependencies = [
 name = "aver-extractor"
 version = "0.1.0"
 dependencies = [
+ "aver-core",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tree-sitter",
  "tree-sitter-c",
