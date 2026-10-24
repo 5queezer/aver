@@ -30,10 +30,32 @@ struct Args {
     /// Rubric judge: `generative` (default) or `decision` (ADR-0024, ollama only)
     #[arg(long, default_value = "generative")]
     judge: aver_eval::beam::BeamJudgeMode,
+    /// Memory target: `direct` (in-process store, default) or `mcp` (a
+    /// running aver-server; ingestion and recall go through its MCP tools)
+    #[arg(long, default_value = "direct")]
+    target: String,
+    /// aver-server base URL for `--target mcp` (`/mcp` is appended)
+    #[arg(long, env = "AVER_MCP_URL")]
+    mcp_url: Option<String>,
+    /// Bearer token with claims:read and claims:write for `--target mcp`
+    #[arg(long, env = "AVER_MCP_TOKEN", hide_env_values = true)]
+    mcp_token: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    let target = match args.target.as_str() {
+        "direct" => aver_eval::beam::BeamTarget::Direct,
+        "mcp" => aver_eval::beam::BeamTarget::Mcp {
+            base_url: args
+                .mcp_url
+                .ok_or_else(|| anyhow::anyhow!("--target mcp requires --mcp-url"))?,
+            token: args
+                .mcp_token
+                .ok_or_else(|| anyhow::anyhow!("--target mcp requires --mcp-token"))?,
+        },
+        other => anyhow::bail!("unknown BEAM target: {other} (expected direct or mcp)"),
+    };
     let dataset_path = aver_eval::beam::resolve_dataset_path(args.dataset)?;
     let report = aver_eval::beam::run_beam100k(aver_eval::beam::BeamRunConfig {
         dataset_path,
@@ -50,6 +72,7 @@ fn main() -> anyhow::Result<()> {
         data_dir: args.data_dir,
         judge_mode: args.judge,
         decision_model: aver_core::decision::DecisionConfig::from_env().model,
+        target,
     })?;
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())

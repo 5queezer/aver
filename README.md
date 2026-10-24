@@ -308,6 +308,18 @@ cargo run -p aver-eval --bin aver-beam100k -- \
   --retrieval-alpha 0.65
 ```
 
+To run the same benchmark through a running `aver-server` instead of an in-process store, pass `--target mcp` with the server URL and a bearer token holding `claims:read` and `claims:write` (`--mcp-url`/`--mcp-token`, or `AVER_MCP_URL`/`AVER_MCP_TOKEN`). Ingestion goes through `add_triple` and `add_vector_chunk`, each conversation into its own scope, and recall through `recall` with `scope_walk=exact`; answering and judging are unchanged. The server must have `AVER_EMBEDDING_URL` set with the same embedding model the harness uses (`--provider ollama`), otherwise the run stops instead of measuring keyword recall:
+
+```bash
+AVER_EMBEDDING_URL=http://localhost:11434 aver-server &
+cargo run -p aver-eval --bin aver-beam100k -- \
+  --dataset path/to/beam-100k.json \
+  --embedding-model nomic-embed-text \
+  --target mcp --mcp-url http://127.0.0.1:3317 --mcp-token "$AVER_TOKEN"
+```
+
+`cargo test -p aver-eval --test mcp_parity` checks the Phase 2 exit criterion offline: it serves `aver-server` in-process with a mock embedding client, runs a fixture dataset both ways, and asserts identical retrieved claims, answer prompts, and scores. Setting `AVER_LIVE_OLLAMA_URL` (and optionally `AVER_EMBEDDING_MODEL`) repeats the comparison with real Ollama embeddings; without it that test returns early.
+
 For Bayesian-style retrieval search over prior live runs, write JSONL observations with `top_k`, `alpha`, and `metric`, then ask Aver for the next autoresearch configuration:
 
 ```bash

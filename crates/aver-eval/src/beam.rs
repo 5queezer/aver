@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use aver_core::{
     Store,
     decision::{Decision, DecisionClient, DecisionError, OllamaDecisionClient},
+    retrieval::HybridWeights,
     vector::{EmbeddingClient, EmbeddingError, OllamaEmbeddingClient},
 };
 use serde::{Deserialize, Serialize};
@@ -95,6 +96,20 @@ impl BeamJudgeMode {
     }
 }
 
+/// Where a BEAM run ingests and recalls memory. Answering and judging are the
+/// same for every target, so two targets score the same exactly when they
+/// retrieve the same contexts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum BeamTarget {
+    /// One fresh local store per conversation, called in-process.
+    #[default]
+    Direct,
+    /// A running `aver-server`, through its MCP tools (Streamable HTTP with a
+    /// bearer token). Each conversation goes into its own scope under one
+    /// run-unique prefix and is recalled with `scope_walk = exact`.
+    Mcp { base_url: String, token: String },
+}
+
 #[derive(Debug, Clone)]
 pub struct BeamRunConfig {
     pub dataset_path: PathBuf,
@@ -111,6 +126,7 @@ pub struct BeamRunConfig {
     pub data_dir: Option<PathBuf>,
     pub judge_mode: BeamJudgeMode,
     pub decision_model: String,
+    pub target: BeamTarget,
 }
 
 #[derive(Debug, Serialize)]
@@ -278,12 +294,6 @@ pub fn retrieval_weights_for_beam_query(
 
 pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
     let dataset = load_dataset(&config.dataset_path)?;
-    let root = config
-        .data_dir
-        .clone()
-        .unwrap_or_else(|| std::env::temp_dir().join("aver-beam100k"));
-    std::fs::create_dir_all(&root)?;
-
     let embedder = BeamEmbeddingClient::from_config(&config)?;
     let judge = BeamGenerateClient::from_config(&config)?;
     let decision_judge = match config.judge_mode {
@@ -295,6 +305,41 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
             anyhow::bail!("--judge decision requires --provider ollama")
         }
     };
+    run_beam_dataset(
+        &dataset,
+        &config,
+        &embedder,
+        &|prompt, json_mode| judge.generate(prompt, json_mode),
+        decision_judge
+            .as_ref()
+            .map(|client| client as &dyn DecisionClient),
+    )
+}
+
+/// The BEAM loop over an already-loaded dataset: ingest each conversation
+/// into `config.target`, recall per question, answer with `generate`, and
+/// score each rubric item with `decision_judge` (ADR-0024) or, when `None`,
+/// with `generate` in JSON mode. `embedder` is used by the direct target
+/// only; an MCP target embeds with the server's configured client.
+pub fn run_beam_dataset(
+    dataset: &BeamDataset,
+    config: &BeamRunConfig,
+    embedder: &impl EmbeddingClient,
+    generate: &dyn Fn(&str, bool) -> Result<String>,
+    decision_judge: Option<&dyn DecisionClient>,
+) -> Result<BeamRunReport> {
+    let root = config
+        .data_dir
+        .clone()
+        .unwrap_or_else(|| std::env::temp_dir().join("aver-beam100k"));
+    let mcp = match &config.target {
+        BeamTarget::Direct => {
+            std::fs::create_dir_all(&root)?;
+            None
+        }
+        BeamTarget::Mcp { base_url, token } => Some(McpClient::connect(base_url, token)?),
+    };
+    let run_scope = format!("beam/run-{}", unique_run_id());
 
     let mut conversations = 0;
     let mut questions = 0;
@@ -315,10 +360,14 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
             conv.user_messages.len(),
             conv.questions.len()
         );
-        let conv_dir = root.join(format!("conv-{}", sanitize_path_segment(&conv.id)));
-        let _ = std::fs::remove_dir_all(&conv_dir);
-        let store = Store::open(&conv_dir)?;
-        ingest_conversation(&store, conv, &embedder, &config.embedding_model)?;
+        let memory = match &mcp {
+            None => BeamMemory::open_direct(&root, &conv.id)?,
+            Some(client) => BeamMemory::Mcp {
+                client,
+                scope: format!("{run_scope}/conv-{}", sanitize_path_segment(&conv.id)),
+            },
+        };
+        memory.ingest(conv, embedder, &config.embedding_model)?;
 
         for question in conv
             .questions
@@ -326,20 +375,14 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
             .take(config.limit_questions.unwrap_or(usize::MAX))
         {
             questions += 1;
-            let claims = store.recall_hybrid_claims_with_alpha(
+            let claims = memory.recall(
                 &question.question,
-                &embedder,
+                embedder,
                 config.top_k,
                 retrieval_weights_for_beam_query(&question.question, config.retrieval_alpha)?,
             )?;
-            let contexts = order_contexts_for_question(
-                &question.question,
-                claims
-                    .iter()
-                    .map(|claim| (claim.subject.clone(), claim.object.clone()))
-                    .collect(),
-            );
-            let answer = judge.generate(
+            let contexts = order_contexts_for_question(&question.question, claims);
+            let answer = generate(
                 &answer_prompt(&question.question, &question.reference_answer, &contexts),
                 false,
             )?;
@@ -347,7 +390,7 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
             eprintln!("    A: {}", safe_truncate(&answer.replace('\n', " "), 240));
 
             for rubric_item in question.rubric_items() {
-                let score = if let Some(decision_judge) = &decision_judge {
+                let score = if let Some(decision_judge) = decision_judge {
                     let state = decision_judge_state(&question.question, &answer, &rubric_item);
                     match decision_judge.decide(
                         &Decision::new(&state, DECISION_JUDGE_QUESTION, &DECISION_JUDGE_OPTIONS)
@@ -364,7 +407,7 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
                         Err(err) => return Err(err.into()),
                     }
                 } else {
-                    let judge_response = judge.generate(
+                    let judge_response = generate(
                         &judge_prompt(&question.question, &answer, &rubric_item),
                         true,
                     )?;
@@ -392,7 +435,7 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
     }
 
     Ok(BeamRunReport {
-        split: dataset.split,
+        split: dataset.split.clone(),
         judge_mode: config.judge_mode.as_str().to_string(),
         conversations,
         questions,
@@ -406,36 +449,268 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
     })
 }
 
-fn ingest_conversation(
-    store: &Store,
-    conv: &BeamConversation,
-    embedder: &impl EmbeddingClient,
-    embedding_model: &str,
-) -> Result<()> {
-    for (i, message) in conv.user_messages.iter().enumerate() {
-        if message.content.trim().is_empty() {
-            continue;
+/// Confidence `Store::add_claim` assigns; MCP ingestion passes it explicitly
+/// to `add_triple` so both targets write identical claims.
+const BEAM_CLAIM_CONFIDENCE: f64 = 0.95;
+const BEAM_SOURCE: &str = "beam100k";
+
+/// One conversation's memory on a [`BeamTarget`].
+pub enum BeamMemory<'a> {
+    Direct(Store),
+    Mcp {
+        client: &'a McpClient,
+        scope: String,
+    },
+}
+
+impl BeamMemory<'_> {
+    /// A fresh store for `conv_id` under `root`, replacing any earlier run's.
+    pub fn open_direct(root: &Path, conv_id: &str) -> Result<Self> {
+        let conv_dir = root.join(format!("conv-{}", sanitize_path_segment(conv_id)));
+        let _ = std::fs::remove_dir_all(&conv_dir);
+        Ok(Self::Direct(Store::open(&conv_dir)?))
+    }
+
+    /// Writes each non-empty message as a claim plus one vector chunk.
+    pub fn ingest(
+        &self,
+        conv: &BeamConversation,
+        embedder: &impl EmbeddingClient,
+        embedding_model: &str,
+    ) -> Result<()> {
+        for (i, message) in conv.user_messages.iter().enumerate() {
+            if message.content.trim().is_empty() {
+                continue;
+            }
+            let content = sanitize_memory_text(&message.content);
+            let object = if message.time_anchor.trim().is_empty() {
+                content
+            } else {
+                format!("[{}] {}", message.time_anchor, content)
+            };
+            let subject = format!("conversation:{}:message:{i}", conv.id);
+            let predicate = format!("{}_message", message.role);
+            let embedding_text = safe_truncate(&object, 4096);
+            match self {
+                Self::Direct(store) => {
+                    let id = store.add_claim_with_confidence(
+                        &subject,
+                        &predicate,
+                        &object,
+                        BEAM_SOURCE,
+                        BEAM_CLAIM_CONFIDENCE,
+                    )?;
+                    let embedding = embedder.embed(embedding_text)?;
+                    store.add_vector_chunk_with_embedding(
+                        id,
+                        embedding_text,
+                        embedding_model,
+                        &embedding,
+                    )?;
+                }
+                Self::Mcp { client, scope } => {
+                    let triple = client.call_tool(
+                        "add_triple",
+                        serde_json::json!({
+                            "subject": subject,
+                            "predicate": predicate,
+                            "object": object,
+                            "confidence": BEAM_CLAIM_CONFIDENCE,
+                            "source": BEAM_SOURCE,
+                            "scope": scope,
+                        }),
+                    )?;
+                    let claim_id = triple["triple_id"]
+                        .as_i64()
+                        .context("add_triple result has no triple_id")?;
+                    client.call_tool(
+                        "add_vector_chunk",
+                        serde_json::json!({"claim_id": claim_id, "text": embedding_text}),
+                    )?;
+                }
+            }
+            if (i + 1) % 100 == 0 {
+                eprintln!("  embedded {}/{} messages", i + 1, conv.user_messages.len());
+            }
         }
-        let content = sanitize_memory_text(&message.content);
-        let object = if message.time_anchor.trim().is_empty() {
-            content
-        } else {
-            format!("[{}] {}", message.time_anchor, content)
-        };
-        let id = store.add_claim(
-            &format!("conversation:{}:message:{i}", conv.id),
-            &format!("{}_message", message.role),
-            &object,
-            "beam100k",
-        )?;
-        let embedding_text = safe_truncate(&object, 4096);
-        let embedding = embedder.embed(embedding_text)?;
-        store.add_vector_chunk_with_embedding(id, embedding_text, embedding_model, &embedding)?;
-        if (i + 1) % 100 == 0 {
-            eprintln!("  embedded {}/{} messages", i + 1, conv.user_messages.len());
+        Ok(())
+    }
+
+    /// Hybrid recall (ADR-0004) of `(subject, object)` pairs in rank order.
+    /// The MCP target refuses a keyword-path answer: it would not be the
+    /// retrieval the direct harness measures.
+    pub fn recall(
+        &self,
+        question: &str,
+        embedder: &impl EmbeddingClient,
+        top_k: usize,
+        weights: HybridWeights,
+    ) -> Result<Vec<(String, String)>> {
+        match self {
+            Self::Direct(store) => Ok(store
+                .recall_hybrid_claims_with_alpha(question, embedder, top_k, weights)?
+                .into_iter()
+                .map(|claim| (claim.subject, claim.object))
+                .collect()),
+            Self::Mcp { client, scope } => {
+                let recalled = client.call_tool(
+                    "recall",
+                    serde_json::json!({
+                        "query": question,
+                        "top_k": top_k,
+                        "scope": scope,
+                        "scope_walk": "exact",
+                        "alpha": weights.alpha,
+                    }),
+                )?;
+                if recalled["retrieval"] != "hybrid" {
+                    anyhow::bail!(
+                        "aver-server answered recall with {} retrieval; set AVER_EMBEDDING_URL on the server so BEAM measures hybrid recall",
+                        recalled["retrieval"]
+                    );
+                }
+                recalled["triples"]
+                    .as_array()
+                    .context("recall result has no triples")?
+                    .iter()
+                    .map(|triple| {
+                        let field = |name: &str| {
+                            triple[name]
+                                .as_str()
+                                .map(str::to_string)
+                                .with_context(|| format!("recall triple has no {name}"))
+                        };
+                        Ok((field("subject")?, field("object")?))
+                    })
+                    .collect()
+            }
         }
     }
-    Ok(())
+}
+
+/// Minimal blocking MCP client for `aver-server`'s Streamable HTTP endpoint:
+/// one session, bearer-token auth, `tools/call` only.
+pub struct McpClient {
+    endpoint: String,
+    authorization: String,
+    session_id: String,
+    next_id: std::cell::Cell<u64>,
+}
+
+const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+
+impl McpClient {
+    /// Opens a session: `initialize`, then `notifications/initialized`.
+    /// `base_url` is the server root (`/mcp` is appended unless present).
+    pub fn connect(base_url: &str, token: &str) -> Result<Self> {
+        let base_url = base_url.trim_end_matches('/');
+        let mut client = Self {
+            endpoint: if base_url.ends_with("/mcp") {
+                base_url.to_string()
+            } else {
+                format!("{base_url}/mcp")
+            },
+            authorization: format!("Bearer {token}"),
+            session_id: String::new(),
+            next_id: std::cell::Cell::new(1),
+        };
+        let response = client
+            .post(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 0,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "aver-beam100k", "version": env!("CARGO_PKG_VERSION")},
+                },
+            }))
+            .context("MCP initialize")?;
+        client.session_id = response
+            .header("Mcp-Session-Id")
+            .context("MCP initialize returned no Mcp-Session-Id")?
+            .to_string();
+        rpc_result(&response.into_string()?, 0).context("MCP initialize")?;
+        client
+            .post(&serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+            .context("MCP notifications/initialized")?;
+        Ok(client)
+    }
+
+    /// Calls one tool and returns its JSON result (the tool's text content,
+    /// parsed). Tool and JSON-RPC errors become `Err`.
+    pub fn call_tool(&self, name: &str, arguments: serde_json::Value) -> Result<serde_json::Value> {
+        let id = self.next_id.get();
+        self.next_id.set(id + 1);
+        let body = self
+            .post(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            }))
+            .with_context(|| format!("MCP tools/call {name}"))?
+            .into_string()?;
+        let result = rpc_result(&body, id).with_context(|| format!("MCP tools/call {name}"))?;
+        let text = result["content"][0]["text"]
+            .as_str()
+            .with_context(|| format!("MCP tools/call {name}: no text content in {result}"))?;
+        if result["isError"] == true {
+            anyhow::bail!("MCP tools/call {name}: {text}");
+        }
+        serde_json::from_str(text).with_context(|| format!("MCP tools/call {name}: parse result"))
+    }
+
+    fn post(&self, message: &serde_json::Value) -> Result<ureq::Response> {
+        let mut request = ureq::post(&self.endpoint)
+            .set("Authorization", &self.authorization)
+            .set("Accept", "application/json, text/event-stream");
+        if !self.session_id.is_empty() {
+            request = request
+                .set("Mcp-Session-Id", &self.session_id)
+                .set("MCP-Protocol-Version", MCP_PROTOCOL_VERSION);
+        }
+        match request.send_json(message) {
+            Ok(response) => Ok(response),
+            Err(ureq::Error::Status(code, response)) => anyhow::bail!(
+                "HTTP {code} from {}: {}",
+                self.endpoint,
+                response.into_string().unwrap_or_default()
+            ),
+            Err(err) => Err(err.into()),
+        }
+    }
+}
+
+/// The `result` of the JSON-RPC response with `id`, from a plain JSON body
+/// or from the `data:` lines of an SSE stream.
+fn rpc_result(body: &str, id: u64) -> Result<serde_json::Value> {
+    let trimmed = body.trim_start();
+    let messages: Vec<serde_json::Value> = if trimmed.starts_with('{') {
+        vec![serde_json::from_str(trimmed)?]
+    } else {
+        body.lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(str::trim)
+            .filter(|payload| !payload.is_empty())
+            .map(serde_json::from_str)
+            .collect::<Result<_, _>>()?
+    };
+    let message = messages
+        .into_iter()
+        .find(|message| message["id"] == id)
+        .with_context(|| format!("no JSON-RPC response with id {id} in {body:?}"))?;
+    if let Some(error) = message.get("error") {
+        anyhow::bail!("JSON-RPC error: {error}");
+    }
+    Ok(message["result"].clone())
+}
+
+fn unique_run_id() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone)]

@@ -161,10 +161,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aver-core",
+ "aver-server",
+ "axum",
  "clap",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "ureq",
 ]
 

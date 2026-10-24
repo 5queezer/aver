@@ -22,6 +22,12 @@ tempfile = { workspace = true }
 ureq = { workspace = true }
 clap = { workspace = true }
 
+[dev-dependencies]
+# Direct-vs-MCP BEAM parity test: serves aver-server in-process.
+aver-server = { path = "../aver-server" }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+tokio = { version = "1", default-features = false, features = ["net", "rt-multi-thread", "time"] }
+
 [[bin]]
 name = "aver-beam100k"
 path = "src/bin/aver-beam100k.rs"
