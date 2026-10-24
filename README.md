@@ -241,6 +241,8 @@ For Visual Studio Code, drop a workspace-level `.vscode/mcp.json` similar to:
 
 Then run **MCP: Add Server** from the command palette and pick `aver`. VS Code dynamic-registers with `POST /oauth/register`, opens the consent screen in your browser, and — after you click **Approve** — receives the authorization code and exchanges it for an access token automatically. Other MCP clients that support the OAuth 2.1 + PKCE discovery profile (`/.well-known/oauth-authorization-server`) follow the same path.
 
+MCP writes are attributed to the client that made them: `remember_claim` and `record_event` default `agent_id` to the OAuth `client_id` the bearer token was issued to (`aver-<uuid>` from dynamic registration), so writes from different harnesses stay distinguishable. An explicit `agent_id` parameter overrides it, and tokens minted without a client fall back to `mcp`. Observations and promoted candidates inherit the `agent_id` of their source events; `add_triple` and the replacement claim of `contradict` are still recorded as `local`.
+
 MCP currently exposes 19 tools through a progressive discovery card so agents keep the active choice set small:
 
 - **Default active set:** `recall`, `remember_claim`, `record_event`, `record_observation`, `assemble_compaction_summary`

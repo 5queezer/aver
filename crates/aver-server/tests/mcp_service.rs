@@ -1,5 +1,4 @@
 use aver_server::mcp::AverMcpService;
-use aver_server::scopes::ALL_TOOL_NAMES;
 use rmcp::ServerHandler;
 
 #[test]
@@ -11,7 +10,7 @@ fn mcp_service_advertises_tools_capability() {
 
     assert_eq!(info.server_info.name, "aver");
     let instructions = info.instructions.unwrap();
-    for tool_name in ALL_TOOL_NAMES {
+    for tool_name in AverMcpService::TOOLS.iter().map(|tool| tool.name) {
         assert!(
             instructions.contains(tool_name),
             "MCP instructions should advertise {tool_name}"

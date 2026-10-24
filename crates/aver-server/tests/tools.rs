@@ -627,7 +627,12 @@ fn should_extract_memories_rejects_zero_event_threshold() {
         })
         .expect_err("zero threshold should be rejected");
 
-    assert!(err.to_string().contains("event_threshold"));
+    // Core enforces the rule (`Error::InvalidEventThreshold`); the
+    // agent-facing text names the MCP parameter.
+    assert_eq!(
+        tools.describe_error(&err),
+        "invalid event_threshold: must be greater than zero"
+    );
 }
 
 #[test]

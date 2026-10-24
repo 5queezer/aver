@@ -6,6 +6,12 @@ Date: 2026-05-10
 
 Accepted
 
+Status update 2026-10-24: MCP `remember_claim` and `record_event` now
+default `agent_id` to the OAuth `client_id` of the bearer token (`'mcp'` only
+for tokens issued without a client), so symptom 1's "every MCP-driven write
+lands with `agent_id='mcp'`" no longer holds. The MCP `recall` tool still
+does not expose the `agent_id` filter.
+
 ## Context
 
 ADR-0008 specifies a five-tool MCP surface; the `recall` and `expand` tools
