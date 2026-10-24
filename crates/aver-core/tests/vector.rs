@@ -3,11 +3,13 @@
 //! supplies HybridRAG's vector side.
 
 use aver_core::vector::{
-    EmbeddingClient, MockEmbeddingClient, OllamaEmbeddingClient, OllamaEmbeddingRequest,
-    OllamaEmbeddingResponse, VectorBackend, VectorIndexConfig, cosine_similarity,
+    EmbeddingClient, MockEmbeddingClient, VectorBackend, VectorIndexConfig, cosine_similarity,
     normalized_cosine_score,
 };
+#[cfg(feature = "ollama")]
+use aver_core::vector::{OllamaEmbeddingClient, OllamaEmbeddingRequest, OllamaEmbeddingResponse};
 
+#[cfg(feature = "ollama")]
 #[test]
 fn ollama_embedding_request_serializes_model_and_prompt() {
     let request = OllamaEmbeddingRequest::new("nomic-embed-text", "auth service depends on stripe");
@@ -17,6 +19,7 @@ fn ollama_embedding_request_serializes_model_and_prompt() {
     assert_eq!(json["prompt"], "auth service depends on stripe");
 }
 
+#[cfg(feature = "ollama")]
 #[test]
 fn ollama_embedding_response_deserializes_embedding_vector() {
     let response: OllamaEmbeddingResponse =
@@ -25,6 +28,7 @@ fn ollama_embedding_response_deserializes_embedding_vector() {
     assert_eq!(response.embedding, vec![0.125, -0.5, 1.0]);
 }
 
+#[cfg(feature = "ollama")]
 #[test]
 fn ollama_embedding_client_normalizes_embeddings_endpoint_url() {
     let client = OllamaEmbeddingClient::new("http://localhost:11434/", "nomic-embed-text");
@@ -35,6 +39,7 @@ fn ollama_embedding_client_normalizes_embeddings_endpoint_url() {
     );
 }
 
+#[cfg(feature = "ollama")]
 #[test]
 fn ollama_embedding_client_builds_request_with_configured_model() {
     let client = OllamaEmbeddingClient::new("http://localhost:11434", "nomic-embed-text");
@@ -105,6 +110,7 @@ fn vector_backend_empty_optional_config_uses_default() {
     );
 }
 
+#[cfg(feature = "ollama")]
 #[test]
 fn ollama_embedding_client_parses_response_body_to_vector() {
     let client = OllamaEmbeddingClient::new("http://localhost:11434", "nomic-embed-text");
