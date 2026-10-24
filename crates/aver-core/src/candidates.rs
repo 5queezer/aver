@@ -9,7 +9,9 @@ use crate::candidate_decision;
 use crate::error::Error;
 use crate::log::{LogRecord, append_jsonl};
 use crate::store::Store;
-use crate::types::{CandidateClaim, CandidateClaimDraft, EpisodicEvent, Provenance};
+use crate::types::{
+    CandidateClaim, CandidateClaimDraft, CandidateWrite, EpisodicEvent, Provenance,
+};
 use crate::validation::{
     validate_candidate_status_filter, validate_claim_field, validate_event_field,
     validate_rejection_reason, validate_scope,
@@ -45,57 +47,36 @@ impl Store {
         let drafts = extractor.extract(&events)?;
         let mut candidate_ids = Vec::new();
         for draft in drafts {
-            candidate_ids.push(self.propose_candidate_claim(
+            candidate_ids.push(self.propose_candidate_claim(CandidateWrite::new(
                 draft.event_id,
-                &draft.subject,
-                &draft.predicate,
-                &draft.object,
-            )?);
+                draft.subject,
+                draft.predicate,
+                draft.object,
+            ))?);
         }
         Ok(candidate_ids)
     }
 
-    pub fn propose_candidate_claim(
-        &self,
-        event_id: i64,
-        subject: &str,
-        predicate: &str,
-        object: &str,
-    ) -> Result<i64, Error> {
-        self.propose_candidate_claim_inner(event_id, subject, predicate, object, "global")
-    }
-
-    /// ADR-0021: variant of `propose_candidate_claim` that stages a candidate
-    /// under an explicit scope. The scope rides through `promote_candidate_claim`
-    /// onto the durable claim — there is no scope override at promotion time.
-    pub fn propose_candidate_claim_with_scope(
-        &self,
-        event_id: i64,
-        subject: &str,
-        predicate: &str,
-        object: &str,
-        scope: &str,
-    ) -> Result<i64, Error> {
-        validate_scope(scope)?;
-        self.propose_candidate_claim_inner(event_id, subject, predicate, object, scope)
-    }
-
-    fn propose_candidate_claim_inner(
-        &self,
-        event_id: i64,
-        subject: &str,
-        predicate: &str,
-        object: &str,
-        scope: &str,
-    ) -> Result<i64, Error> {
+    /// Stage one candidate claim (ADR-0005/0014). The scope rides through
+    /// `promote_candidate_claim` onto the durable claim — there is no scope
+    /// override at promotion time.
+    pub fn propose_candidate_claim(&self, write: CandidateWrite) -> Result<i64, Error> {
+        let CandidateWrite {
+            event_id,
+            subject,
+            predicate,
+            object,
+            scope,
+        } = write;
         if !self.event_exists(event_id)? {
             return Err(Error::MissingEventProvenance { event_id });
         }
-        validate_claim_field("subject", subject)?;
-        validate_claim_field("predicate", predicate)?;
-        validate_claim_field("object", object)?;
+        validate_claim_field("subject", &subject)?;
+        validate_claim_field("predicate", &predicate)?;
+        validate_claim_field("object", &object)?;
+        validate_scope(&scope)?;
         self.privacy_filter_recording(&format!("{subject} {predicate} {object}"))?;
-        for possible_path in [subject, object] {
+        for possible_path in [&subject, &object] {
             self.privacy_filter_path_recording(possible_path)?;
         }
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
@@ -111,10 +92,10 @@ impl Store {
                 ts: now,
                 candidate_id,
                 event_id,
-                subject: subject.to_string(),
-                predicate: predicate.to_string(),
-                object: object.to_string(),
-                scope: scope.to_string(),
+                subject,
+                predicate,
+                object,
+                scope,
             };
             append_jsonl(&self.event_log_path, &record)?;
             apply(&self.conn, &record)?;

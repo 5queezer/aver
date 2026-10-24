@@ -38,11 +38,11 @@ pub use privacy::{PrivacyRejection, privacy_filter, privacy_filter_path};
 pub use replay::{ReplayMode, ReplayQuarantine, ReplayReport, replay, replay_with_mode};
 pub use store::{SCHEMA_VERSION, SqliteVecStatus, Store, VECTOR_INDEX_DIM};
 pub use types::{
-    AgentKind, CandidateClaim, CandidateClaimDraft, Claim, ClaimStatus, Community,
-    ConsolidationReport, ContradictionRecord, EpisodicEvent, ExtractionDecision,
-    ExtractionTriggerReason, ExtractorFact, GraphDriftSnapshot, GraphExpansion, GraphPath,
-    GraphPathMode, GraphPathQuery, GraphPathStep, Hyperedge, HyperedgeInput, HyperedgeParticipant,
-    HyperedgeParticipantInput, NewClaim, Observation, ObservationCoverage, ObservationDraft,
-    ObservationRecall, ObservationRelevance, PredicateWalk, Provenance, RecallFilters,
-    RelationshipKind, ScopeWalk, StorageMode, VectorChunk,
+    AgentKind, CandidateClaim, CandidateClaimDraft, CandidateWrite, Claim, ClaimStatus, ClaimWrite,
+    Community, ConsolidationReport, ContradictionRecord, EpisodicEvent, EventWrite,
+    ExtractionDecision, ExtractionTriggerReason, ExtractorFact, GraphDriftSnapshot, GraphExpansion,
+    GraphPath, GraphPathMode, GraphPathQuery, GraphPathStep, Hyperedge, HyperedgeInput,
+    HyperedgeParticipant, HyperedgeParticipantInput, Observation, ObservationCoverage,
+    ObservationDraft, ObservationRecall, ObservationRelevance, ObservationWrite, PredicateWalk,
+    Provenance, RecallFilters, RecallQuery, RelationshipKind, ScopeWalk, StorageMode, VectorChunk,
 };

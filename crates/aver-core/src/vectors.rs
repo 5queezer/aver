@@ -10,7 +10,7 @@ use crate::log::{LogRecord, append_jsonl};
 use crate::recall::graph_score_for_query_claim;
 use crate::retrieval;
 use crate::store::{Store, VECTOR_INDEX_DIM};
-use crate::types::{Claim, ClaimStatus, VectorChunk};
+use crate::types::{Claim, ClaimStatus, RecallQuery, VectorChunk};
 use crate::validation::{
     validate_embedding_model, validate_embedding_vector, validate_recall_query, validate_top_k,
     validate_vector_chunk_text,
@@ -265,7 +265,7 @@ impl Store {
         drop(stmt);
 
         // Merge with text-search results.
-        let text_claims = self.recall_text(query)?;
+        let text_claims = self.recall_text(RecallQuery::new(query))?;
         let text_score_base = 0.5_f64;
         for claim in &text_claims {
             scores
@@ -472,7 +472,7 @@ impl Store {
             }
         }
 
-        let text_claims = self.recall_text(query)?;
+        let text_claims = self.recall_text(RecallQuery::new(query))?;
         let mut candidate_ids: HashSet<i64> = text_claims.iter().map(|claim| claim.id).collect();
         candidate_ids.extend(vector_scores.keys().copied());
 

@@ -9,8 +9,8 @@ use crate::error::Error;
 use crate::log::{LogRecord, append_jsonl};
 use crate::store::Store;
 use crate::types::{
-    AgentKind, EpisodicEvent, ExtractionDecision, ExtractionTriggerReason, Observation,
-    ObservationCoverage, ObservationDraft, ObservationRecall, ObservationRelevance,
+    EpisodicEvent, EventWrite, ExtractionDecision, ExtractionTriggerReason, Observation,
+    ObservationCoverage, ObservationDraft, ObservationRecall, ObservationWrite,
 };
 use crate::validation::{
     validate_agent_id, validate_event_field, validate_observation_field, validate_scope,
@@ -37,98 +37,25 @@ impl Observer for MockObserver {
 }
 
 impl Store {
-    pub fn record_event(
-        &self,
-        session_id: &str,
-        kind: &str,
-        payload: &str,
-        source: &str,
-    ) -> Result<i64, Error> {
-        self.record_event_inner(
-            "local",
-            AgentKind::Human,
-            session_id,
-            kind,
-            payload,
-            source,
-            "global",
-        )
-    }
-
-    pub fn record_event_from_agent(
-        &self,
-        agent_id: &str,
-        agent_kind: AgentKind,
-        session_id: &str,
-        kind: &str,
-        payload: &str,
-        source: &str,
-    ) -> Result<i64, Error> {
-        self.record_event_inner(
-            agent_id, agent_kind, session_id, kind, payload, source, "global",
-        )
-    }
-
-    /// ADR-0021: variant of `record_event` that records under an explicit scope.
-    pub fn record_event_with_scope(
-        &self,
-        session_id: &str,
-        kind: &str,
-        payload: &str,
-        source: &str,
-        scope: &str,
-    ) -> Result<i64, Error> {
-        validate_scope(scope)?;
-        self.record_event_inner(
-            "local",
-            AgentKind::Human,
-            session_id,
-            kind,
-            payload,
-            source,
-            scope,
-        )
-    }
-
-    /// ADR-0021: variant of `record_event_from_agent` that records under an
-    /// explicit scope.
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_event_from_agent_with_scope(
-        &self,
-        agent_id: &str,
-        agent_kind: AgentKind,
-        session_id: &str,
-        kind: &str,
-        payload: &str,
-        source: &str,
-        scope: &str,
-    ) -> Result<i64, Error> {
-        validate_scope(scope)?;
-        self.record_event_inner(
-            agent_id, agent_kind, session_id, kind, payload, source, scope,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn record_event_inner(
-        &self,
-        agent_id: &str,
-        agent_kind: AgentKind,
-        session_id: &str,
-        kind: &str,
-        payload: &str,
-        source: &str,
-        scope: &str,
-    ) -> Result<i64, Error> {
-        validate_event_field("session_id", session_id)?;
-        validate_event_field("kind", kind)?;
-        validate_event_field("source", source)?;
-        validate_agent_id(agent_id)?;
+    /// Record one episodic event (ADR-0014): validate → privacy gate → mint
+    /// the id → log → apply, in one write transaction. Build the write with
+    /// [`EventWrite::new`] plus `.agent(..)` / `.scope(..)`.
+    pub fn record_event(&self, write: EventWrite) -> Result<i64, Error> {
+        validate_event_field("session_id", &write.session_id)?;
+        validate_event_field("kind", &write.kind)?;
+        validate_event_field("source", &write.source)?;
+        validate_agent_id(&write.agent_id)?;
+        validate_scope(&write.scope)?;
         self.privacy_filter_recording(&format!(
-            "{agent_id} {} {session_id} {kind} {payload} {source}",
-            agent_kind.as_str()
+            "{} {} {} {} {} {}",
+            write.agent_id,
+            write.agent_kind.as_str(),
+            write.session_id,
+            write.kind,
+            write.payload,
+            write.source
         ))?;
-        self.privacy_filter_path_recording(source)?;
+        self.privacy_filter_path_recording(&write.source)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         // BEGIN IMMEDIATE serializes writers across processes (same race
         // class as insert_claim). Log append stays before the INSERT.
@@ -138,13 +65,13 @@ impl Store {
             let record = LogRecord::RecordEvent {
                 ts: now,
                 event_id,
-                session_id: session_id.to_string(),
-                event_kind: kind.to_string(),
-                payload: payload.to_string(),
-                source: source.to_string(),
-                agent_id: agent_id.to_string(),
-                agent_kind: agent_kind.as_str().to_string(),
-                scope: scope.to_string(),
+                session_id: write.session_id,
+                event_kind: write.kind,
+                payload: write.payload,
+                source: write.source,
+                agent_id: write.agent_id,
+                agent_kind: write.agent_kind.as_str().to_string(),
+                scope: write.scope,
             };
             append_jsonl(&self.event_log_path, &record)?;
             apply(&self.conn, &record)?;
@@ -237,66 +164,30 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    pub fn record_observation(
-        &self,
-        session_id: &str,
-        content: &str,
-        relevance: ObservationRelevance,
-        source_event_ids: &[i64],
-        derivation: &str,
-    ) -> Result<String, Error> {
-        self.record_observation_inner(
-            session_id,
-            content,
-            relevance,
-            source_event_ids,
-            derivation,
-            "global",
-        )
-    }
-
-    /// ADR-0021: variant of `record_observation` that records under an explicit scope.
-    pub fn record_observation_with_scope(
-        &self,
-        session_id: &str,
-        content: &str,
-        relevance: ObservationRelevance,
-        source_event_ids: &[i64],
-        derivation: &str,
-        scope: &str,
-    ) -> Result<String, Error> {
-        validate_scope(scope)?;
-        self.record_observation_inner(
+    /// Record one observation (ADR-0016). The id is a content hash, so an
+    /// identical retry returns the same id without a second log line; the
+    /// same id with different content is a collision error.
+    pub fn record_observation(&self, write: ObservationWrite) -> Result<String, Error> {
+        let ObservationWrite {
             session_id,
             content,
             relevance,
             source_event_ids,
             derivation,
             scope,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn record_observation_inner(
-        &self,
-        session_id: &str,
-        content: &str,
-        relevance: ObservationRelevance,
-        source_event_ids: &[i64],
-        derivation: &str,
-        scope: &str,
-    ) -> Result<String, Error> {
-        validate_event_field("session_id", session_id)?;
-        validate_observation_field("content", content)?;
-        validate_observation_field("derivation", derivation)?;
+        } = write;
+        validate_event_field("session_id", &session_id)?;
+        validate_observation_field("content", &content)?;
+        validate_observation_field("derivation", &derivation)?;
+        validate_scope(&scope)?;
         if source_event_ids.is_empty() {
             return Err(Error::MissingEventProvenance { event_id: 0 });
         }
         self.privacy_filter_recording(&format!("{session_id} {content} {derivation}"))?;
-        self.privacy_filter_path_recording(derivation)?;
+        self.privacy_filter_path_recording(&derivation)?;
 
         let mut events = Vec::new();
-        for event_id in source_event_ids {
+        for event_id in &source_event_ids {
             let event = self.get_event(*event_id)?;
             if event.session_id != session_id {
                 return Err(Error::MissingEventProvenance {
@@ -309,8 +200,8 @@ impl Store {
             .first()
             .expect("source_event_ids is checked non-empty before event lookup");
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        let id = observation_id(session_id, content, source_event_ids);
-        let source_event_ids_json = serde_json::to_string(source_event_ids)?;
+        let id = observation_id(&session_id, &content, &source_event_ids);
+        let source_event_ids_json = serde_json::to_string(&source_event_ids)?;
         // Id is a deterministic content hash: check the projection BEFORE
         // appending to the log. An identical existing row is an idempotent
         // retry (return the same id without a duplicate log line); a row
@@ -336,14 +227,14 @@ impl Store {
         let record = LogRecord::RecordObservation {
             ts: now,
             observation_id: id.clone(),
-            session_id: session_id.to_string(),
-            content: content.to_string(),
+            session_id,
+            content,
             relevance: relevance.as_str().to_string(),
-            source_event_ids: source_event_ids.to_vec(),
+            source_event_ids,
             agent_id: first_event.agent_id.clone(),
             agent_kind: first_event.agent_kind.as_str().to_string(),
-            derivation: derivation.to_string(),
-            scope: scope.to_string(),
+            derivation,
+            scope,
         };
         append_jsonl(&self.observation_log_path, &record)?;
         apply(&self.conn, &record)?;
@@ -374,13 +265,13 @@ impl Store {
                 continue;
             }
 
-            let id = self.record_observation(
+            let id = self.record_observation(ObservationWrite::new(
                 session_id,
-                &draft.content,
+                draft.content,
                 draft.relevance,
-                &uncovered_event_ids,
-                &draft.derivation,
-            )?;
+                uncovered_event_ids,
+                draft.derivation,
+            ))?;
             ids.push(id);
         }
         Ok(ids)
