@@ -5,6 +5,8 @@ BIN="aver"
 VERSION="${AVER_VERSION:-latest}"
 INSTALL_DIR="${AVER_INSTALL_DIR:-$HOME/.cargo/bin}"
 FROM_SOURCE=0
+WITH_SERVER=0
+SERVER_DIR="${AVER_SERVER_INSTALL_DIR:-$HOME/.local/bin}"
 REPO="${AVER_REPO:-}"
 BASE_URL="${AVER_RELEASE_BASE_URL:-}"
 VERIFY_KEY="${AVER_GPG_KEYRING:-}"
@@ -21,6 +23,8 @@ Recommended secure usage:
   3. Run: ./install.sh --repo OWNER/REPO
 
 Options:
+  --server                   Also install aver-server (to --server-dir).
+  --server-dir DIR           aver-server directory. Default: ~/.local/bin (matches contrib/systemd/aver-mcp.service).
   --from-source              Build and install from this checkout with cargo install.
   --repo OWNER/REPO          Install from GitHub Releases.
   --version VERSION          Release version/tag. Default: latest.
@@ -30,7 +34,7 @@ Options:
   -h, --help                 Show help.
 
 Environment:
-  AVER_REPO, AVER_VERSION, AVER_INSTALL_DIR, AVER_RELEASE_BASE_URL, AVER_GPG_KEYRING
+  AVER_REPO, AVER_VERSION, AVER_INSTALL_DIR, AVER_SERVER_INSTALL_DIR, AVER_RELEASE_BASE_URL, AVER_GPG_KEYRING
 
 PATH setup:
   export PATH="$HOME/.cargo/bin:$PATH"
@@ -40,6 +44,8 @@ USAGE
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --from-source) FROM_SOURCE=1 ;;
+    --server) WITH_SERVER=1 ;;
+    --server-dir) SERVER_DIR="$2"; shift ;;
     --repo) REPO="$2"; shift ;;
     --version) VERSION="$2"; shift ;;
     --install-dir) INSTALL_DIR="$2"; shift ;;
@@ -111,6 +117,13 @@ install_from_source() {
     trap 'rm -rf "$tmp_root"' EXIT
     cargo install --path "$SOURCE_DIR/crates/aver-cli" --locked --force --root "$tmp_root"
     install -m 0755 "$tmp_root/bin/$BIN" "$INSTALL_DIR/$BIN"
+  fi
+  if [ "$WITH_SERVER" -eq 1 ]; then
+    server_root="$(mktemp -d)"
+    cargo install --path "$SOURCE_DIR/crates/aver-server" --locked --force --root "$server_root"
+    mkdir -p "$SERVER_DIR"
+    install -m 0755 "$server_root/bin/aver-server" "$SERVER_DIR/aver-server"
+    rm -rf "$server_root"
   fi
 }
 
@@ -186,17 +199,12 @@ verify_signature_if_present() {
   fi
 }
 
-install_from_release() {
-  need tar
-  mkdir -p "$INSTALL_DIR"
-  tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
-  triple="$(target_triple)"
-  asset="${BIN}-${triple}.tar.gz"
-  url_base="$(resolve_base_url)"
+fetch_and_install() {
+  name="$1"
+  dest="$2"
+  asset="${name}-${triple}.tar.gz"
 
   download "$url_base/$asset" "$tmp/$asset"
-  download "$url_base/SHA256SUMS" "$tmp/SHA256SUMS"
   verify_sha256 "$tmp/$asset" "$tmp/SHA256SUMS"
 
   download "$url_base/$asset.asc" "$tmp/$asset.asc" >/dev/null 2>&1 || true
@@ -207,8 +215,23 @@ install_from_release() {
     verify_signature_if_present "$tmp/$asset" "$tmp/$asset.sig"
   fi
 
-  tar -xzf "$tmp/$asset" -C "$tmp"
-  install -m 0755 "$tmp/$BIN" "$INSTALL_DIR/$BIN"
+  mkdir -p "$dest" "$tmp/$name"
+  tar -xzf "$tmp/$asset" -C "$tmp/$name"
+  install -m 0755 "$tmp/$name/$name" "$dest/$name"
+}
+
+install_from_release() {
+  need tar
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  triple="$(target_triple)"
+  url_base="$(resolve_base_url)"
+
+  download "$url_base/SHA256SUMS" "$tmp/SHA256SUMS"
+  fetch_and_install "$BIN" "$INSTALL_DIR"
+  if [ "$WITH_SERVER" -eq 1 ]; then
+    fetch_and_install aver-server "$SERVER_DIR"
+  fi
 }
 
 if [ "$FROM_SOURCE" -eq 1 ]; then
@@ -220,3 +243,7 @@ fi
 "$INSTALL_DIR/$BIN" --version || true
 echo "Installed $BIN to $INSTALL_DIR/$BIN"
 ensure_path_hint
+if [ "$WITH_SERVER" -eq 1 ]; then
+  echo "Installed aver-server to $SERVER_DIR/aver-server"
+  echo "Systemd unit: contrib/systemd/aver-mcp.service (expects ~/.local/bin/aver-server)"
+fi
