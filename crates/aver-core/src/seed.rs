@@ -68,6 +68,13 @@ const PREDICATE_ONTOLOGY: &[(&str, Option<&str>)] = &[
     ("has", Some("owns")),
     ("defines", Some("owns")),
     ("emits", Some("relates_to")),
+    // ADR-0007 code edges the AST extractor emits (`aver-extractor` bridge):
+    // inheritance and trait/interface implementation are dependencies of the
+    // subtype on the supertype; `has_test` links a symbol to the test that
+    // covers it. All multi-valued.
+    ("extends", Some("depends_on")),
+    ("implements", Some("depends_on")),
+    ("has_test", Some("relates_to")),
 ];
 
 /// Predicates that hold one object per subject (migration 0010

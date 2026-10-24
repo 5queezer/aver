@@ -161,3 +161,44 @@ fn existing_store_gains_cardinality_on_open() {
         .unwrap();
     assert_eq!(store.consolidate_report().unwrap().superseded, 1);
 }
+
+#[test]
+fn seed_includes_the_extractor_edges_as_multi_valued_predicates() {
+    let dir = tempfile::tempdir().unwrap();
+    let _store = Store::open(dir.path()).unwrap();
+    let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT child.name, parent.name, child.cardinality
+               FROM predicate_types child
+               JOIN predicate_types parent ON parent.id = child.parent_id
+              WHERE child.name IN ('extends', 'implements', 'has_test')
+              ORDER BY child.name",
+        )
+        .unwrap();
+    let rows: Vec<(String, String, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            (
+                "extends".to_string(),
+                "depends_on".to_string(),
+                "multi".to_string()
+            ),
+            (
+                "has_test".to_string(),
+                "relates_to".to_string(),
+                "multi".to_string()
+            ),
+            (
+                "implements".to_string(),
+                "depends_on".to_string(),
+                "multi".to_string()
+            ),
+        ]
+    );
+}
