@@ -161,6 +161,7 @@ fn floor_gates_model_choice() {
         None
     );
 
+    // Missing confidence fails the floor: the deterministic suggestion wins.
     let silent = MockDecisionClient::with_choices(vec![(fixes, None)]);
     assert_eq!(
         store
@@ -168,6 +169,42 @@ fn floor_gates_model_choice() {
             .unwrap()
             .unwrap()
             .accepted,
-        "fixes"
+        "depends_on"
+    );
+}
+
+#[test]
+fn vocabulary_predicate_named_none_gets_a_distinct_sentinel() {
+    let (_dir, store) = store();
+    // ADR-0018: a USER_ASSERTED claim auto-extends the vocabulary.
+    store.add_claim("a", "none", "b", "s1").unwrap();
+
+    let options = options_for(&store, "needs");
+    assert_eq!(options.last().unwrap(), "none_of_the_above");
+    let none_predicate = options.iter().position(|o| o == "none").unwrap();
+    assert!(none_predicate < options.len() - 1);
+
+    let client = MockDecisionClient::with_indices(vec![none_predicate, options.len() - 1]);
+    let suggestion = store
+        .normalize_predicate("needs", None, &client, FLOOR)
+        .unwrap()
+        .expect("the predicate `none` is suggestible");
+    assert_eq!(suggestion.accepted, "none");
+    assert_eq!(
+        store
+            .normalize_predicate("needs", None, &client, FLOOR)
+            .unwrap(),
+        None,
+        "the sentinel still means no match"
+    );
+    let received = client.received();
+    assert!(
+        received[0]
+            .question
+            .contains("Pick none_of_the_above only if")
+    );
+    assert_eq!(
+        received[0].descriptions.as_ref().unwrap().last().unwrap(),
+        "no listed predicate fits this input"
     );
 }

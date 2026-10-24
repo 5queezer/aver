@@ -7,6 +7,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::time::Duration;
 
 pub const MIN_OPTIONS: usize = 2;
 pub const MAX_OPTIONS: usize = 24;
@@ -112,12 +113,12 @@ pub struct Choice {
 impl Choice {
     /// `true` when the reported confidence is at least `min`.
     ///
-    /// A choice without a reported confidence (`None`, e.g. an unscripted
-    /// [`MockDecisionClient`] answer) counts as meeting the floor: the floor
-    /// filters answers the model itself marks as unsure. A NaN confidence
-    /// never meets it.
+    /// A choice without a reported confidence (`None`) never meets the floor,
+    /// not even `0.0`: an endpoint that omits `confidence` must not silently
+    /// disable `AVER_DECISION_MIN_CONFIDENCE`, so callers fall back to their
+    /// deterministic behaviour. A NaN confidence never meets it either.
     pub fn meets(&self, min: f64) -> bool {
-        self.confidence.is_none_or(|confidence| confidence >= min)
+        self.confidence.is_some_and(|confidence| confidence >= min)
     }
 }
 
@@ -159,12 +160,13 @@ pub struct MockDecisionClient {
 impl MockDecisionClient {
     pub const MODEL: &'static str = "mock";
 
-    /// Scripted indices or errors; every answer reports confidence `None`.
+    /// Scripted indices or errors; every answer reports confidence
+    /// `Some(1.0)`, so it meets any floor.
     pub fn new(answers: Vec<Result<usize, DecisionError>>) -> Self {
         Self::scripted(
             answers
                 .into_iter()
-                .map(|answer| answer.map(|index| (index, None)))
+                .map(|answer| answer.map(|index| (index, Some(1.0))))
                 .collect(),
         )
     }
@@ -174,7 +176,7 @@ impl MockDecisionClient {
     }
 
     /// Scripted `(index, confidence)` answers, for exercising confidence
-    /// floors.
+    /// floors (including `None`, which meets no floor).
     pub fn with_choices(choices: Vec<(usize, Option<f64>)>) -> Self {
         Self::scripted(choices.into_iter().map(Ok).collect())
     }
@@ -229,6 +231,20 @@ impl DecisionClient for MockDecisionClient {
 
 /// Default for [`DecisionConfig::min_confidence`].
 pub const DEFAULT_MIN_CONFIDENCE: f64 = 0.6;
+/// Default for [`DecisionConfig::timeout`].
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Truncates to at most `max` bytes, backing off to a char boundary.
+pub(crate) fn truncate_bytes(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecisionConfig {
@@ -237,6 +253,10 @@ pub struct DecisionConfig {
     /// Confidence floor for decisions that influence writes; see
     /// [`Choice::meets`]. Always within `0.0..=1.0`.
     pub min_confidence: f64,
+    /// Bound on one decision request (connect, send and read). MCP callers
+    /// decide while holding the tools mutex, so a stalled endpoint must not
+    /// block every session.
+    pub timeout: Duration,
 }
 
 impl Default for DecisionConfig {
@@ -245,8 +265,19 @@ impl Default for DecisionConfig {
             base_url: "http://localhost:11434".to_string(),
             model: "tev1:4b".to_string(),
             min_confidence: DEFAULT_MIN_CONFIDENCE,
+            timeout: DEFAULT_TIMEOUT,
         }
     }
+}
+
+/// Parses an `AVER_DECISION_TIMEOUT_SECS` value; `None` unless it is a
+/// positive whole number of seconds.
+fn parse_timeout_secs(value: &str) -> Option<Duration> {
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|&secs| secs > 0)
+        .map(Duration::from_secs)
 }
 
 /// Parses an `AVER_DECISION_MIN_CONFIDENCE` value; `None` unless it is a
@@ -259,10 +290,11 @@ fn parse_min_confidence(value: &str) -> Option<f64> {
 }
 
 impl DecisionConfig {
-    /// Reads `AVER_DECISION_URL`, `AVER_DECISION_MODEL` and
-    /// `AVER_DECISION_MIN_CONFIDENCE`; unset or blank values keep the
-    /// default. A floor that is not a number within `0.0..=1.0` is ignored
-    /// and the default floor (0.6) applies.
+    /// Reads `AVER_DECISION_URL`, `AVER_DECISION_MODEL`,
+    /// `AVER_DECISION_MIN_CONFIDENCE` and `AVER_DECISION_TIMEOUT_SECS`; unset
+    /// or blank values keep the default. A floor that is not a number within
+    /// `0.0..=1.0` is ignored and the default floor (0.6) applies; a timeout
+    /// that is not a positive whole number is ignored and 30 s applies.
     pub fn from_env() -> Self {
         let var = |name: &str| {
             std::env::var(name)
@@ -277,6 +309,9 @@ impl DecisionConfig {
             min_confidence: var("AVER_DECISION_MIN_CONFIDENCE")
                 .and_then(|value| parse_min_confidence(&value))
                 .unwrap_or(default.min_confidence),
+            timeout: var("AVER_DECISION_TIMEOUT_SECS")
+                .and_then(|value| parse_timeout_secs(&value))
+                .unwrap_or(default.timeout),
         }
     }
 }
@@ -331,15 +366,56 @@ impl serde::Serialize for Criteria<'_> {
 pub struct OllamaDecisionClient {
     base_url: String,
     model: String,
+    timeout: Duration,
+    agent: ureq::Agent,
 }
 
 #[cfg(feature = "ollama")]
 impl OllamaDecisionClient {
+    /// Client with the default 30 s request timeout ([`DEFAULT_TIMEOUT`]).
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             model: model.into(),
+            timeout: DEFAULT_TIMEOUT,
+            agent: Self::agent(DEFAULT_TIMEOUT),
         }
+    }
+
+    /// Replaces the overall per-request timeout.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self.agent = Self::agent(timeout);
+        self
+    }
+
+    pub fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    fn agent(timeout: Duration) -> ureq::Agent {
+        ureq::AgentBuilder::new().timeout(timeout).build()
+    }
+
+    /// `DecisionError::Http`, saying so explicitly when `err` is a timeout.
+    fn http_error(&self, err: &(dyn std::error::Error + 'static)) -> DecisionError {
+        let mut source = Some(err);
+        while let Some(current) = source {
+            if let Some(io) = current.downcast_ref::<std::io::Error>()
+                && matches!(
+                    io.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                )
+            {
+                return DecisionError::Http(format!(
+                    "request to {} timed out after {}s",
+                    self.systemone_url(),
+                    self.timeout.as_secs_f64()
+                ));
+            }
+            source = current.source();
+        }
+        DecisionError::Http(err.to_string())
     }
 
     pub fn systemone_url(&self) -> String {
@@ -408,11 +484,14 @@ impl OllamaDecisionClient {
 impl DecisionClient for OllamaDecisionClient {
     fn decide(&self, decision: &Decision<'_>) -> Result<Choice, DecisionError> {
         decision.validate()?;
-        let body = ureq::post(&self.systemone_url())
+        let body = self
+            .agent
+            .post(&self.systemone_url())
             .set("Content-Type", "application/json")
             .send_string(&self.build_request(decision)?)
-            .map_err(|err| DecisionError::Http(err.to_string()))?
-            .into_string()?;
+            .map_err(|err| self.http_error(&err))?
+            .into_string()
+            .map_err(|err| self.http_error(&err))?;
         let (index, confidence) = Self::parse_response(&body, decision.options)?;
         Ok(Choice {
             index,
@@ -435,10 +514,9 @@ pub fn client_from_env() -> Option<Box<dyn DecisionClient + Send + Sync>> {
         .ok()
         .filter(|value| !value.trim().is_empty())?;
     let config = DecisionConfig::from_env();
-    Some(Box::new(OllamaDecisionClient::new(
-        config.base_url,
-        config.model,
-    )))
+    Some(Box::new(
+        OllamaDecisionClient::new(config.base_url, config.model).with_timeout(config.timeout),
+    ))
 }
 
 /// See the `ollama`-feature variant; without the feature no client exists.
@@ -488,6 +566,29 @@ mod tests {
         assert_eq!(config.base_url, "http://localhost:11434");
         assert_eq!(config.model, "tev1:4b");
         assert_eq!(config.min_confidence, 0.6);
+        assert_eq!(config.timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn timeout_secs_parses_only_positive_whole_seconds() {
+        assert_eq!(parse_timeout_secs("5"), Some(Duration::from_secs(5)));
+        assert_eq!(parse_timeout_secs("120"), Some(Duration::from_secs(120)));
+        for bad in ["0", "-1", "1.5", "abc", ""] {
+            assert_eq!(parse_timeout_secs(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn truncate_bytes_backs_off_to_char_boundary() {
+        // "é" is 2 bytes, "€" is 3.
+        let text = "aé€b";
+        assert_eq!(truncate_bytes(text, 100), text);
+        assert_eq!(truncate_bytes(text, 1), "a");
+        assert_eq!(truncate_bytes(text, 2), "a");
+        assert_eq!(truncate_bytes(text, 3), "aé");
+        assert_eq!(truncate_bytes(text, 5), "aé");
+        assert_eq!(truncate_bytes(text, 6), "aé€");
+        assert_eq!(truncate_bytes(text, 0), "");
     }
 
     #[test]
@@ -511,10 +612,10 @@ mod tests {
         assert!(choice(Some(0.9)).meets(0.5));
         assert!(!choice(Some(0.49)).meets(0.5));
         assert!(
-            choice(None).meets(0.5),
-            "missing confidence meets the floor"
+            !choice(None).meets(0.5),
+            "missing confidence does not meet the floor"
         );
-        assert!(choice(None).meets(1.0));
+        assert!(!choice(None).meets(0.0));
         assert!(!choice(Some(f64::NAN)).meets(0.0));
     }
 
@@ -568,7 +669,7 @@ mod tests {
             client.decide(&first).unwrap(),
             Choice {
                 index: 1,
-                confidence: None,
+                confidence: Some(1.0),
                 model: MockDecisionClient::MODEL.to_string(),
             }
         );
@@ -617,6 +718,49 @@ mod tests {
         let client = OllamaDecisionClient::new("http://localhost:11434/", config.model.clone());
         assert_eq!(client.base_url, "http://localhost:11434");
         assert_eq!(client.model(), config.model);
+        assert_eq!(client.timeout(), DEFAULT_TIMEOUT);
+    }
+
+    #[cfg(feature = "ollama")]
+    #[test]
+    fn with_timeout_is_reflected_in_accessor() {
+        let client = OllamaDecisionClient::new("http://localhost:11434", "tev1:4b")
+            .with_timeout(Duration::from_secs(3));
+        assert_eq!(client.timeout(), Duration::from_secs(3));
+    }
+
+    #[cfg(feature = "ollama")]
+    #[test]
+    fn http_error_names_timeouts() {
+        let client = OllamaDecisionClient::new("http://localhost:11434", "tev1:4b")
+            .with_timeout(Duration::from_secs(3));
+        let timed_out = std::io::Error::new(std::io::ErrorKind::TimedOut, "slow");
+        assert!(matches!(
+            client.http_error(&timed_out),
+            DecisionError::Http(message) if message.contains("timed out after 3s")
+        ));
+        let refused = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "nope");
+        assert!(matches!(
+            client.http_error(&refused),
+            DecisionError::Http(message) if !message.contains("timed out")
+        ));
+    }
+
+    #[cfg(feature = "ollama")]
+    #[test]
+    fn response_without_confidence_meets_no_positive_floor() {
+        let body = r#"{"answers":{"decision":{"choice":"project"}}}"#;
+        let (index, confidence) =
+            OllamaDecisionClient::parse_response(body, &["global", "project"]).unwrap();
+        let choice = Choice {
+            index,
+            confidence,
+            model: "tev1:4b".to_string(),
+        };
+        assert_eq!(choice.index, 1);
+        for floor in [f64::MIN_POSITIVE, 0.1, 0.6, 1.0] {
+            assert!(!choice.meets(floor), "{floor}");
+        }
     }
 
     #[cfg(feature = "ollama")]

@@ -154,5 +154,9 @@ fn floor_gates_suggestion() {
     };
     assert_eq!(suggest(), None, "below floor keeps the caller default");
     assert_eq!(suggest().as_deref(), Some("proj/aver"));
-    assert_eq!(suggest().as_deref(), Some("global"), "None meets the floor");
+    assert_eq!(
+        suggest(),
+        None,
+        "missing confidence keeps the caller default"
+    );
 }

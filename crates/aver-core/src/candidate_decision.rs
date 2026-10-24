@@ -3,9 +3,11 @@
 //! (`extract`, `skip`). The model only picks an option enumerated here;
 //! replay reads the recorded choice and never calls a client.
 
+use std::collections::HashSet;
+
 use serde::Serialize;
 
-use crate::decision::{Decision, DecisionClient, DecisionError};
+use crate::decision::{Decision, DecisionClient, DecisionError, truncate_bytes};
 use crate::{Error, ExtractionDecision, ExtractionTriggerReason, Provenance, Store};
 
 const TRIAGE_QUESTION: &str =
@@ -100,18 +102,6 @@ pub(crate) fn replay_decision(
     }
 }
 
-/// Truncates to at most `max` bytes on a char boundary.
-fn excerpt(text: &str, max: usize) -> &str {
-    if text.len() <= max {
-        return text;
-    }
-    let mut end = max;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    &text[..end]
-}
-
 impl Store {
     /// ADR-0024 candidate triage. Asks `client` whether a PENDING candidate
     /// should be promoted, rejected or held. Promotion records provenance
@@ -148,7 +138,7 @@ impl Store {
             source_events: [TriageEvent {
                 id: event.id,
                 kind: &event.kind,
-                payload: excerpt(&event.payload, STATE_MAX_BYTES),
+                payload: truncate_bytes(&event.payload, STATE_MAX_BYTES),
             }],
         })
         .expect("triage state serializes");
@@ -211,25 +201,34 @@ impl Store {
     ) -> Result<ExtractionDecision, Error> {
         let mut decision =
             self.extraction_decision(session_id, event_threshold, observation_token_threshold)?;
-        if decision
-            .reasons
-            .iter()
-            .any(|reason| *reason != ExtractionTriggerReason::UncoveredCoverageGap)
-        {
+        // The model is asked only when the coverage gap is the sole reason.
+        // `extraction_decision` already computed coverage: without the gap
+        // reason the session has no undigested events, so no second pass.
+        if decision.reasons != [ExtractionTriggerReason::UncoveredCoverageGap] {
             return Ok(decision);
         }
-        let uncovered = self.observation_coverage(session_id)?.uncovered_event_ids;
+        // One observation and one event listing; uncovered events are
+        // filtered in memory instead of re-read one by one.
+        let covered: HashSet<i64> = self
+            .list_observations_for_session(session_id)?
+            .into_iter()
+            .flat_map(|observation| observation.source_event_ids)
+            .collect();
+        let uncovered: Vec<_> = self
+            .list_events_for_session(session_id)?
+            .into_iter()
+            .filter(|event| !covered.contains(&event.id))
+            .collect();
         if uncovered.is_empty() {
             return Ok(decision);
         }
 
         let mut state = format!("undigested_events: {}\n", uncovered.len());
-        for event_id in &uncovered {
-            let event = self.get_event(*event_id)?;
+        for event in &uncovered {
             let line = format!(
                 "- [{}] {}\n",
                 event.kind,
-                excerpt(&event.payload, PAYLOAD_EXCERPT_BYTES)
+                truncate_bytes(&event.payload, PAYLOAD_EXCERPT_BYTES)
             );
             if state.len() + line.len() > STATE_MAX_BYTES {
                 break;

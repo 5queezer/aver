@@ -7,11 +7,35 @@ use crate::ontology::{
 };
 use crate::{Error, Store};
 
+/// Name of the trailing "no match" option. A vocabulary predicate with the
+/// same name makes it ambiguous, so [`none_option`] then picks another.
 const NONE_OPTION: &str = "none";
+const NONE_OPTION_FALLBACK: &str = "none_of_the_above";
 const NONE_DESCRIPTION: &str = "no listed predicate fits this input";
-/// Instructions verified live against `tev1:4b` on 2026-10-24.
-const QUESTION: &str = "Pick the canonical predicate whose meaning matches the input predicate. \
-                        Pick none only if no option has the same meaning.";
+
+/// Instructions verified live against `tev1:4b` on 2026-10-24 (with the
+/// default `none` sentinel).
+fn question(none: &str) -> String {
+    format!(
+        "Pick the canonical predicate whose meaning matches the input predicate. \
+         Pick {none} only if no option has the same meaning."
+    )
+}
+
+/// The "no match" option name for this call: `none`, unless the vocabulary
+/// already uses it, then `none_of_the_above`, extended with `_` until it
+/// collides with no candidate.
+fn none_option(candidates: &[PredicateCandidate]) -> String {
+    let taken = |name: &str| candidates.iter().any(|c| c.accepted == name);
+    if !taken(NONE_OPTION) {
+        return NONE_OPTION.to_string();
+    }
+    let mut name = NONE_OPTION_FALLBACK.to_string();
+    while taken(&name) {
+        name.push('_');
+    }
+    name
+}
 
 /// One-line meanings for the seeded predicates that `semantic_predicate_hint`
 /// (lib.rs) maps synonyms onto; each line paraphrases that synonym group.
@@ -46,7 +70,9 @@ impl Store {
     /// the model.
     ///
     /// Returns `Ok(None)` when the predicate is already canonical or an
-    /// accepted alias, or when the model answers `none`. Any
+    /// accepted alias, or when the model answers the trailing "no match"
+    /// option (`none`, or `none_of_the_above` when `none` is itself a
+    /// vocabulary predicate). Any
     /// [`crate::decision::DecisionError`], and any choice whose confidence is
     /// below `min_confidence` (see [`crate::decision::Choice::meets`]), falls
     /// back to the deterministic `suggest_unknown_predicate` result. Callers
@@ -73,11 +99,12 @@ impl Store {
 
         let normalized = normalize_predicate_name(predicate);
         let candidates = narrow_candidates(&normalized, vocabulary.candidates.clone());
+        let none = none_option(&candidates);
         let mut options: Vec<&str> = candidates
             .iter()
             .map(|candidate| candidate.accepted.as_str())
             .collect();
-        options.push(NONE_OPTION);
+        options.push(&none);
         let descriptions: Vec<String> = candidates
             .iter()
             .map(|candidate| describe(candidate, &vocabulary.candidates))
@@ -89,8 +116,9 @@ impl Store {
         if let Some(example) = example {
             state = format!("{state}\nexample: {example}");
         }
+        let instructions = question(&none);
         let decision =
-            Decision::new(&state, QUESTION, &options).with_descriptions(&description_refs);
+            Decision::new(&state, &instructions, &options).with_descriptions(&description_refs);
         match client.decide(&decision) {
             Ok(choice) if choice.meets(min_confidence) => {
                 Ok(candidates
@@ -139,14 +167,13 @@ fn describe(candidate: &PredicateCandidate, vocabulary: &[PredicateCandidate]) -
 
 /// Deduplicates candidates by accepted name and sorts them for a stable
 /// prompt. If more than `MAX_OPTIONS - 1` remain (one slot is reserved for
-/// `none`), keeps the best matches ranked like `suggest_unknown_predicate`:
+/// the "no match" option), keeps the best matches ranked like `suggest_unknown_predicate`:
 /// the semantic-hint target first, then smallest edit distance, then shorter
 /// name, then alphabetical; the survivors are re-sorted alphabetically.
 fn narrow_candidates(
     normalized: &str,
     mut candidates: Vec<PredicateCandidate>,
 ) -> Vec<PredicateCandidate> {
-    candidates.retain(|candidate| candidate.accepted != NONE_OPTION);
     candidates.sort_by(|a, b| a.accepted.cmp(&b.accepted));
     candidates.dedup_by(|a, b| a.accepted == b.accepted);
     if candidates.len() > MAX_OPTIONS - 1 {
@@ -193,5 +220,18 @@ mod tests {
             "needs (alias of depends_on): subject requires, needs, or relies on the object"
         );
         assert_eq!(describe(&vocabulary[3], &vocabulary), "emits");
+    }
+
+    #[test]
+    fn none_option_avoids_vocabulary_names() {
+        assert_eq!(none_option(&[candidate("owns", None)]), "none");
+        assert_eq!(none_option(&[candidate("none", None)]), "none_of_the_above");
+        assert_eq!(
+            none_option(&[
+                candidate("none", None),
+                candidate("none_of_the_above", None),
+            ]),
+            "none_of_the_above_"
+        );
     }
 }

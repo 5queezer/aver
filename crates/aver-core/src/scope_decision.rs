@@ -1,22 +1,11 @@
 //! Decision-model scope suggestion (ADR-0024, ADR-0021 seam).
 
-use crate::decision::{Decision, DecisionClient};
+use crate::decision::{Decision, DecisionClient, truncate_bytes};
 use crate::validation::validate_scope;
 use crate::{Error, Store};
 
 /// Upper bound on `context` bytes included in the model state.
 const MAX_CONTEXT_BYTES: usize = 1024;
-
-fn truncate_context(context: &str) -> &str {
-    if context.len() <= MAX_CONTEXT_BYTES {
-        return context;
-    }
-    let mut end = MAX_CONTEXT_BYTES;
-    while !context.is_char_boundary(end) {
-        end -= 1;
-    }
-    &context[..end]
-}
 
 /// Describes a scope from its ADR-0021 shape (`global`, `proj/<slug>`,
 /// `proj/<slug>/branch/<name>`, `session/<id>`). Any other valid scope is
@@ -71,7 +60,7 @@ impl Store {
         }
         let state = format!(
             "Subject: {subject}. Predicate: {predicate}. Object: {object}. Context: {}",
-            truncate_context(context)
+            truncate_bytes(context, MAX_CONTEXT_BYTES)
         );
         let descriptions: Vec<String> = allowed.iter().map(|scope| describe_scope(scope)).collect();
         let description_refs: Vec<&str> = descriptions.iter().map(String::as_str).collect();
