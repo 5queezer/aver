@@ -221,6 +221,22 @@ enum Command {
         lang: Option<String>,
     },
 
+    /// Summarize the aver-server recall-miss log
+    /// (`<memory_dir>/recall_misses.jsonl`, written when
+    /// `AVER_RECALL_MISS_LOG=1`).
+    RecallMisses {
+        /// Memory directory holding the log; overrides the global flag.
+        #[arg(long = "memory-dir")]
+        memory_dir: Option<PathBuf>,
+        /// Only count events at or after this ISO date (YYYY-MM-DD, or a
+        /// full UTC timestamp like 2026-10-24T12:00:00Z).
+        #[arg(long)]
+        since: Option<String>,
+        /// Print the summary as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Rebuild db.sqlite from the JSONL log (ADR-0019 §4).
     Replay {
         /// Allow overwriting an existing populated db.sqlite.
@@ -294,6 +310,14 @@ fn main() -> anyhow::Result<()> {
                 *dry_run,
                 lang.as_deref(),
             );
+        }
+        Command::RecallMisses {
+            memory_dir,
+            since,
+            json,
+        } => {
+            let memory_dir = memory_dir.as_deref().unwrap_or(&cli.memory_dir);
+            return run_recall_misses(memory_dir, since.as_deref(), *json);
         }
         _ => {}
     }
@@ -633,13 +657,192 @@ fn main() -> anyhow::Result<()> {
             );
         }
 
-        Command::Vacuum { .. } | Command::Replay { .. } | Command::Extract { .. } => {
-            unreachable!("vacuum, replay and extract are dispatched before opening the store")
+        Command::Vacuum { .. }
+        | Command::Replay { .. }
+        | Command::Extract { .. }
+        | Command::RecallMisses { .. } => {
+            unreachable!(
+                "vacuum, replay, extract and recall-misses are dispatched before opening the store"
+            )
         }
     }
 
     store.close()?;
     Ok(())
+}
+
+/// File name aver-server writes the recall-miss log to.
+const RECALL_MISS_LOG_FILE: &str = "recall_misses.jsonl";
+
+/// `aver recall-misses`: aggregates the content-free recall-miss log. Lines
+/// that are not JSON objects with a string `ts` are counted as skipped.
+fn run_recall_misses(memory_dir: &Path, since: Option<&str>, json: bool) -> anyhow::Result<()> {
+    if let Some(since) = since {
+        let date = since.get(..10).unwrap_or_default();
+        let valid = date.len() == 10
+            && date.char_indices().all(|(i, c)| {
+                if i == 4 || i == 7 {
+                    c == '-'
+                } else {
+                    c.is_ascii_digit()
+                }
+            });
+        if !valid {
+            anyhow::bail!("invalid --since {since}; expected an ISO date like 2026-10-24");
+        }
+    }
+    let path = memory_dir.join(RECALL_MISS_LOG_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            println!(
+                "no recall-miss log at {} (enable it on aver-server with AVER_RECALL_MISS_LOG=1)",
+                path.display()
+            );
+            return Ok(());
+        }
+        Err(err) => return Err(err.into()),
+    };
+    let summary = summarize_recall_misses(&text, since);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        print_recall_miss_summary(&path, &summary);
+    }
+    Ok(())
+}
+
+fn summarize_recall_misses(text: &str, since: Option<&str>) -> serde_json::Value {
+    use std::collections::BTreeMap;
+
+    let mut skipped = 0usize;
+    let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+    let mut retrieval: BTreeMap<String, usize> = BTreeMap::new();
+    let mut scope_walk: BTreeMap<String, usize> = BTreeMap::new();
+    let mut scopes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut per_day: BTreeMap<String, usize> = BTreeMap::new();
+    // Ten 0.1-wide buckets; alpha 1.0 falls in the last one.
+    let mut alpha_buckets = [0usize; 10];
+    let mut alpha_none = 0usize;
+    let mut query_lens = Vec::new();
+    let field = |event: &serde_json::Value, key: &str| {
+        event
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string()
+    };
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let Some(event) = serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .filter(|event| event.get("ts").is_some_and(serde_json::Value::is_string))
+        else {
+            skipped += 1;
+            continue;
+        };
+        let ts = field(&event, "ts");
+        if since.is_some_and(|since| ts.as_str() < since) {
+            continue;
+        }
+        *per_day.entry(ts.chars().take(10).collect()).or_default() += 1;
+        *kinds.entry(field(&event, "kind")).or_default() += 1;
+        *retrieval.entry(field(&event, "retrieval")).or_default() += 1;
+        *scope_walk.entry(field(&event, "scope_walk")).or_default() += 1;
+        *scopes.entry(field(&event, "scope")).or_default() += 1;
+        if let Some(len) = event.get("query_len").and_then(serde_json::Value::as_u64) {
+            query_lens.push(len);
+        }
+        match event.get("alpha").and_then(serde_json::Value::as_f64) {
+            Some(alpha) => {
+                let bucket = ((alpha.clamp(0.0, 1.0) * 10.0).floor() as usize).min(9);
+                alpha_buckets[bucket] += 1;
+            }
+            None => alpha_none += 1,
+        }
+    }
+
+    let total: usize = kinds.values().sum();
+    let mut top_scopes: Vec<(String, usize)> = scopes.into_iter().collect();
+    top_scopes.sort_by(|(a_scope, a), (b_scope, b)| b.cmp(a).then_with(|| a_scope.cmp(b_scope)));
+    top_scopes.truncate(10);
+    query_lens.sort_unstable();
+    // Nearest-rank percentile.
+    let percentile = |p: f64| {
+        (!query_lens.is_empty()).then(|| {
+            let rank = (p * query_lens.len() as f64).ceil() as usize;
+            query_lens[rank.clamp(1, query_lens.len()) - 1]
+        })
+    };
+    let mut alpha: serde_json::Map<String, serde_json::Value> = alpha_buckets
+        .iter()
+        .enumerate()
+        .map(|(i, count)| {
+            (
+                format!("{:.1}-{:.1}", i as f64 / 10.0, (i + 1) as f64 / 10.0),
+                (*count).into(),
+            )
+        })
+        .collect();
+    alpha.insert("none".to_string(), alpha_none.into());
+
+    serde_json::json!({
+        "total": total,
+        "miss": kinds.get("miss").copied().unwrap_or(0),
+        "weak": kinds.get("weak").copied().unwrap_or(0),
+        "skipped_lines": skipped,
+        "by_retrieval": retrieval,
+        "by_scope_walk": scope_walk,
+        "top_scopes": top_scopes
+            .into_iter()
+            .map(|(scope, count)| serde_json::json!({ "scope": scope, "count": count }))
+            .collect::<Vec<_>>(),
+        "query_len": { "median": percentile(0.5), "p90": percentile(0.9) },
+        "alpha_histogram": alpha,
+        "per_day": per_day,
+    })
+}
+
+fn print_recall_miss_summary(path: &Path, summary: &serde_json::Value) {
+    let counts = |key: &str| {
+        summary[key]
+            .as_object()
+            .map(|map| {
+                map.iter()
+                    .map(|(name, count)| format!("{name}={count}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default()
+    };
+    let len = |key: &str| {
+        summary["query_len"][key]
+            .as_u64()
+            .map_or_else(|| "-".to_string(), |len| len.to_string())
+    };
+    println!("recall-miss log: {}", path.display());
+    println!(
+        "events: {} (miss={} weak={})",
+        summary["total"], summary["miss"], summary["weak"]
+    );
+    if summary["skipped_lines"].as_u64().unwrap_or(0) > 0 {
+        println!("skipped lines: {}", summary["skipped_lines"]);
+    }
+    println!("by retrieval: {}", counts("by_retrieval"));
+    println!("by scope_walk: {}", counts("by_scope_walk"));
+    println!("top scopes:");
+    for entry in summary["top_scopes"].as_array().into_iter().flatten() {
+        println!(
+            "  {} {}",
+            entry["count"],
+            entry["scope"].as_str().unwrap_or_default()
+        );
+    }
+    println!("query_len: median={} p90={}", len("median"), len("p90"));
+    println!("alpha: {}", counts("alpha_histogram"));
+    println!("per day:");
+    for (day, count) in summary["per_day"].as_object().into_iter().flatten() {
+        println!("  {day} {count}");
+    }
 }
 
 fn run_extract(

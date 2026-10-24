@@ -26,9 +26,9 @@ aver-core      = { path = "../aver-core", default-features = false }
 aver-extractor = { path = "../aver-extractor" }
 clap.workspace   = true
 anyhow.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 assert_cmd = "2"
 tempfile.workspace = true
 rusqlite.workspace = true
