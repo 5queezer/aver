@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command as Process;
 
 use aver_core::candidate_decision::CandidateTriage;
 use aver_core::decision::{DecisionConfig, client_from_env};
@@ -6,7 +7,12 @@ use aver_core::{
     AgentKind, ExtractionTriggerReason, ObservationRelevance, ReplayMode, ScopeWalk, Store,
     replay_with_mode, vacuum,
 };
+use aver_extractor::LANGUAGES;
+use aver_extractor::bridge::{TreeExtraction, extract_tree};
 use clap::{Parser, Subcommand};
+
+/// Agent id recorded on claims written by `aver extract`.
+const EXTRACT_AGENT_ID: &str = "aver_extract";
 
 #[derive(Debug, Parser)]
 #[command(name = "aver", version, about = "Aver local-first claim memory CLI")]
@@ -199,6 +205,22 @@ enum Command {
         into: Option<PathBuf>,
     },
 
+    /// Extract code facts with Tree-sitter (ADR-0007) and store them as
+    /// EXTRACTED claims in the project scope.
+    Extract {
+        /// Source file or directory to scan.
+        path: PathBuf,
+        /// ADR-0021 memory scope. Defaults to `proj/<repo name>`.
+        #[arg(long)]
+        scope: Option<String>,
+        /// Print fact counts per predicate without opening the store.
+        #[arg(long)]
+        dry_run: bool,
+        /// Only scan files of this language (rust, python, typescript, ...).
+        #[arg(long)]
+        lang: Option<String>,
+    },
+
     /// Rebuild db.sqlite from the JSONL log (ADR-0019 §4).
     Replay {
         /// Allow overwriting an existing populated db.sqlite.
@@ -256,6 +278,22 @@ fn main() -> anyhow::Result<()> {
                 );
             }
             return Ok(());
+        }
+        // Extract opens the store only for a real run, inside
+        // `ingest_extracted`, so `--dry-run` stays free of store calls.
+        Command::Extract {
+            path,
+            scope,
+            dry_run,
+            lang,
+        } => {
+            return run_extract(
+                &cli.memory_dir,
+                path,
+                scope.as_deref(),
+                *dry_run,
+                lang.as_deref(),
+            );
         }
         _ => {}
     }
@@ -595,11 +633,218 @@ fn main() -> anyhow::Result<()> {
             );
         }
 
-        Command::Vacuum { .. } | Command::Replay { .. } => {
-            unreachable!("vacuum and replay are dispatched before opening the store")
+        Command::Vacuum { .. } | Command::Replay { .. } | Command::Extract { .. } => {
+            unreachable!("vacuum, replay and extract are dispatched before opening the store")
         }
     }
 
     store.close()?;
     Ok(())
+}
+
+fn run_extract(
+    memory_dir: &Path,
+    path: &Path,
+    scope: Option<&str>,
+    dry_run: bool,
+    lang: Option<&str>,
+) -> anyhow::Result<()> {
+    if let Some(lang) = lang
+        && !LANGUAGES.contains(&lang)
+    {
+        anyhow::bail!(
+            "unknown --lang {lang}; expected one of {}",
+            LANGUAGES.join(", ")
+        );
+    }
+    let scope = match scope {
+        Some(scope) => scope.to_string(),
+        None => derive_project_scope(path)?,
+    };
+    let extraction = extract_tree(path, lang)?;
+    for (file, err) in &extraction.failed {
+        eprintln!("warning: could not extract {file}: {err}");
+    }
+    let unsupported = extraction
+        .skipped
+        .iter()
+        .map(|(predicate, count)| format!("{predicate}={count}"))
+        .collect::<Vec<_>>();
+    if !unsupported.is_empty() {
+        eprintln!(
+            "warning: skipped facts with predicates outside the core ontology: {}",
+            unsupported.join(" ")
+        );
+    }
+
+    let (ingested, privacy) = if dry_run {
+        for (predicate, count) in extraction.facts_by_predicate() {
+            println!("{predicate}={count}");
+        }
+        (0, 0)
+    } else {
+        ingest_extracted(memory_dir, &extraction, &scope)?
+    };
+
+    let mut skipped = extraction
+        .skipped
+        .iter()
+        .map(|(predicate, count)| (predicate.as_str(), *count))
+        .collect::<Vec<_>>();
+    skipped.push(("duplicate", extraction.duplicates));
+    skipped.push(("privacy", privacy));
+    let skipped = skipped
+        .iter()
+        .map(|(kind, count)| format!("{kind}:{count}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    println!(
+        "extract{}: scope={scope} files_scanned={} files_failed={} facts_extracted={} facts_ingested={ingested} skipped={skipped}",
+        if dry_run { " (dry run)" } else { "" },
+        extraction.files_scanned(),
+        extraction.failed.len(),
+        extraction.extracted,
+    );
+    Ok(())
+}
+
+/// Every store call `aver extract` makes lives here. Returns
+/// `(ingested, privacy_rejected)`.
+///
+/// Phase 1 step 4 (one write API behind `ClaimWrite`) replaces this per-fact
+/// loop with the batch `ingest_extractor_facts` once that takes a scope;
+/// today it hardcodes `global` and also runs the consolidation described
+/// below. Until then each fact is its own write, so a
+/// privacy rejection skips one fact rather than failing a batch, and
+/// `ExtractorFact::provenance` is not passed: core derives EXTRACTED
+/// (confidence 0.90) from `AgentKind::DeterministicParser`. The privacy gate
+/// runs in core on every write.
+fn ingest_extracted(
+    memory_dir: &Path,
+    extraction: &TreeExtraction,
+    scope: &str,
+) -> anyhow::Result<(usize, usize)> {
+    let store = Store::open(memory_dir)?;
+    let mut ingested = 0;
+    let mut privacy = 0;
+    for file in &extraction.files {
+        for fact in &file.facts {
+            match store.add_claim_from_agent_with_scope(
+                EXTRACT_AGENT_ID,
+                AgentKind::DeterministicParser,
+                &fact.subject,
+                &fact.predicate,
+                &fact.object,
+                &file.path,
+                scope,
+            ) {
+                Ok(_) => ingested += 1,
+                Err(aver_core::Error::Privacy(_)) => privacy += 1,
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+    // No `consolidate_report()` here: its conflict rule supersedes every
+    // claim that has a newer one with the same subject and predicate, so
+    // `File:x defines A` would be retired by `File:x defines B`. On this
+    // repository that retired 15943 of 17932 extracted claims. Code
+    // predicates are multi-valued; call it again once core only applies the
+    // conflict rule to single-valued predicates (ADR-0027).
+    store.close()?;
+    Ok((ingested, privacy))
+}
+
+/// ADR-0021 `proj/<slug>` for the project containing `path`, with the
+/// human-readable slug ADR-0025 recommends: the repository name from
+/// `remote.origin.url`, else the git toplevel directory name, else the
+/// directory name of `path`. Characters outside `[A-Za-z0-9_-]` become `-`.
+fn derive_project_scope(path: &Path) -> anyhow::Result<String> {
+    let dir = if path.is_dir() {
+        path
+    } else {
+        path.parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."))
+    };
+    let dir = dir.canonicalize()?;
+    let name = match git_output(&dir, &["rev-parse", "--show-toplevel"]) {
+        Some(toplevel) => git_output(&dir, &["config", "--get", "remote.origin.url"])
+            .and_then(|url| repo_name_from_url(&url))
+            .or_else(|| dir_name(Path::new(&toplevel))),
+        None => dir_name(&dir),
+    };
+    let slug = name.as_deref().map(slugify).unwrap_or_default();
+    if slug.is_empty() {
+        anyhow::bail!(
+            "cannot derive a project scope for {}; pass --scope",
+            path.display()
+        );
+    }
+    Ok(format!("proj/{slug}"))
+}
+
+fn git_output(dir: &Path, args: &[&str]) -> Option<String> {
+    let output = Process::new("git")
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .ok()?;
+    let text = String::from_utf8(output.stdout).ok()?;
+    let text = text.trim();
+    (output.status.success() && !text.is_empty()).then(|| text.to_string())
+}
+
+fn dir_name(path: &Path) -> Option<String> {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+}
+
+/// `git@github.com:o/aver.git`, `https://host/o/aver/` -> `aver`.
+fn repo_name_from_url(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/');
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    url.rsplit(['/', ':'])
+        .next()
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
+fn slugify(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repo_name_from_common_remote_forms() {
+        for (url, expected) in [
+            ("git@github.com:5queezer/aver.git", "aver"),
+            ("https://github.com/5queezer/aver.git", "aver"),
+            ("https://github.com/5queezer/aver/", "aver"),
+            ("ssh://git@host:2222/team/my.repo", "my.repo"),
+            ("/srv/git/local-repo.git\n", "local-repo"),
+        ] {
+            assert_eq!(repo_name_from_url(url).as_deref(), Some(expected), "{url}");
+        }
+        assert_eq!(repo_name_from_url(""), None);
+    }
+
+    #[test]
+    fn slugify_keeps_the_scope_charset() {
+        assert_eq!(slugify("my.repo"), "my-repo");
+        assert_eq!(slugify("aver_core-2"), "aver_core-2");
+        assert_eq!(slugify("..."), "");
+    }
 }

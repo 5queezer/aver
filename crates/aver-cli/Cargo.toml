@@ -23,6 +23,7 @@ ollama = ["aver-core/ollama"]
 
 [dependencies]
 aver-core      = { path = "../aver-core", default-features = false }
+aver-extractor = { path = "../aver-extractor" }
 clap.workspace   = true
 anyhow.workspace = true
 
