@@ -219,6 +219,8 @@ Default configuration:
 | `AVER_EMBEDDING_URL` | *(unset)* | Ollama base URL (for example `http://localhost:11434`) for embeddings; setting it makes MCP `recall` hybrid (ADR-0004) and makes `add_vector_chunk` store an embedding with each chunk. Requires the default `ollama` feature. |
 | `AVER_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model used with `AVER_EMBEDDING_URL` and recorded on vector chunks. |
 | `AVER_DECISION_TIMEOUT_SECS` | `30` | Timeout in whole seconds for one decision-model request; on timeout the deterministic behaviour applies. Zero or unparsable values are ignored. |
+| `AVER_EXTRACT_ROOT` | *(unset)* | Directory the MCP `extract` tool may read (ADR-0027). Unset, the tool refuses every path. Paths must be absolute and, after symlink resolution, inside this directory. |
+| `AVER_EXTRACT_MAX_FILES` | `2000` | Most source files one `extract` call may scan; larger trees are refused with an error naming this cap. |
 
 
 Useful endpoints:
@@ -256,13 +258,14 @@ Then run **MCP: Add Server** from the command palette and pick `aver`. VS Code d
 
 MCP writes are attributed to the client that made them: `remember_claim` and `record_event` default `agent_id` to the OAuth `client_id` the bearer token was issued to (`aver-<uuid>` from dynamic registration), so writes from different harnesses stay distinguishable. An explicit `agent_id` parameter overrides it, and tokens minted without a client fall back to `mcp`. Observations and promoted candidates inherit the `agent_id` of their source events; `add_triple` and the replacement claim of `contradict` are still recorded as `local`.
 
-MCP currently exposes 19 tools through a progressive discovery card so agents keep the active choice set small:
+MCP currently exposes 20 tools through a progressive discovery card so agents keep the active choice set small:
 
 - **Default active set:** `recall`, `remember_claim`, `record_event`, `record_observation`, `assemble_compaction_summary`
 - **Event-to-claim workflow:** progressively load `should_extract_memories`, `propose_candidate_claim`, `list_candidate_claims`, `promote_candidate_claim`, `reject_candidate_claim` only when converting raw events into reviewed durable claims
 - **Decision-model triage:** `triage_candidate_claim` (ADR-0024, opt-in) asks the local decision model to promote, reject, or hold one candidate
 - **Graph navigation:** progressively load `expand` after recall returns an entity or an anchor is already known; use `add_triple` instead of `remember_claim` only when explicit source/confidence control is required
 - **Observation audit:** progressively load `recall_observation`, `observation_coverage` for handoff, compaction, or provenance checks
+- **Code extraction:** `extract` (`claims:write`) walks a source file or directory on the server with Tree-sitter and stores the facts as `EXTRACTED` claims (ADR-0027). Params: `path` (absolute, inside `AVER_EXTRACT_ROOT`), `scope` (default: the request's resolved scope; `global` is used with a note in the result), `lang`, `dry_run`. It returns `scope`, `files_scanned`, `files_failed`, `facts_extracted`, `facts_ingested`, `skipped` (`extends`, `implements`, `duplicate`, `privacy`, ...) and `dry_run`
 - **Maintenance/repair:** keep `contradict`, `retire_claim`, `consolidate`, `add_vector_chunk` hidden until there is an explicit repair or retrieval-tuning need
 
 `recall` is hybrid when embeddings are configured (`AVER_EMBEDDING_URL`) and the store holds embedded vector chunks: it embeds the query once, ranks claims with the ADR-0004 vector/graph blend (`alpha` parameter, default from the query-intent classifier), applies the scope and ADR-0023 filters to the ranked claims, and returns the matching chunk texts in `chunks`. Without embeddings, when the embedding call fails, or for a non-`ACTIVE` status filter it answers from keyword recall as before; the additive `retrieval` field (`"hybrid"` or `"keyword"`) says which path ran, and `alpha` is reported for hybrid results.

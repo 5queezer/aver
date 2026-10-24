@@ -15,10 +15,10 @@ use crate::scope_resolution::ResolvedScope;
 use crate::scopes::{Scope, ToolScope};
 use crate::tools::{
     AddTripleParams, AddVectorChunkParams, AssembleCompactionSummaryParams, AverTools,
-    ConsolidateParams, ContradictParams, ExpandParams, ListCandidateClaimsParams,
-    ObservationCoverageParams, PromoteCandidateClaimParams, ProposeCandidateClaimParams,
-    RecallObservationParams, RecallParams as CoreRecallParams, RecordEventParams,
-    RecordObservationParams, RejectCandidateClaimParams,
+    ConsolidateParams, ContradictParams, ExpandParams, ExtractParams as CoreExtractParams,
+    ListCandidateClaimsParams, ObservationCoverageParams, PromoteCandidateClaimParams,
+    ProposeCandidateClaimParams, RecallObservationParams, RecallParams as CoreRecallParams,
+    RecordEventParams, RecordObservationParams, RejectCandidateClaimParams,
     RememberClaimParams as CoreRememberClaimParams, RetireClaimParams, ShouldExtractMemoriesParams,
     TriageCandidateClaimParams,
 };
@@ -120,6 +120,21 @@ fn request_agent_id(ctx: &RequestContext<RoleServer>) -> String {
         .unwrap_or_else(|| UNAUTHENTICATED_AGENT_ID.to_string())
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ExtractParams {
+    /// Absolute path of a source file or directory on the server. Must be inside the server's AVER_EXTRACT_ROOT.
+    pub path: String,
+    /// ADR-0021 memory scope. Defaults to the caller's resolved scope; `global` is used (with a note in the result) when none is resolved.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// Only scan files of this language (rust, python, typescript, ...).
+    #[serde(default)]
+    pub lang: Option<String>,
+    /// Count facts without writing any claim.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
 pub struct AverMcpService {
     tools: Arc<Mutex<AverTools>>,
     base_url: String,
@@ -182,6 +197,7 @@ impl AverMcpService {
         Self::ASSEMBLE_COMPACTION_SUMMARY,
         Self::RECORD_OBSERVATION,
         Self::RETIRE_CLAIM,
+        Self::EXTRACT,
     ];
 
     const REMEMBER_CLAIM: ToolScope = ToolScope::new("remember_claim", Scope::ClaimsWrite);
@@ -496,6 +512,27 @@ impl AverMcpService {
         json_tool_result(&tools, result, "retire_claim")
     }
 
+    const EXTRACT: ToolScope = ToolScope::new("extract", Scope::ClaimsWrite);
+    #[tool(
+        description = "Extract code facts (defines, calls, imports, tests, uses) with Tree-sitter from a source file or directory on the server and store them as EXTRACTED claims in the project scope (ADR-0027). The path must be absolute and inside the operator-configured AVER_EXTRACT_ROOT; use dry_run to count without writing."
+    )]
+    async fn extract(
+        &self,
+        Parameters(params): Parameters<ExtractParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, Self::EXTRACT)?;
+        let tools = self.lock_tools()?;
+        let result = tools.extract(CoreExtractParams {
+            path: params.path,
+            scope: params.scope.or_else(|| Some(request_scope(&ctx).scope)),
+            lang: params.lang,
+            dry_run: params.dry_run,
+            agent_id: request_agent_id(&ctx),
+        });
+        json_tool_result(&tools, result, "extract")
+    }
+
     const RECALL: ToolScope = ToolScope::new("recall", Scope::ClaimsRead);
     #[tool(
         description = "Search durable claims by text query. Start here for stored facts, preferences, project context, or when you do not know an exact entity id. Hybrid vector + graph ranking (ADR-0004) when the server has embeddings configured; the result's `retrieval` field says which path ran."
@@ -593,6 +630,7 @@ fn mcp_tool_instructions() -> String {
                 "Default workflows: recall existing memory before answering or updating; record_event -> should_extract_memories -> propose_candidate_claim/list_candidate_claims -> promote_candidate_claim or reject_candidate_claim for event-to-claim promotion; record_observation -> recall_observation or observation_coverage -> assemble_compaction_summary for continuity and compaction. ",
                 "Graph navigation tools available: {}. Progressively load graph navigation tools only after recall returns an entity or you already know an anchor: expand; use add_triple instead of remember_claim only when confidence/source control is required. ",
                 "Keep maintenance tools hidden until there is an explicit repair need: {}. Prefer contradict for normal conflicting evidence, retire_claim only for explicit invalidation, consolidate only when you need refreshed derived state, and add_vector_chunk only for retrieval tuning. ",
+                "Code extraction: extract reads a source tree on the server (operator-configured root) and writes EXTRACTED code facts; use it for project code, not for chat or user facts. ",
                 "Tool groups: event workflow {}. Observation workflow {}. Full tool index: {}.",
                 "Progressively load event-to-claim tools only when converting raw events into reviewed durable claims: {}. ",
                 "Progressively load observation audit tools only for handoff, compaction, or provenance checks: {}. ",
@@ -660,6 +698,7 @@ mod tests {
             ("observation_coverage", Scope::ObservationsRead),
             ("assemble_compaction_summary", Scope::ObservationsRead),
             ("record_observation", Scope::ObservationsWrite),
+            ("extract", Scope::ClaimsWrite),
         ]
         .into_iter()
         .collect();
