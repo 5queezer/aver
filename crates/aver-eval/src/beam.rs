@@ -5,7 +5,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use aver_core::{
     Store,
-    decision::{Decision, DecisionClient, OllamaDecisionClient},
+    decision::{Decision, DecisionClient, DecisionError, OllamaDecisionClient},
     vector::{EmbeddingClient, EmbeddingError, OllamaEmbeddingClient},
 };
 use serde::{Deserialize, Serialize};
@@ -235,6 +235,12 @@ pub fn decision_judge_state(question: &str, answer: &str, rubric_item: &str) -> 
     )
 }
 
+/// True for a model answer that maps to no option; every other
+/// [`DecisionError`] is an infrastructure or validation failure.
+fn is_bad_answer(err: &DecisionError) -> bool {
+    matches!(err, DecisionError::InvalidChoice { .. })
+}
+
 /// Maps an index into [`DECISION_JUDGE_OPTIONS`] to the same buckets as
 /// [`parse_judge_score`].
 pub fn score_from_choice(index: usize) -> f64 {
@@ -343,11 +349,20 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
             for rubric_item in question.rubric_items() {
                 let score = if let Some(decision_judge) = &decision_judge {
                     let state = decision_judge_state(&question.question, &answer, &rubric_item);
-                    let choice = decision_judge.decide(
+                    match decision_judge.decide(
                         &Decision::new(&state, DECISION_JUDGE_QUESTION, &DECISION_JUDGE_OPTIONS)
                             .with_descriptions(&DECISION_JUDGE_DESCRIPTIONS),
-                    )?;
-                    score_from_choice(choice.index)
+                    ) {
+                        Ok(choice) => score_from_choice(choice.index),
+                        Err(err) if is_bad_answer(&err) => {
+                            eprintln!(
+                                "    decision judge gave an unusable answer, scoring 0.0 rubric={}",
+                                safe_truncate(&rubric_item, 160)
+                            );
+                            0.0
+                        }
+                        Err(err) => return Err(err.into()),
+                    }
                 } else {
                     let judge_response = judge.generate(
                         &judge_prompt(&question.question, &answer, &rubric_item),
@@ -873,6 +888,16 @@ mod tests {
         assert_eq!(score_from_choice(0), 1.0);
         assert_eq!(score_from_choice(1), 0.5);
         assert_eq!(score_from_choice(2), 0.0);
+    }
+
+    #[test]
+    fn only_invalid_choice_is_a_bad_answer() {
+        assert!(is_bad_answer(&DecisionError::InvalidChoice {
+            raw: "x".into()
+        }));
+        assert!(!is_bad_answer(&DecisionError::Http("down".into())));
+        assert!(!is_bad_answer(&DecisionError::Unavailable));
+        assert!(!is_bad_answer(&DecisionError::TooFewOptions { count: 1 }));
     }
 
     #[test]
