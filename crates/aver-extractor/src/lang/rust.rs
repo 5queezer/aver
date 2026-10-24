@@ -1,13 +1,11 @@
 use std::collections::HashSet;
 
-use tree_sitter::{Node, Parser};
+use tree_sitter::Node;
 
-use crate::{Error, ExtractedFact};
+use crate::{Error, ExtractedFact, parse_with_language};
 
 pub fn extract_rust_functions(source: &str) -> Result<Vec<String>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+    let tree = parse_with_language(source, tree_sitter_rust::language())?;
 
     let mut functions = Vec::new();
     collect_function_names(tree.root_node(), source.as_bytes(), &mut functions)?;
@@ -15,9 +13,7 @@ pub fn extract_rust_functions(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_rust_imports(source: &str) -> Result<Vec<String>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+    let tree = parse_with_language(source, tree_sitter_rust::language())?;
 
     let mut imports = Vec::new();
     collect_imports(tree.root_node(), source.as_bytes(), &mut imports)?;
@@ -34,9 +30,7 @@ pub fn extract_rust_imports(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_rust_calls(source: &str) -> Result<Vec<String>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+    let tree = parse_with_language(source, tree_sitter_rust::language())?;
 
     let mut calls = Vec::new();
     collect_calls(tree.root_node(), source.as_bytes(), &mut calls)?;
@@ -44,9 +38,7 @@ pub fn extract_rust_calls(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_rust_structs(source: &str) -> Result<Vec<String>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+    let tree = parse_with_language(source, tree_sitter_rust::language())?;
 
     let mut structs = Vec::new();
     collect_structs(tree.root_node(), source.as_bytes(), &mut structs)?;
@@ -54,9 +46,7 @@ pub fn extract_rust_structs(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_rust_enums(source: &str) -> Result<Vec<String>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+    let tree = parse_with_language(source, tree_sitter_rust::language())?;
 
     let mut enums = Vec::new();
     collect_enums(tree.root_node(), source.as_bytes(), &mut enums)?;
@@ -64,9 +54,7 @@ pub fn extract_rust_enums(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_rust_traits(source: &str) -> Result<Vec<String>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+    let tree = parse_with_language(source, tree_sitter_rust::language())?;
 
     let mut traits = Vec::new();
     collect_traits(tree.root_node(), source.as_bytes(), &mut traits)?;
@@ -74,9 +62,7 @@ pub fn extract_rust_traits(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_rust_consts(source: &str) -> Result<Vec<String>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+    let tree = parse_with_language(source, tree_sitter_rust::language())?;
 
     let mut consts = Vec::new();
     collect_consts(tree.root_node(), source.as_bytes(), &mut consts)?;
@@ -84,9 +70,7 @@ pub fn extract_rust_consts(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_rust_modules(source: &str) -> Result<Vec<String>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+    let tree = parse_with_language(source, tree_sitter_rust::language())?;
 
     let mut modules = Vec::new();
     collect_modules(tree.root_node(), source.as_bytes(), &mut modules)?;
@@ -94,9 +78,7 @@ pub fn extract_rust_modules(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_rust_tests(source: &str) -> Result<Vec<String>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
+    let tree = parse_with_language(source, tree_sitter_rust::language())?;
 
     let mut tests = Vec::new();
     collect_tests(tree.root_node(), source.as_bytes(), &mut tests)?;
@@ -111,6 +93,249 @@ pub fn map_rust_tests_to_functions(source: &str) -> Result<Vec<(String, String)>
         .filter(|function| !test_names.contains(function))
         .collect::<Vec<_>>();
 
+    Ok(map_tests_to_functions(&tests, &functions))
+}
+
+/// Extracts all facts from a single parse of the file.
+///
+/// Every entity gets ONE canonical identity: top-level items are named
+/// (`Function:foo`, `Struct:Bar`), items inside modules are module-qualified
+/// (`Function:m::foo`), and impl methods are type-qualified
+/// (`Function:Type::method`). Call edges use the caller's qualified identity
+/// and qualify bare callees with the caller's module path.
+pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
+    let tree = parse_with_language(source, tree_sitter_rust::language())?;
+
+    let mut facts = Vec::new();
+    collect_scope_facts(tree.root_node(), source.as_bytes(), path, "", &mut facts)?;
+    Ok(facts)
+}
+
+fn scope_subject(path: &str, module_path: &str) -> String {
+    if module_path.is_empty() {
+        path.to_string()
+    } else {
+        format!("Module:{module_path}")
+    }
+}
+
+fn qualify_name(module_path: &str, name: &str) -> String {
+    if module_path.is_empty() {
+        name.to_string()
+    } else {
+        format!("{module_path}::{name}")
+    }
+}
+
+fn define_fact(path: &str, module_path: &str, kind: &str, name: &str) -> ExtractedFact {
+    ExtractedFact {
+        subject: scope_subject(path, module_path),
+        predicate: "defines".to_string(),
+        object: format!("{}:{}", kind, qualify_name(module_path, name)),
+    }
+}
+
+fn collect_scope_facts(
+    node: Node<'_>,
+    source: &[u8],
+    path: &str,
+    module_path: &str,
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    let mut cursor = node.walk();
+    let mut pending_test_attribute = false;
+    let mut scope_tests = Vec::new();
+    let mut scope_functions = Vec::new();
+    let mut seen_imports = HashSet::new();
+
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "attribute_item" => {
+                if is_test_attribute(child, source)? {
+                    pending_test_attribute = true;
+                }
+                continue;
+            }
+            "line_comment" | "block_comment" => continue,
+            "mod_item" => {
+                if let Some(name) = child.child_by_field_name("name") {
+                    let module_name = normalize_rust_identifier(name.utf8_text(source)?);
+                    let nested_path = qualify_name(module_path, &module_name);
+                    facts.push(ExtractedFact {
+                        subject: scope_subject(path, module_path),
+                        predicate: "defines".to_string(),
+                        object: format!("Module:{nested_path}"),
+                    });
+                    if let Some(body) = child.child_by_field_name("body") {
+                        collect_scope_facts(body, source, path, &nested_path, facts)?;
+                    }
+                }
+            }
+            "impl_item" => collect_impl_item_facts(child, source, path, module_path, facts)?,
+            "function_item" => {
+                if let Some(name) = child.child_by_field_name("name") {
+                    let function = normalize_rust_identifier(name.utf8_text(source)?);
+                    facts.push(define_fact(path, module_path, "Function", &function));
+                    collect_call_facts(
+                        child,
+                        source,
+                        &qualify_name(module_path, &function),
+                        module_path,
+                        facts,
+                    )?;
+                    if pending_test_attribute {
+                        scope_tests.push(function);
+                    } else {
+                        scope_functions.push(function);
+                    }
+                }
+                // Nested items (e.g. functions inside function bodies).
+                collect_scope_facts(child, source, path, module_path, facts)?;
+            }
+            "struct_item" | "enum_item" | "trait_item" | "const_item" => {
+                let kind = match child.kind() {
+                    "struct_item" => "Struct",
+                    "enum_item" => "Enum",
+                    "trait_item" => "Trait",
+                    _ => "Const",
+                };
+                if let Some(name) = child.child_by_field_name("name") {
+                    let item_name = normalize_rust_identifier(name.utf8_text(source)?);
+                    facts.push(define_fact(path, module_path, kind, &item_name));
+                    if kind == "Enum" {
+                        let qualified = qualify_name(module_path, &item_name);
+                        let mut variants = Vec::new();
+                        collect_enum_variants(child, source, &mut variants)?;
+                        facts.extend(variants.into_iter().map(|variant| ExtractedFact {
+                            subject: format!("Enum:{qualified}"),
+                            predicate: "defines".to_string(),
+                            object: format!("Variant:{qualified}::{variant}"),
+                        }));
+                    }
+                }
+            }
+            "use_declaration" => {
+                for import in expand_use_declaration_text(child.utf8_text(source)?) {
+                    if seen_imports.insert(import.clone()) {
+                        facts.push(ExtractedFact {
+                            subject: scope_subject(path, module_path),
+                            predicate: "imports".to_string(),
+                            object: format!("Module:{import}"),
+                        });
+                    }
+                }
+            }
+            _ => collect_scope_facts(child, source, path, module_path, facts)?,
+        }
+        if child.is_named() {
+            pending_test_attribute = false;
+        }
+    }
+
+    for (test, function) in map_tests_to_functions(&scope_tests, &scope_functions) {
+        facts.push(ExtractedFact {
+            subject: format!("Function:{}", qualify_name(module_path, &test)),
+            predicate: "tests".to_string(),
+            object: format!("Function:{}", qualify_name(module_path, &function)),
+        });
+    }
+    Ok(())
+}
+
+fn collect_impl_item_facts(
+    impl_node: Node<'_>,
+    source: &[u8],
+    path: &str,
+    module_path: &str,
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    let Some(type_node) = impl_node.child_by_field_name("type") else {
+        return Ok(());
+    };
+    let type_name = qualify_module_type(&rust_type_base_name(type_node, source)?, module_path);
+
+    if let Some(trait_node) = impl_node.child_by_field_name("trait") {
+        let trait_name =
+            qualify_module_type(&rust_type_base_name(trait_node, source)?, module_path);
+        facts.push(ExtractedFact {
+            subject: format!("Type:{type_name}"),
+            predicate: "implements".to_string(),
+            object: format!("Trait:{trait_name}"),
+        });
+    }
+
+    let Some(body) = impl_node.child_by_field_name("body") else {
+        return Ok(());
+    };
+    let mut cursor = body.walk();
+    for item in body.children(&mut cursor) {
+        match item.kind() {
+            "function_item" => {
+                if let Some(name) = item.child_by_field_name("name") {
+                    let method = normalize_rust_identifier(name.utf8_text(source)?);
+                    let qualified_method = format!("{type_name}::{method}");
+                    facts.push(ExtractedFact {
+                        subject: format!("Type:{type_name}"),
+                        predicate: "defines".to_string(),
+                        object: format!("Function:{qualified_method}"),
+                    });
+                    collect_call_facts(item, source, &qualified_method, module_path, facts)?;
+                }
+            }
+            "attribute_item" | "line_comment" | "block_comment" => {}
+            // Associated consts and other non-method items keep their
+            // module-scoped identity.
+            _ => collect_scope_facts(item, source, path, module_path, facts)?,
+        }
+    }
+    Ok(())
+}
+
+/// Returns the base name of an impl-header type, stripping generic arguments
+/// (`Trait<T>` -> `Trait`) while keeping scope qualifiers (`a::Trait`).
+fn rust_type_base_name(node: Node<'_>, source: &[u8]) -> Result<String, Error> {
+    if node.kind() == "generic_type"
+        && let Some(base) = node.child_by_field_name("type")
+    {
+        return rust_type_base_name(base, source);
+    }
+    Ok(node.utf8_text(source)?.to_string())
+}
+
+fn collect_call_facts(
+    function_node: Node<'_>,
+    source: &[u8],
+    qualified_caller: &str,
+    module_path: &str,
+    facts: &mut Vec<ExtractedFact>,
+) -> Result<(), Error> {
+    let mut calls = Vec::new();
+    collect_calls(function_node, source, &mut calls)?;
+    facts.extend(calls.into_iter().map(|callee| ExtractedFact {
+        subject: format!("Function:{qualified_caller}"),
+        predicate: "calls".to_string(),
+        object: format!("Function:{}", qualify_module_call(&callee, module_path)),
+    }));
+    Ok(())
+}
+
+fn qualify_module_call(callee: &str, module_path: &str) -> String {
+    if module_path.is_empty() || callee.contains("::") || callee.contains('.') {
+        callee.to_string()
+    } else {
+        format!("{module_path}::{callee}")
+    }
+}
+
+fn qualify_module_type(type_name: &str, module_path: &str) -> String {
+    if module_path.is_empty() || type_name.contains("::") {
+        type_name.to_string()
+    } else {
+        format!("{module_path}::{type_name}")
+    }
+}
+
+fn map_tests_to_functions(tests: &[String], functions: &[String]) -> Vec<(String, String)> {
     let mut mappings = Vec::new();
     for test in tests {
         if let Some(function) = functions
@@ -118,245 +343,10 @@ pub fn map_rust_tests_to_functions(source: &str) -> Result<Vec<(String, String)>
             .filter(|function| test.starts_with(&format!("{function}_")))
             .max_by_key(|function| function.len())
         {
-            mappings.push((test, function.clone()));
+            mappings.push((test.clone(), function.clone()));
         }
     }
-    Ok(mappings)
-}
-
-pub fn extract_rust_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut facts = extract_rust_functions(source)?
-        .into_iter()
-        .map(|function| ExtractedFact {
-            subject: path.to_string(),
-            predicate: "defines".to_string(),
-            object: format!("Function:{function}"),
-        })
-        .collect::<Vec<_>>();
-
-    facts.extend(
-        extract_rust_structs(source)?
-            .into_iter()
-            .map(|struct_name| ExtractedFact {
-                subject: path.to_string(),
-                predicate: "defines".to_string(),
-                object: format!("Struct:{struct_name}"),
-            }),
-    );
-    facts.extend(
-        extract_rust_enums(source)?
-            .into_iter()
-            .map(|enum_name| ExtractedFact {
-                subject: path.to_string(),
-                predicate: "defines".to_string(),
-                object: format!("Enum:{enum_name}"),
-            }),
-    );
-    facts.extend(extract_rust_enum_variant_facts(source)?);
-    facts.extend(
-        extract_rust_traits(source)?
-            .into_iter()
-            .map(|trait_name| ExtractedFact {
-                subject: path.to_string(),
-                predicate: "defines".to_string(),
-                object: format!("Trait:{trait_name}"),
-            }),
-    );
-    facts.extend(
-        extract_rust_consts(source)?
-            .into_iter()
-            .map(|const_name| ExtractedFact {
-                subject: path.to_string(),
-                predicate: "defines".to_string(),
-                object: format!("Const:{const_name}"),
-            }),
-    );
-    facts.extend(extract_rust_module_definition_facts(path, source)?);
-    facts.extend(extract_rust_module_import_facts(source)?);
-    facts.extend(extract_rust_module_trait_facts(source)?);
-    facts.extend(extract_rust_module_struct_facts(source)?);
-    facts.extend(extract_rust_module_enum_facts(source)?);
-    facts.extend(extract_rust_module_const_facts(source)?);
-    facts.extend(
-        extract_rust_imports(source)?
-            .into_iter()
-            .map(|module| ExtractedFact {
-                subject: path.to_string(),
-                predicate: "imports".to_string(),
-                object: format!("Module:{module}"),
-            }),
-    );
-    facts.extend(extract_rust_function_call_facts(source)?);
-    facts.extend(extract_rust_module_function_facts(source)?);
-    facts.extend(extract_rust_module_impl_method_facts(source)?);
-    facts.extend(extract_rust_impl_method_facts(source)?);
-    facts.extend(extract_rust_impl_method_call_facts(source)?);
-    facts.extend(extract_rust_module_impl_trait_facts(source)?);
-    facts.extend(extract_rust_impl_trait_facts(source)?);
-    facts.extend(extract_rust_module_test_mapping_facts(source)?);
-    facts.extend(
-        map_rust_tests_to_functions(source)?
-            .into_iter()
-            .map(|(test, function)| ExtractedFact {
-                subject: format!("Function:{test}"),
-                predicate: "tests".to_string(),
-                object: format!("Function:{function}"),
-            }),
-    );
-    Ok(facts)
-}
-
-fn extract_rust_function_call_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
-
-    let mut facts = Vec::new();
-    collect_function_call_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_rust_module_definition_facts(
-    path: &str,
-    source: &str,
-) -> Result<Vec<ExtractedFact>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
-
-    let mut facts = Vec::new();
-    collect_module_definition_facts(tree.root_node(), source.as_bytes(), path, "", &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_rust_module_trait_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
-
-    let mut facts = Vec::new();
-    collect_module_trait_facts(tree.root_node(), source.as_bytes(), "", &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_rust_module_import_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
-
-    let mut facts = Vec::new();
-    collect_module_import_facts(tree.root_node(), source.as_bytes(), "", &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_rust_module_struct_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
-
-    let mut facts = Vec::new();
-    collect_module_struct_facts(tree.root_node(), source.as_bytes(), "", &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_rust_module_enum_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
-
-    let mut facts = Vec::new();
-    collect_module_enum_facts(tree.root_node(), source.as_bytes(), "", &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_rust_module_const_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
-
-    let mut facts = Vec::new();
-    collect_module_const_facts(tree.root_node(), source.as_bytes(), "", &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_rust_enum_variant_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
-
-    let mut facts = Vec::new();
-    collect_enum_variant_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_rust_impl_method_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
-
-    let mut facts = Vec::new();
-    collect_impl_method_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_rust_module_impl_method_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
-
-    let mut facts = Vec::new();
-    collect_module_impl_method_facts(tree.root_node(), source.as_bytes(), "", &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_rust_module_function_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
-
-    let mut facts = Vec::new();
-    collect_module_function_facts(tree.root_node(), source.as_bytes(), "", &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_rust_impl_method_call_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
-
-    let mut facts = Vec::new();
-    collect_impl_method_call_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_rust_impl_trait_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
-
-    let mut facts = Vec::new();
-    collect_impl_trait_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_rust_module_impl_trait_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
-
-    let mut facts = Vec::new();
-    collect_module_impl_trait_facts(tree.root_node(), source.as_bytes(), "", &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_rust_module_test_mapping_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_rust::language())?;
-    let tree = parser.parse(source, None).ok_or(Error::ParseFailed)?;
-
-    let mut facts = Vec::new();
-    collect_module_test_mapping_facts(tree.root_node(), source.as_bytes(), "", &mut facts)?;
-    Ok(facts)
+    mappings
 }
 
 fn collect_function_names(
@@ -386,13 +376,7 @@ fn normalize_rust_identifier(identifier: &str) -> String {
 
 fn collect_imports(node: Node<'_>, source: &[u8], imports: &mut Vec<String>) -> Result<(), Error> {
     if node.kind() == "use_declaration" {
-        let text = node
-            .utf8_text(source)?
-            .trim()
-            .trim_start_matches("use ")
-            .trim_end_matches(';')
-            .trim();
-        imports.extend(expand_rust_use_declaration(text));
+        imports.extend(expand_use_declaration_text(node.utf8_text(source)?));
     }
 
     let mut cursor = node.walk();
@@ -400,6 +384,15 @@ fn collect_imports(node: Node<'_>, source: &[u8], imports: &mut Vec<String>) -> 
         collect_imports(child, source, imports)?;
     }
     Ok(())
+}
+
+fn expand_use_declaration_text(declaration_text: &str) -> Vec<String> {
+    let text = declaration_text
+        .trim()
+        .trim_start_matches("use ")
+        .trim_end_matches(';')
+        .trim();
+    expand_rust_use_declaration(text)
 }
 
 fn expand_rust_use_declaration(declaration: &str) -> Vec<String> {
@@ -593,7 +586,7 @@ fn collect_consts(node: Node<'_>, source: &[u8], consts: &mut Vec<String>) -> Re
     if node.kind() == "const_item"
         && let Some(name) = node.child_by_field_name("name")
     {
-        consts.push(name.utf8_text(source)?.to_string());
+        consts.push(normalize_rust_identifier(name.utf8_text(source)?));
     }
 
     let mut cursor = node.walk();
@@ -605,359 +598,73 @@ fn collect_consts(node: Node<'_>, source: &[u8], consts: &mut Vec<String>) -> Re
 
 fn collect_tests(node: Node<'_>, source: &[u8], tests: &mut Vec<String>) -> Result<(), Error> {
     let mut cursor = node.walk();
-    let mut preceding_test_attr = false;
+    let mut pending_test_attribute = false;
     for child in node.children(&mut cursor) {
-        if child.kind() == "attribute_item" {
-            preceding_test_attr = child.utf8_text(source)?.contains("#[test]");
-            continue;
+        match child.kind() {
+            "attribute_item" => {
+                if is_test_attribute(child, source)? {
+                    pending_test_attribute = true;
+                }
+                continue;
+            }
+            "line_comment" | "block_comment" => continue,
+            _ => {}
         }
 
-        if preceding_test_attr
+        if pending_test_attribute
             && child.kind() == "function_item"
             && let Some(name) = child.child_by_field_name("name")
         {
-            tests.push(name.utf8_text(source)?.to_string());
+            tests.push(normalize_rust_identifier(name.utf8_text(source)?));
         }
 
         collect_tests(child, source, tests)?;
-        preceding_test_attr = false;
-    }
-    Ok(())
-}
-
-fn collect_function_call_facts(
-    node: Node<'_>,
-    source: &[u8],
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "function_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let caller = name.utf8_text(source)?.to_string();
-        let mut calls = Vec::new();
-        collect_calls(node, source, &mut calls)?;
-        facts.extend(calls.into_iter().map(|callee| ExtractedFact {
-            subject: format!("Function:{caller}"),
-            predicate: "calls".to_string(),
-            object: format!("Function:{callee}"),
-        }));
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_function_call_facts(child, source, facts)?;
-    }
-    Ok(())
-}
-
-fn collect_module_function_facts(
-    node: Node<'_>,
-    source: &[u8],
-    module_path: &str,
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "mod_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let module_name = name.utf8_text(source)?;
-        let nested_path = if module_path.is_empty() {
-            module_name.to_string()
-        } else {
-            format!("{module_path}::{module_name}")
-        };
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            collect_module_function_facts(child, source, &nested_path, facts)?;
+        if child.is_named() {
+            pending_test_attribute = false;
         }
-        return Ok(());
-    }
-
-    if !module_path.is_empty()
-        && node.kind() == "function_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let function = name.utf8_text(source)?;
-        facts.push(ExtractedFact {
-            subject: format!("Module:{module_path}"),
-            predicate: "defines".to_string(),
-            object: format!("Function:{module_path}::{function}"),
-        });
-        let mut calls = Vec::new();
-        collect_calls(node, source, &mut calls)?;
-        facts.extend(calls.into_iter().map(|callee| ExtractedFact {
-            subject: format!("Function:{module_path}::{function}"),
-            predicate: "calls".to_string(),
-            object: format!("Function:{}", qualify_module_call(&callee, module_path)),
-        }));
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_module_function_facts(child, source, module_path, facts)?;
     }
     Ok(())
 }
 
-fn qualify_module_call(callee: &str, module_path: &str) -> String {
-    if callee.contains("::") || callee.contains('.') {
-        callee.to_string()
-    } else {
-        format!("{module_path}::{callee}")
-    }
-}
-
-fn collect_module_definition_facts(
-    node: Node<'_>,
-    source: &[u8],
-    file_path: &str,
-    module_path: &str,
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "mod_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let module_name = name.utf8_text(source)?;
-        let nested_path = if module_path.is_empty() {
-            module_name.to_string()
-        } else {
-            format!("{module_path}::{module_name}")
-        };
-        let subject = if module_path.is_empty() {
-            file_path.to_string()
-        } else {
-            format!("Module:{module_path}")
-        };
-        facts.push(ExtractedFact {
-            subject,
-            predicate: "defines".to_string(),
-            object: format!("Module:{nested_path}"),
-        });
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            collect_module_definition_facts(child, source, file_path, &nested_path, facts)?;
+/// Detects test marker attributes (`#[test]`, `#[tokio::test]`, `#[rstest]`,
+/// `#[test_case]`, ...) by inspecting the last segment of the attribute path
+/// instead of matching the literal text `#[test]`.
+fn is_test_attribute(attribute_item: Node<'_>, source: &[u8]) -> Result<bool, Error> {
+    let mut cursor = attribute_item.walk();
+    for child in attribute_item.children(&mut cursor) {
+        if child.kind() != "attribute" {
+            continue;
         }
-        return Ok(());
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_module_definition_facts(child, source, file_path, module_path, facts)?;
-    }
-    Ok(())
-}
-
-fn collect_module_impl_method_facts(
-    node: Node<'_>,
-    source: &[u8],
-    module_path: &str,
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "mod_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let module_name = name.utf8_text(source)?;
-        let nested_path = if module_path.is_empty() {
-            module_name.to_string()
-        } else {
-            format!("{module_path}::{module_name}")
-        };
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            collect_module_impl_method_facts(child, source, &nested_path, facts)?;
+        let mut attribute_cursor = child.walk();
+        for attribute_child in child.children(&mut attribute_cursor) {
+            match attribute_child.kind() {
+                "identifier" => {
+                    return Ok(matches!(
+                        attribute_child.utf8_text(source)?,
+                        "test" | "rstest" | "test_case"
+                    ));
+                }
+                "scoped_identifier" => {
+                    let mut last_segment = None;
+                    let mut segment_cursor = attribute_child.walk();
+                    for segment in attribute_child.children(&mut segment_cursor) {
+                        if segment.kind() == "identifier" {
+                            last_segment = Some(segment);
+                        }
+                    }
+                    return match last_segment {
+                        Some(segment) => Ok(matches!(
+                            segment.utf8_text(source)?,
+                            "test" | "rstest" | "test_case"
+                        )),
+                        None => Ok(false),
+                    };
+                }
+                _ => {}
+            }
         }
-        return Ok(());
     }
-
-    if !module_path.is_empty()
-        && node.kind() == "impl_item"
-        && let Some(type_node) = node.child_by_field_name("type")
-    {
-        let type_name = qualify_module_type(type_node.utf8_text(source)?, module_path);
-        let mut methods = Vec::new();
-        collect_function_names(node, source, &mut methods)?;
-        facts.extend(methods.into_iter().map(|method| ExtractedFact {
-            subject: format!("Type:{type_name}"),
-            predicate: "defines".to_string(),
-            object: format!("Function:{type_name}::{method}"),
-        }));
-        collect_qualified_method_call_facts(node, source, &type_name, facts)?;
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_module_impl_method_facts(child, source, module_path, facts)?;
-    }
-    Ok(())
-}
-
-fn qualify_module_type(type_name: &str, module_path: &str) -> String {
-    if type_name.contains("::") {
-        type_name.to_string()
-    } else {
-        format!("{module_path}::{type_name}")
-    }
-}
-
-fn collect_module_trait_facts(
-    node: Node<'_>,
-    source: &[u8],
-    module_path: &str,
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "mod_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let module_name = name.utf8_text(source)?;
-        let nested_path = if module_path.is_empty() {
-            module_name.to_string()
-        } else {
-            format!("{module_path}::{module_name}")
-        };
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            collect_module_trait_facts(child, source, &nested_path, facts)?;
-        }
-        return Ok(());
-    }
-
-    if !module_path.is_empty()
-        && node.kind() == "trait_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let trait_name = name.utf8_text(source)?;
-        facts.push(ExtractedFact {
-            subject: format!("Module:{module_path}"),
-            predicate: "defines".to_string(),
-            object: format!("Trait:{module_path}::{trait_name}"),
-        });
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_module_trait_facts(child, source, module_path, facts)?;
-    }
-    Ok(())
-}
-
-fn collect_module_struct_facts(
-    node: Node<'_>,
-    source: &[u8],
-    module_path: &str,
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "mod_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let module_name = name.utf8_text(source)?;
-        let nested_path = if module_path.is_empty() {
-            module_name.to_string()
-        } else {
-            format!("{module_path}::{module_name}")
-        };
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            collect_module_struct_facts(child, source, &nested_path, facts)?;
-        }
-        return Ok(());
-    }
-
-    if !module_path.is_empty()
-        && node.kind() == "struct_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let struct_name = name.utf8_text(source)?;
-        facts.push(ExtractedFact {
-            subject: format!("Module:{module_path}"),
-            predicate: "defines".to_string(),
-            object: format!("Struct:{module_path}::{struct_name}"),
-        });
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_module_struct_facts(child, source, module_path, facts)?;
-    }
-    Ok(())
-}
-
-fn collect_module_enum_facts(
-    node: Node<'_>,
-    source: &[u8],
-    module_path: &str,
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "mod_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let module_name = name.utf8_text(source)?;
-        let nested_path = if module_path.is_empty() {
-            module_name.to_string()
-        } else {
-            format!("{module_path}::{module_name}")
-        };
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            collect_module_enum_facts(child, source, &nested_path, facts)?;
-        }
-        return Ok(());
-    }
-
-    if !module_path.is_empty()
-        && node.kind() == "enum_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let enum_name = name.utf8_text(source)?;
-        let qualified_enum = format!("{module_path}::{enum_name}");
-        facts.push(ExtractedFact {
-            subject: format!("Module:{module_path}"),
-            predicate: "defines".to_string(),
-            object: format!("Enum:{qualified_enum}"),
-        });
-        let mut variants = Vec::new();
-        collect_enum_variants(node, source, &mut variants)?;
-        facts.extend(variants.into_iter().map(|variant| ExtractedFact {
-            subject: format!("Enum:{qualified_enum}"),
-            predicate: "defines".to_string(),
-            object: format!("Variant:{qualified_enum}::{variant}"),
-        }));
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_module_enum_facts(child, source, module_path, facts)?;
-    }
-    Ok(())
-}
-
-fn collect_enum_variant_facts(
-    node: Node<'_>,
-    source: &[u8],
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "enum_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let enum_name = name.utf8_text(source)?;
-        let mut variants = Vec::new();
-        collect_enum_variants(node, source, &mut variants)?;
-        facts.extend(variants.into_iter().map(|variant| ExtractedFact {
-            subject: format!("Enum:{enum_name}"),
-            predicate: "defines".to_string(),
-            object: format!("Variant:{enum_name}::{variant}"),
-        }));
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_enum_variant_facts(child, source, facts)?;
-    }
-    Ok(())
+    Ok(false)
 }
 
 fn collect_enum_variants(
@@ -974,298 +681,6 @@ fn collect_enum_variants(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_enum_variants(child, source, variants)?;
-    }
-    Ok(())
-}
-
-fn collect_module_const_facts(
-    node: Node<'_>,
-    source: &[u8],
-    module_path: &str,
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "mod_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let module_name = name.utf8_text(source)?;
-        let nested_path = if module_path.is_empty() {
-            module_name.to_string()
-        } else {
-            format!("{module_path}::{module_name}")
-        };
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            collect_module_const_facts(child, source, &nested_path, facts)?;
-        }
-        return Ok(());
-    }
-
-    if !module_path.is_empty()
-        && node.kind() == "const_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let const_name = name.utf8_text(source)?;
-        facts.push(ExtractedFact {
-            subject: format!("Module:{module_path}"),
-            predicate: "defines".to_string(),
-            object: format!("Const:{module_path}::{const_name}"),
-        });
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_module_const_facts(child, source, module_path, facts)?;
-    }
-    Ok(())
-}
-
-fn collect_module_import_facts(
-    node: Node<'_>,
-    source: &[u8],
-    module_path: &str,
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "mod_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let module_name = name.utf8_text(source)?;
-        let nested_path = if module_path.is_empty() {
-            module_name.to_string()
-        } else {
-            format!("{module_path}::{module_name}")
-        };
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            collect_module_import_facts(child, source, &nested_path, facts)?;
-        }
-        return Ok(());
-    }
-
-    if !module_path.is_empty() && node.kind() == "use_declaration" {
-        facts.push(ExtractedFact {
-            subject: format!("Module:{module_path}"),
-            predicate: "imports".to_string(),
-            object: format!("Module:{}", use_path(node.utf8_text(source)?)),
-        });
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_module_import_facts(child, source, module_path, facts)?;
-    }
-    Ok(())
-}
-
-fn use_path(text: &str) -> String {
-    text.trim()
-        .trim_start_matches("use ")
-        .trim_end_matches(';')
-        .to_string()
-}
-
-fn collect_impl_method_facts(
-    node: Node<'_>,
-    source: &[u8],
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "impl_item"
-        && let Some(type_node) = node.child_by_field_name("type")
-    {
-        let type_name = type_node.utf8_text(source)?.to_string();
-        let mut methods = Vec::new();
-        collect_function_names(node, source, &mut methods)?;
-        facts.extend(methods.into_iter().map(|method| ExtractedFact {
-            subject: format!("Type:{type_name}"),
-            predicate: "defines".to_string(),
-            object: format!("Function:{type_name}::{method}"),
-        }));
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_impl_method_facts(child, source, facts)?;
-    }
-    Ok(())
-}
-
-fn collect_impl_method_call_facts(
-    node: Node<'_>,
-    source: &[u8],
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "impl_item"
-        && let Some(type_node) = node.child_by_field_name("type")
-    {
-        let type_name = type_node.utf8_text(source)?.to_string();
-        collect_qualified_method_call_facts(node, source, &type_name, facts)?;
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_impl_method_call_facts(child, source, facts)?;
-    }
-    Ok(())
-}
-
-fn collect_qualified_method_call_facts(
-    node: Node<'_>,
-    source: &[u8],
-    type_name: &str,
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "function_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let method = name.utf8_text(source)?.to_string();
-        let mut calls = Vec::new();
-        collect_calls(node, source, &mut calls)?;
-        facts.extend(calls.into_iter().map(|callee| ExtractedFact {
-            subject: format!("Function:{type_name}::{method}"),
-            predicate: "calls".to_string(),
-            object: format!("Function:{callee}"),
-        }));
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_qualified_method_call_facts(child, source, type_name, facts)?;
-    }
-    Ok(())
-}
-
-fn collect_module_impl_trait_facts(
-    node: Node<'_>,
-    source: &[u8],
-    module_path: &str,
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "mod_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let module_name = name.utf8_text(source)?;
-        let nested_path = if module_path.is_empty() {
-            module_name.to_string()
-        } else {
-            format!("{module_path}::{module_name}")
-        };
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            collect_module_impl_trait_facts(child, source, &nested_path, facts)?;
-        }
-        return Ok(());
-    }
-
-    if !module_path.is_empty() && node.kind() == "impl_item" {
-        let header = node
-            .utf8_text(source)?
-            .split('{')
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .trim_start_matches("impl ");
-        if let Some((trait_name, type_name)) = header.split_once(" for ") {
-            facts.push(ExtractedFact {
-                subject: format!(
-                    "Type:{}",
-                    qualify_module_type(type_name.trim(), module_path)
-                ),
-                predicate: "implements".to_string(),
-                object: format!(
-                    "Trait:{}",
-                    qualify_module_type(trait_name.trim(), module_path)
-                ),
-            });
-        }
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_module_impl_trait_facts(child, source, module_path, facts)?;
-    }
-    Ok(())
-}
-
-fn collect_module_test_mapping_facts(
-    node: Node<'_>,
-    source: &[u8],
-    module_path: &str,
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "mod_item"
-        && let Some(name) = node.child_by_field_name("name")
-    {
-        let module_name = name.utf8_text(source)?;
-        let nested_path = if module_path.is_empty() {
-            module_name.to_string()
-        } else {
-            format!("{module_path}::{module_name}")
-        };
-
-        let mut tests = Vec::new();
-        collect_tests(node, source, &mut tests)?;
-        let test_names = tests.iter().cloned().collect::<HashSet<_>>();
-        let mut functions = Vec::new();
-        collect_function_names(node, source, &mut functions)?;
-        let functions = functions
-            .into_iter()
-            .filter(|function| !test_names.contains(function))
-            .collect::<Vec<_>>();
-        for test in tests {
-            if let Some(function) = functions
-                .iter()
-                .filter(|function| test.starts_with(&format!("{function}_")))
-                .max_by_key(|function| function.len())
-            {
-                facts.push(ExtractedFact {
-                    subject: format!("Function:{nested_path}::{test}"),
-                    predicate: "tests".to_string(),
-                    object: format!("Function:{nested_path}::{function}"),
-                });
-            }
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            collect_module_test_mapping_facts(child, source, &nested_path, facts)?;
-        }
-        return Ok(());
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_module_test_mapping_facts(child, source, module_path, facts)?;
-    }
-    Ok(())
-}
-
-fn collect_impl_trait_facts(
-    node: Node<'_>,
-    source: &[u8],
-    facts: &mut Vec<ExtractedFact>,
-) -> Result<(), Error> {
-    if node.kind() == "impl_item" {
-        let header = node
-            .utf8_text(source)?
-            .split('{')
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .trim_start_matches("impl ");
-        if let Some((trait_name, type_name)) = header.split_once(" for ") {
-            facts.push(ExtractedFact {
-                subject: format!("Type:{}", type_name.trim()),
-                predicate: "implements".to_string(),
-                object: format!("Trait:{}", trait_name.trim()),
-            });
-        }
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_impl_trait_facts(child, source, facts)?;
     }
     Ok(())
 }

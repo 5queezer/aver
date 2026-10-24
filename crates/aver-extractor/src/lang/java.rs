@@ -51,57 +51,46 @@ pub fn extract_java_packages(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_java_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut facts = definition_facts(path, "Function", extract_java_functions(source)?);
+    let tree = parse_with_language(source, tree_sitter_java::language())?;
+    let root = tree.root_node();
+    let source = source.as_bytes();
+
+    let mut facts = definition_facts(
+        path,
+        "Function",
+        collect_names_from_kinds(root, source, &["method_declaration"])?,
+    );
     facts.extend(definition_facts(
         path,
         "Class",
-        extract_java_classes(source)?,
+        collect_names_from_kinds(root, source, &["class_declaration"])?,
     ));
     facts.extend(definition_facts(
         path,
         "Interface",
-        extract_java_interfaces(source)?,
+        collect_names_from_kinds(root, source, &["interface_declaration"])?,
     ));
-    facts.extend(definition_facts(path, "Enum", extract_java_enums(source)?));
+    facts.extend(definition_facts(
+        path,
+        "Enum",
+        collect_names_from_kinds(root, source, &["enum_declaration"])?,
+    ));
     facts.extend(definition_facts(
         path,
         "Record",
-        extract_java_records(source)?,
+        collect_names_from_kinds(root, source, &["record_declaration"])?,
     ));
     facts.extend(definition_facts(
         path,
         "Annotation",
-        extract_java_annotations(source)?,
+        collect_names_from_kinds(root, source, &["annotation_type_declaration"])?,
     ));
-    facts.extend(definition_facts(
-        path,
-        "Package",
-        extract_java_packages(source)?,
-    ));
-    facts.extend(extract_java_extends_facts(source)?);
-    facts.extend(extract_java_implements_facts(source)?);
-    facts.extend(extract_java_interface_extends_facts(source)?);
-    Ok(facts)
-}
-
-fn extract_java_interface_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let tree = parse_with_language(source, tree_sitter_java::language())?;
-    let mut facts = Vec::new();
-    collect_java_interface_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_java_implements_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let tree = parse_with_language(source, tree_sitter_java::language())?;
-    let mut facts = Vec::new();
-    collect_java_implements_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_java_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let tree = parse_with_language(source, tree_sitter_java::language())?;
-    let mut facts = Vec::new();
-    collect_java_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
+    let mut packages = Vec::new();
+    collect_java_package_names(root, source, &mut packages)?;
+    facts.extend(definition_facts(path, "Package", packages));
+    collect_java_extends_facts(root, source, &mut facts)?;
+    collect_java_implements_facts(root, source, &mut facts)?;
+    collect_java_interface_extends_facts(root, source, &mut facts)?;
     Ok(facts)
 }
 
