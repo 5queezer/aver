@@ -193,6 +193,7 @@ Current CLI commands:
 | `contradict` | Record a contradiction for a claim id and optional replacement claim. |
 | `consolidate` | Consolidate active duplicates/conflicts and apply confidence decay. |
 | `extract` | Extract Tree-sitter code facts from a file or directory into the project scope (`--scope`, `--dry-run`, `--lang`). |
+| `recall-misses` | Summarize the opt-in server recall-miss log (`--since <ISO date>`, `--json`): misses vs weak hits, by retrieval path, scope walk and scope, query-length median/p90, alpha histogram, events per day. Also `just recall-misses`. |
 | `vacuum` | Run `VACUUM` (and optional analysis). |
 | `replay` | Rebuild SQLite from the append-only logs (strict by default; `--lenient` quarantines invalid lines and continues). Holds the advisory `.lock` for the whole run so it cannot race a live store. |
 
@@ -223,6 +224,8 @@ Default configuration:
 | `AVER_DECISION_TIMEOUT_SECS` | `30` | Timeout in whole seconds for one decision-model request; on timeout the deterministic behaviour applies. Zero or unparsable values are ignored. |
 | `AVER_EXTRACT_ROOT` | *(unset)* | Directory the MCP `extract` tool may read (ADR-0027). Unset, the tool refuses every path. Paths must be absolute and, after symlink resolution, inside this directory. |
 | `AVER_EXTRACT_MAX_FILES` | `2000` | Most source files one `extract` call may scan; larger trees are refused with an error naming this cap. |
+| `AVER_RECALL_MISS_LOG` | *(unset)* | Set to `1` to append a content-free line to `<AVER_MEMORY_DIR>/recall_misses.jsonl` for every MCP `recall` that misses or only hits weakly. Unset, no file is created. |
+| `AVER_RECALL_WEAK_CONFIDENCE` | `0.5` | With the recall-miss log on, a recall whose top claim's confidence is below this value is logged as `weak`. Values outside 0..=1 are ignored. |
 
 
 Useful endpoints:
@@ -273,6 +276,8 @@ MCP currently exposes 22 tools through a progressive discovery card so agents ke
 - **Maintenance/repair:** keep `contradict`, `retire_claim`, `consolidate`, `add_vector_chunk` hidden until there is an explicit repair or retrieval-tuning need
 
 `recall` is hybrid when embeddings are configured (`AVER_EMBEDDING_URL`) and the store holds embedded vector chunks: it embeds the query once, ranks claims with the ADR-0004 vector/graph blend (`alpha` parameter, default from the query-intent classifier), applies the scope and ADR-0023 filters to the ranked claims, and returns the matching chunk texts in `chunks`. Without embeddings, when the embedding call fails, or for a non-`ACTIVE` status filter it answers from keyword recall as before; the additive `retrieval` field (`"hybrid"` or `"keyword"`) says which path ran, and `alpha` is reported for hybrid results.
+
+**Recall-miss log.** With `AVER_RECALL_MISS_LOG=1`, each MCP `recall` that returns no claims (`kind: "miss"`) or whose top claim is below `AVER_RECALL_WEAK_CONFIDENCE` (`kind: "weak"`) appends one JSON line to `<AVER_MEMORY_DIR>/recall_misses.jsonl`; hits write nothing. A line holds `ts` (UTC), `kind`, `agent_id` (the authenticated OAuth client id), `query_len` (chars), `query_tokens` (whitespace tokens), `scope`, `scope_walk`, `filters` (`agent_id_set`, `agent_kind`, `predicate_set`, `min_confidence`, `status`), `alpha`, `retrieval`, `top_k`, `claims_returned`, `chunks_returned`, `top_confidence` and `duration_ms`, and nothing else. Per ADR-0009 it is content-free by construction: the event type has no field for query text, claim text, entity names or chunk text, so none can reach the file. A failed write is reported to stderr once and never fails the recall. This is the data source for the Phase 4 agent trial's "recalls that returned nothing useful"; summarize it with `aver recall-misses`.
 
 Setting `AVER_DECISION_MODEL` opts the server and CLI into the ADR-0024 decision model (`aver-server` and `aver-cli` enable `aver-core`'s `ollama` feature by default; build with `--no-default-features` to leave it out, in which case the variable is ignored). `triage_candidate_claim` (CLI: `triage --candidate-id N`) then lets the model promote, reject, or hold a pending candidate; promoted claims carry `INFERRED` provenance with confidence 0.45, and without the variable the tool returns an error. The opt-in also lets `should_extract_memories` ask the model when only undigested events remain (the MCP result then adds `reasons`). `Store::suggest_scope` and `Store::normalize_predicate` exist in `aver-core` but are not wired to the MCP surface yet: the propose log line cannot carry the decision attribution, and error paths must not call the model under the tools mutex. Unset, every existing tool behaves as before.
 

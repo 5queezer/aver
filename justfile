@@ -87,6 +87,10 @@ install-service:
 release-dry-run:
     scripts/release-dry-run.sh
 
+# Summarize the opt-in aver-server recall-miss log (AVER_RECALL_MISS_LOG=1)
+recall-misses *args:
+    cargo run --quiet --locked -p aver-cli -- --memory-dir "${AVER_MEMORY_DIR:-.aver}" recall-misses {{args}}
+
 # Create a local release tarball and checksum under target/dist
 dist: release
     mkdir -p target/dist

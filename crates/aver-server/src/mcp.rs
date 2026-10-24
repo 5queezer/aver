@@ -590,7 +590,7 @@ impl AverMcpService {
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, Self::RECALL)?;
         let tools = self.lock_tools()?;
-        let result = tools.recall({
+        let params = {
             let resolved = request_scope(&ctx);
             let walk = params.scope_walk.clone().or_else(|| {
                 if params.scope.is_none() {
@@ -613,7 +613,8 @@ impl AverMcpService {
                 status: None,
                 alpha: params.alpha,
             }
-        });
+        };
+        let result = tools.recall_for_agent(params, &request_agent_id(&ctx));
         json_tool_result(&tools, result, "recall")
     }
 }
