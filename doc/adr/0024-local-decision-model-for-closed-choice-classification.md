@@ -89,7 +89,8 @@ model choice may influence a write only when its confidence is at least the
 floor `AVER_DECISION_MIN_CONFIDENCE` (default 0.6, range 0.0..=1.0); below
 it the seam takes its deterministic fallback (triage holds, predicates use
 fuzzy suggestions, scope keeps the caller default, the trigger keeps the
-deterministic decision). A client that reports no confidence meets the floor.
+deterministic decision). A choice without a reported confidence never meets
+the floor, so an endpoint that omits `confidence` cannot disable it.
 Live `promote` choices on junk or unsupported candidates scored 0.40-0.55 and
 on genuine ones 0.78-0.93, hence a default floor of 0.6.
 
@@ -133,6 +134,9 @@ only when `AVER_DECISION_MODEL` is set and non-blank (and `aver-core` is built
 with the `ollama` feature, which `aver-server` and `aver-cli` enable by
 default); `AVER_DECISION_URL` overrides the Ollama base URL and
 `AVER_DECISION_MIN_CONFIDENCE` sets the confidence floor (default 0.6).
+`AVER_DECISION_TIMEOUT_SECS` bounds each decision request (default 30 s); a
+timeout is a `DecisionError::Http`, so the seam takes its deterministic
+fallback instead of stalling MCP callers that hold the tools mutex.
 Without a client every surface below keeps its deterministic behaviour, except
 `triage_candidate_claim` / `aver triage`, which fail with "decision model not
 configured (set AVER_DECISION_MODEL)".
