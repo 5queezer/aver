@@ -1,6 +1,7 @@
 //! Aver core: storage, episodic log, claim CRUD.
 //! See doc/adr/ for architecture decisions.
 
+pub mod candidate_decision;
 pub mod decision;
 pub mod extractor;
 mod privacy;
@@ -2281,6 +2282,18 @@ impl Store {
     }
 
     pub fn promote_candidate_claim(&self, candidate_id: i64) -> Result<i64, Error> {
+        self.promote_candidate_claim_inner(candidate_id, None, None)
+    }
+
+    /// `attribution` overrides the candidate's provenance/confidence on the
+    /// durable claim; `decision` is recorded on the promotion log line
+    /// (ADR-0024).
+    fn promote_candidate_claim_inner(
+        &self,
+        candidate_id: i64,
+        attribution: Option<(Provenance, f64)>,
+        decision: Option<candidate_decision::DecisionLogField<'_>>,
+    ) -> Result<i64, Error> {
         let candidate = self.get_candidate_claim(candidate_id)?;
         if candidate.status == "REJECTED" {
             return Err(Error::InvalidCandidateStatus {
@@ -2294,6 +2307,8 @@ impl Store {
         let event = self.get_event(candidate.event_id)?;
         let source = format!("event:{}", event.id);
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let (provenance, confidence) =
+            attribution.unwrap_or((candidate.provenance, candidate.confidence));
 
         // ADR-0018: ontology check BEFORE any log append. Promoting an
         // extractor candidate with an unknown predicate must fail cleanly;
@@ -2301,7 +2316,7 @@ impl Store {
         // record whose projection INSERT later fails at the ontology
         // trigger. (The candidate content was privacy-filtered at proposal
         // time, so there is nothing new to filter here.)
-        let extend_ontology = self.validate_ontology(&candidate.predicate, candidate.provenance)?;
+        let extend_ontology = self.validate_ontology(&candidate.predicate, provenance)?;
 
         // Id allocation, log appends, and projection updates in one write
         // transaction (same race class as insert_claim). Log-first ordering
@@ -2324,8 +2339,8 @@ impl Store {
                 source: &source,
                 agent_id: &event.agent_id,
                 agent_kind: event.agent_kind.as_str(),
-                confidence: candidate.confidence,
-                provenance: candidate.provenance.as_str(),
+                confidence,
+                provenance: provenance.as_str(),
                 scope: &candidate.scope,
             };
             append_jsonl(&self.log_path, &entry)?;
@@ -2338,6 +2353,7 @@ impl Store {
                 ts: now,
                 candidate_id,
                 claim_id,
+                decision,
             };
             append_jsonl(&self.event_log_path, &promote_entry)?;
 
@@ -2361,8 +2377,8 @@ impl Store {
                     candidate.subject,
                     candidate.predicate,
                     candidate.object,
-                    candidate.provenance.as_str(),
-                    candidate.confidence,
+                    provenance.as_str(),
+                    confidence,
                     source_refs,
                     event.agent_id,
                     event.agent_kind.as_str(),
@@ -2391,6 +2407,16 @@ impl Store {
     }
 
     pub fn reject_candidate_claim(&self, candidate_id: i64, reason: &str) -> Result<(), Error> {
+        self.reject_candidate_claim_inner(candidate_id, reason, None)
+    }
+
+    /// `decision` is recorded on the rejection log line (ADR-0024).
+    fn reject_candidate_claim_inner(
+        &self,
+        candidate_id: i64,
+        reason: &str,
+        decision: Option<candidate_decision::DecisionLogField<'_>>,
+    ) -> Result<(), Error> {
         let candidate = self.get_candidate_claim(candidate_id)?;
         if candidate.status == "PROMOTED" {
             return Err(Error::InvalidCandidateStatus {
@@ -2439,6 +2465,7 @@ impl Store {
                 ts: now,
                 candidate_id,
                 reason,
+                decision,
             };
             append_jsonl(&self.event_log_path, &entry)?;
             let rows_changed = self.conn.execute(
@@ -4488,11 +4515,14 @@ struct CandidateClaimLogEntry<'a> {
 /// recorded by the paired `add_claim` line appended immediately before this
 /// one in `promote_candidate_claim`.
 #[derive(Serialize)]
-struct PromoteCandidateLogEntry {
+struct PromoteCandidateLogEntry<'a> {
     kind: &'static str,
     ts: i64,
     candidate_id: i64,
     claim_id: i64,
+    /// ADR-0024: omitted for manual promotion; replay tolerates absence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decision: Option<candidate_decision::DecisionLogField<'a>>,
 }
 
 #[derive(Serialize)]
@@ -4501,6 +4531,9 @@ struct RejectCandidateLogEntry<'a> {
     ts: i64,
     candidate_id: i64,
     reason: &'a str,
+    /// ADR-0024: omitted for manual rejection; replay tolerates absence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decision: Option<candidate_decision::DecisionLogField<'a>>,
 }
 
 /// ADR-0005: consolidation supersede outcome. Ids are captured before the
@@ -4919,6 +4952,8 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("embedding: {0}")]
     Embedding(#[from] vector::EmbeddingError),
+    #[error("decision: {0}")]
+    Decision(#[from] decision::DecisionError),
     #[error("privacy filter rejected content: {0}")]
     Privacy(#[from] PrivacyRejection),
     #[error("invalid {kind} value in database: {value:?}")]
@@ -6133,6 +6168,7 @@ fn apply_promote_candidate_claim(
     let candidate_id = replay_i64(value, "candidate_id", path, lineno)?;
     let _ts = replay_i64(value, "ts", path, lineno)?;
     let claim_id = replay_i64(value, "claim_id", path, lineno)?;
+    candidate_decision::replay_decision(value, "promote", path, lineno)?;
 
     let existing: Option<(String, Option<i64>)> = conn
         .query_row(
@@ -6203,6 +6239,7 @@ fn apply_reject_candidate_claim(
     let candidate_id = replay_i64(value, "candidate_id", path, lineno)?;
     let _ts = replay_i64(value, "ts", path, lineno)?;
     let reason = replay_str(value, "reason", path, lineno)?;
+    candidate_decision::replay_decision(value, "reject", path, lineno)?;
 
     let existing: Option<(String, Option<String>)> = conn
         .query_row(
