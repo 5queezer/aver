@@ -35,7 +35,7 @@ The goal is a trustworthy substrate for coding agents that can:
 - **Adaptive HybridRAG weights** — structural graph questions lean toward graph context; broad summary questions lean toward vectors; explicit alpha overrides are range-validated.
 - **Graph expansion, path queries, and communities** — local claim neighborhoods, confidence/provenance-aware shortest path queries over active claims and hyperedges, and deterministic weighted community detection are available in core.
 - **Contradiction records and confidence decay** — contradictions are explicit audit records; consolidation can decay contradicted active claims and report merged/superseded/decayed counts.
-- **Deterministic code extraction** — `aver-extractor` uses Tree-sitter to extract functions, imports, calls, structs, enums, traits, impl methods, tests, and code facts across 13 languages (C, C++, C#, Go, Java, JavaScript, Kotlin, PHP, Python, Ruby, Rust, Swift, TypeScript).
+- **Deterministic code extraction** — `aver-extractor` uses Tree-sitter to extract functions, imports, calls, structs, enums, traits, impl methods, tests, and code facts across 13 languages (C, C++, C#, Go, Java, JavaScript, Kotlin, PHP, Python, Ruby, Rust, Swift, TypeScript). `aver extract <path>` stores them as `EXTRACTED` claims (confidence 0.90) in the project scope `proj/<repo>`: `File defines Symbol`, `Symbol calls Symbol`, `File/Module imports Module`, `TestFunction tests Function`, `Class uses Trait`. `extends` and `implements` facts are counted and skipped until the core ontology has those predicates (ADR-0027).
 - **Candidate claim workflow** — episodic events can produce staged claims that are promoted or rejected explicitly.
 - **Observation continuity surfaces** — episodic events can produce privacy-checked, source-backed observations that are recallable by ID, summarized by compaction, and coverage-accounted across full session event ranges.
 - **Continuity reliability controls** — coverage accounting, deterministic `catch-up`, gap warnings in summaries, destructive prune operations blocked when gaps remain, prune markers preserved in logs, and audit-aware observation recall.
@@ -107,6 +107,16 @@ The store directory will contain:
 ├── db.sqlite   # indexed SQLite projection
 └── log.jsonl   # append-only audit log
 ```
+
+### Extract code facts
+
+```bash
+aver --memory-dir .aver extract crates/ --dry-run   # fact counts per predicate, no writes
+aver --memory-dir .aver extract crates/             # write claims to proj/<repo>
+aver --memory-dir .aver recall Store --scope proj/aver
+```
+
+The scope defaults to `proj/<name>`, where `<name>` is the repository name from `remote.origin.url`, else the git top-level directory name, else the scanned directory name; pass `--scope` to pin it. `--lang rust` limits the scan to one language. Hidden directories, `target`, and `node_modules` are skipped. Each run prints one summary line (`files_scanned`, `facts_extracted`, `facts_ingested`, and `skipped` counts by predicate, duplicate, and privacy rejection). Re-running appends duplicate claims; `extract` does not consolidate, because consolidation currently treats every predicate as single-valued (ADR-0027).
 
 ## How It Works
 
@@ -180,6 +190,7 @@ Current CLI commands:
 | `add-triple` | Append a confidence-bearing structured triple. |
 | `contradict` | Record a contradiction for a claim id and optional replacement claim. |
 | `consolidate` | Consolidate active duplicates/conflicts and apply confidence decay. |
+| `extract` | Extract Tree-sitter code facts from a file or directory into the project scope (`--scope`, `--dry-run`, `--lang`). |
 | `vacuum` | Run `VACUUM` (and optional analysis). |
 | `replay` | Rebuild SQLite from the append-only logs (strict by default; `--lenient` quarantines invalid lines and continues). Holds the advisory `.lock` for the whole run so it cannot race a live store. |
 
@@ -371,7 +382,7 @@ Implemented today:
 - explicit contradiction records and confidence decay for contradicted active claims,
 - basic consolidation for duplicate/conflicting claims,
 - CLI `status`, `remember`, `recall`, `communities`, and observation continuity surfaces (`record-observation`, `recall-observation`, `observation-coverage`, `catch-up`, `compaction-summary`),
-- Tree-sitter extraction across 13 languages (C, C++, C#, Go, Java, JavaScript, Kotlin, PHP, Python, Ruby, Rust, Swift, TypeScript),
+- Tree-sitter extraction across 13 languages (C, C++, C#, Go, Java, JavaScript, Kotlin, PHP, Python, Ruby, Rust, Swift, TypeScript), written to memory by CLI `extract` in the project scope,
 - structured prose fact parsing,
 - MCP/OAuth server with ADR-0008 recall/expand/add-triple/contradict/consolidate tools, staged candidate-claim workflow, and observation recall/compaction-summary tools,
 - ADR-0020 browser consent flow for `/oauth/authorize` (loopback Profile A) replacing the legacy `approval_token` gate,
