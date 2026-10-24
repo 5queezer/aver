@@ -15,12 +15,12 @@ use crate::scope_resolution::ResolvedScope;
 use crate::scopes::{Scope, ToolScope};
 use crate::tools::{
     AddTripleParams, AddVectorChunkParams, AssembleCompactionSummaryParams, AverTools,
-    ConsolidateParams, ContradictParams, ExpandParams, ExtractParams as CoreExtractParams,
-    ListCandidateClaimsParams, ObservationCoverageParams, PromoteCandidateClaimParams,
-    ProposeCandidateClaimParams, RecallObservationParams, RecallParams as CoreRecallParams,
-    RecordEventParams, RecordObservationParams, RejectCandidateClaimParams,
-    RememberClaimParams as CoreRememberClaimParams, RetireClaimParams, ShouldExtractMemoriesParams,
-    TriageCandidateClaimParams,
+    CommunitiesParams, ConsolidateParams, ContradictParams, ExpandParams,
+    ExtractParams as CoreExtractParams, ListCandidateClaimsParams, ObservationCoverageParams,
+    PathParams, PromoteCandidateClaimParams, ProposeCandidateClaimParams, RecallObservationParams,
+    RecallParams as CoreRecallParams, RecordEventParams, RecordObservationParams,
+    RejectCandidateClaimParams, RememberClaimParams as CoreRememberClaimParams, RetireClaimParams,
+    ShouldExtractMemoriesParams, TriageCandidateClaimParams,
 };
 
 /// Verifies the request's granted scopes (carried via `http::request::Parts`
@@ -180,6 +180,8 @@ impl AverMcpService {
     pub const TOOLS: &[ToolScope] = &[
         Self::RECALL,
         Self::EXPAND,
+        Self::PATH,
+        Self::COMMUNITIES,
         Self::REMEMBER_CLAIM,
         Self::ADD_TRIPLE,
         Self::CONTRADICT,
@@ -261,6 +263,50 @@ impl AverMcpService {
         let tools = self.lock_tools()?;
         let result = tools.expand(params);
         json_tool_result(&tools, result, "expand")
+    }
+
+    const PATH: ToolScope = ToolScope::new("path", Scope::ClaimsRead);
+    #[tool(
+        description = "Find the shortest directed claim path between two known entities, with each hop's claim id, confidence, and provenance. Use to explain how two entities connect; returns found=false when no path fits the limits."
+    )]
+    async fn path(
+        &self,
+        Parameters(mut params): Parameters<PathParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, Self::PATH)?;
+        let resolved = request_scope(&ctx);
+        if params.scope_walk.is_none() && params.scope.is_none() {
+            params.scope_walk = Some(resolved.default_walk.as_str().to_string());
+        }
+        if params.scope.is_none() {
+            params.scope = Some(resolved.scope);
+        }
+        let tools = self.lock_tools()?;
+        let result = tools.path(params);
+        json_tool_result(&tools, result, "path")
+    }
+
+    const COMMUNITIES: ToolScope = ToolScope::new("communities", Scope::ClaimsRead);
+    #[tool(
+        description = "List clusters of densely connected entities with their cohesion score and bridge entities. Use to survey the structure of memory, not to answer a specific question."
+    )]
+    async fn communities(
+        &self,
+        Parameters(mut params): Parameters<CommunitiesParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, Self::COMMUNITIES)?;
+        let resolved = request_scope(&ctx);
+        if params.scope_walk.is_none() && params.scope.is_none() {
+            params.scope_walk = Some(resolved.default_walk.as_str().to_string());
+        }
+        if params.scope.is_none() {
+            params.scope = Some(resolved.scope);
+        }
+        let tools = self.lock_tools()?;
+        let result = tools.communities(params);
+        json_tool_result(&tools, result, "communities")
     }
 
     const CONTRADICT: ToolScope = ToolScope::new("contradict", Scope::ClaimsWrite);
@@ -611,7 +657,7 @@ fn mcp_tool_instructions() -> String {
             "reject_candidate_claim",
         ];
         let observation_tools = ["recall_observation", "observation_coverage"];
-        let specialized_tools = ["expand", "add_triple"];
+        let specialized_tools = ["expand", "path", "communities", "add_triple"];
         let maintenance_tools = [
             "contradict",
             "retire_claim",
@@ -629,6 +675,8 @@ fn mcp_tool_instructions() -> String {
                 "Proactive memory policy: record durable user-shared preferences, project facts, and long-lived working context even without a direct remember command; only record identity details when they are necessary, user-shared, and not sensitive personal data; prefer record_event over remember_claim when durability is uncertain. Avoid storing secrets, credentials, sensitive personal data, transient chat, or facts you cannot explain with provenance. ",
                 "Default workflows: recall existing memory before answering or updating; record_event -> should_extract_memories -> propose_candidate_claim/list_candidate_claims -> promote_candidate_claim or reject_candidate_claim for event-to-claim promotion; record_observation -> recall_observation or observation_coverage -> assemble_compaction_summary for continuity and compaction. ",
                 "Graph navigation tools available: {}. Progressively load graph navigation tools only after recall returns an entity or you already know an anchor: expand; use add_triple instead of remember_claim only when confidence/source control is required. ",
+                "Use path to explain how two known entities connect through claims. ",
+                "Use communities to survey clusters of connected entities and the bridges between them, not to answer a specific question. ",
                 "Keep maintenance tools hidden until there is an explicit repair need: {}. Prefer contradict for normal conflicting evidence, retire_claim only for explicit invalidation, consolidate only when you need refreshed derived state, and add_vector_chunk only for retrieval tuning. ",
                 "Code extraction: extract reads a source tree on the server (operator-configured root) and writes EXTRACTED code facts; use it for project code, not for chat or user facts. ",
                 "Tool groups: event workflow {}. Observation workflow {}. Full tool index: {}.",
@@ -681,6 +729,8 @@ mod tests {
         let fixture: BTreeMap<&str, Scope> = [
             ("recall", Scope::ClaimsRead),
             ("expand", Scope::ClaimsRead),
+            ("path", Scope::ClaimsRead),
+            ("communities", Scope::ClaimsRead),
             ("remember_claim", Scope::ClaimsWrite),
             ("add_triple", Scope::ClaimsWrite),
             ("contradict", Scope::ClaimsWrite),

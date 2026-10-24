@@ -11,7 +11,7 @@ fn mcp_instructions_are_a_progressive_discovery_card() {
     let instructions = service.get_info().instructions.unwrap();
 
     assert!(instructions.contains(
-        "Aver exposes 20 MCP tools, but most sessions should start with the default active set."
+        "Aver exposes 22 MCP tools, but most sessions should start with the default active set."
     ));
     assert!(instructions.contains(
         "Default active set: recall, remember_claim, record_event, record_observation, assemble_compaction_summary."
@@ -30,6 +30,16 @@ fn mcp_instructions_are_a_progressive_discovery_card() {
     ));
     assert!(instructions.contains(
         "Progressively load graph navigation tools only after recall returns an entity or you already know an anchor: expand; use add_triple instead of remember_claim only when confidence/source control is required."
+    ));
+    assert!(
+        instructions
+            .contains("Graph navigation tools available: expand, path, communities, add_triple.")
+    );
+    assert!(
+        instructions.contains("Use path to explain how two known entities connect through claims.")
+    );
+    assert!(instructions.contains(
+        "Use communities to survey clusters of connected entities and the bridges between them, not to answer a specific question."
     ));
     assert!(instructions.contains(
         "Progressively load observation audit tools only for handoff, compaction, or provenance checks: recall_observation, observation_coverage."
