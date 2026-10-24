@@ -12,6 +12,7 @@ const REJECT: usize = 1;
 const HOLD: usize = 2;
 const EXTRACT: usize = 0;
 const SKIP: usize = 1;
+const FLOOR: f64 = 0.5;
 
 fn delete_db(dir: &Path) {
     std::fs::remove_file(dir.join("db.sqlite")).unwrap();
@@ -48,7 +49,9 @@ fn triage_promote_sets_inferred_and_logs_decision() {
     let client = MockDecisionClient::with_indices(vec![PROMOTE]);
 
     assert_eq!(
-        store.triage_candidate_claim(candidate_id, &client).unwrap(),
+        store
+            .triage_candidate_claim(candidate_id, &client, FLOOR)
+            .unwrap(),
         CandidateTriage::Promote
     );
 
@@ -86,7 +89,9 @@ fn triage_reject_records_decision_reason() {
     let client = MockDecisionClient::with_indices(vec![REJECT]);
 
     assert_eq!(
-        store.triage_candidate_claim(candidate_id, &client).unwrap(),
+        store
+            .triage_candidate_claim(candidate_id, &client, FLOOR)
+            .unwrap(),
         CandidateTriage::Reject
     );
 
@@ -115,7 +120,9 @@ fn triage_hold_writes_nothing() {
     let client = MockDecisionClient::with_indices(vec![HOLD]);
 
     assert_eq!(
-        store.triage_candidate_claim(candidate_id, &client).unwrap(),
+        store
+            .triage_candidate_claim(candidate_id, &client, FLOOR)
+            .unwrap(),
         CandidateTriage::Hold
     );
 
@@ -137,7 +144,7 @@ fn triage_unavailable_client_leaves_state_unchanged() {
     let client = MockDecisionClient::new(vec![Err(DecisionError::Unavailable)]);
 
     let err = store
-        .triage_candidate_claim(candidate_id, &client)
+        .triage_candidate_claim(candidate_id, &client, FLOOR)
         .unwrap_err();
     assert!(matches!(err, Error::Decision(DecisionError::Unavailable)));
 
@@ -158,7 +165,7 @@ fn triage_refuses_non_pending_candidate_without_asking() {
     let client = MockDecisionClient::with_indices(vec![REJECT]);
 
     assert!(matches!(
-        store.triage_candidate_claim(candidate_id, &client),
+        store.triage_candidate_claim(candidate_id, &client, FLOOR),
         Err(Error::InvalidCandidateStatus { .. })
     ));
     assert!(client.received().is_empty());
@@ -175,8 +182,12 @@ fn replay_with_decision_field_reproduces_claim_without_client() {
             .propose_candidate_claim(event_id, "noise", "depends_on", "chatter")
             .unwrap();
         let client = MockDecisionClient::with_indices(vec![PROMOTE, REJECT]);
-        store.triage_candidate_claim(promoted_id, &client).unwrap();
-        store.triage_candidate_claim(rejected_id, &client).unwrap();
+        store
+            .triage_candidate_claim(promoted_id, &client, FLOOR)
+            .unwrap();
+        store
+            .triage_candidate_claim(rejected_id, &client, FLOOR)
+            .unwrap();
         let claim_id = store
             .get_candidate_claim(promoted_id)
             .unwrap()
@@ -217,7 +228,9 @@ fn replay_tolerates_lines_without_decision_field() {
         let store = Store::open(dir.path()).unwrap();
         let candidate_id = staged(&store);
         let client = MockDecisionClient::with_indices(vec![PROMOTE]);
-        store.triage_candidate_claim(candidate_id, &client).unwrap();
+        store
+            .triage_candidate_claim(candidate_id, &client, FLOOR)
+            .unwrap();
         store.close().unwrap();
         candidate_id
     };
@@ -251,7 +264,9 @@ fn replay_rejects_decision_field_contradicting_line_kind() {
         let store = Store::open(dir.path()).unwrap();
         let candidate_id = staged(&store);
         let client = MockDecisionClient::with_indices(vec![PROMOTE]);
-        store.triage_candidate_claim(candidate_id, &client).unwrap();
+        store
+            .triage_candidate_claim(candidate_id, &client, FLOOR)
+            .unwrap();
         store.close().unwrap();
     }
     let events_path = dir.path().join("events.jsonl");
@@ -284,7 +299,7 @@ fn trigger_extract_adds_decision_model_reason() {
     let client = MockDecisionClient::with_indices(vec![EXTRACT]);
 
     let decision = store
-        .extraction_decision_with_client("s1", 100, None, &client)
+        .extraction_decision_with_client("s1", 100, None, &client, FLOOR)
         .unwrap();
     assert!(decision.should_extract);
     assert!(
@@ -315,7 +330,7 @@ fn trigger_skip_or_error_returns_deterministic_decision() {
     let skip = MockDecisionClient::with_indices(vec![SKIP]);
     assert_eq!(
         store
-            .extraction_decision_with_client("s1", 100, None, &skip)
+            .extraction_decision_with_client("s1", 100, None, &skip, FLOOR)
             .unwrap(),
         deterministic
     );
@@ -324,7 +339,7 @@ fn trigger_skip_or_error_returns_deterministic_decision() {
     let unavailable = MockDecisionClient::new(vec![Err(DecisionError::Unavailable)]);
     assert_eq!(
         store
-            .extraction_decision_with_client("s1", 100, None, &unavailable)
+            .extraction_decision_with_client("s1", 100, None, &unavailable, FLOOR)
             .unwrap(),
         deterministic
     );
@@ -338,7 +353,7 @@ fn trigger_skips_model_when_deterministic_reason_fired() {
     let client = MockDecisionClient::with_indices(vec![EXTRACT]);
 
     let decision = store
-        .extraction_decision_with_client("s1", 2, None, &client)
+        .extraction_decision_with_client("s1", 2, None, &client, FLOOR)
         .unwrap();
     assert!(
         decision
@@ -364,9 +379,117 @@ fn trigger_state_is_bounded() {
     let client = MockDecisionClient::with_indices(vec![SKIP]);
 
     store
-        .extraction_decision_with_client("s1", 1_000, None, &client)
+        .extraction_decision_with_client("s1", 1_000, None, &client, FLOOR)
         .unwrap();
     let state = &client.received()[0].state;
     assert!(state.starts_with("undigested_events: 40\n"));
     assert!(state.len() <= 4096, "state was {} bytes", state.len());
+}
+
+#[test]
+fn triage_sends_criteria_descriptions() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let candidate_id = staged(&store);
+    let client = MockDecisionClient::with_indices(vec![HOLD]);
+    store
+        .triage_candidate_claim(candidate_id, &client, FLOOR)
+        .unwrap();
+    assert_eq!(
+        client.received()[0].descriptions.as_deref(),
+        Some(
+            &[
+                "the claim is a specific, durable fact or preference that the source text clearly supports".to_string(),
+                "the claim is wrong, trivial, conversational filler, or not supported by the source text".to_string(),
+                "the claim may be useful but the source text is too ambiguous to decide".to_string(),
+            ][..]
+        )
+    );
+}
+
+#[test]
+fn triage_below_floor_holds_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let candidate_id = staged(&store);
+    let events_before = read_log(dir.path(), "events.jsonl");
+    let claims_before = read_log(dir.path(), "log.jsonl");
+    let client =
+        MockDecisionClient::with_choices(vec![(PROMOTE, Some(0.32)), (REJECT, Some(0.49))]);
+
+    for _ in 0..2 {
+        assert_eq!(
+            store
+                .triage_candidate_claim(candidate_id, &client, FLOOR)
+                .unwrap(),
+            CandidateTriage::Hold
+        );
+    }
+    assert_eq!(
+        store.get_candidate_claim(candidate_id).unwrap().status,
+        "PENDING"
+    );
+    assert_eq!(read_log(dir.path(), "events.jsonl"), events_before);
+    assert_eq!(read_log(dir.path(), "log.jsonl"), claims_before);
+}
+
+#[test]
+fn triage_at_or_above_floor_acts() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let promoted = staged(&store);
+    let rejected = staged(&store);
+    let client = MockDecisionClient::with_choices(vec![(PROMOTE, Some(0.78)), (REJECT, Some(0.5))]);
+
+    assert_eq!(
+        store
+            .triage_candidate_claim(promoted, &client, FLOOR)
+            .unwrap(),
+        CandidateTriage::Promote
+    );
+    assert_eq!(
+        store
+            .triage_candidate_claim(rejected, &client, FLOOR)
+            .unwrap(),
+        CandidateTriage::Reject
+    );
+    assert_eq!(
+        store.get_candidate_claim(promoted).unwrap().status,
+        "PROMOTED"
+    );
+    assert_eq!(
+        store.get_candidate_claim(rejected).unwrap().status,
+        "REJECTED"
+    );
+}
+
+#[test]
+fn trigger_applies_floor_and_sends_descriptions() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    undigested_session(&store);
+    let deterministic = store.extraction_decision("s1", 100, None).unwrap();
+
+    let unsure = MockDecisionClient::with_choices(vec![(EXTRACT, Some(0.4))]);
+    assert_eq!(
+        store
+            .extraction_decision_with_client("s1", 100, None, &unsure, FLOOR)
+            .unwrap(),
+        deterministic
+    );
+    let descriptions = unsure.received()[0].descriptions.clone().unwrap();
+    assert_eq!(descriptions.len(), 2);
+    assert!(descriptions[0].contains("durable facts"));
+    assert!(descriptions[1].contains("chatter"));
+
+    let sure = MockDecisionClient::with_choices(vec![(EXTRACT, Some(0.9))]);
+    let decision = store
+        .extraction_decision_with_client("s1", 100, None, &sure, FLOOR)
+        .unwrap();
+    assert!(decision.should_extract);
+    assert!(
+        decision
+            .reasons
+            .contains(&ExtractionTriggerReason::DecisionModel)
+    );
 }

@@ -8,10 +8,22 @@ use serde::Serialize;
 use crate::decision::{Decision, DecisionClient, DecisionError};
 use crate::{Error, ExtractionDecision, ExtractionTriggerReason, Provenance, Store};
 
-const TRIAGE_QUESTION: &str = "What should happen to this staged claim?";
+const TRIAGE_QUESTION: &str =
+    "What should happen to this staged claim? Judge it only against its source text.";
 const TRIAGE_OPTIONS: [&str; 3] = ["promote", "reject", "hold"];
-const TRIGGER_QUESTION: &str = "Should this event batch run extraction now?";
+/// Criteria descriptions verified live against `tev1:4b` on 2026-10-24.
+const TRIAGE_DESCRIPTIONS: [&str; 3] = [
+    "the claim is a specific, durable fact or preference that the source text clearly supports",
+    "the claim is wrong, trivial, conversational filler, or not supported by the source text",
+    "the claim may be useful but the source text is too ambiguous to decide",
+];
+const TRIGGER_QUESTION: &str =
+    "Should these undigested events be run through memory extraction now?";
 const TRIGGER_OPTIONS: [&str; 2] = ["extract", "skip"];
+const TRIGGER_DESCRIPTIONS: [&str; 2] = [
+    "the events state durable facts, decisions, preferences, or dependencies worth remembering",
+    "the events are greetings, chatter, routine tool output, or too little to extract from yet",
+];
 
 /// ADR-0003 policy row "single-source LLM inference".
 const DECISION_PROVENANCE: Provenance = Provenance::Inferred;
@@ -82,10 +94,16 @@ impl Store {
     /// `INFERRED` / confidence `0.45`; rejection records reason
     /// `decision:<model>`; both log the choice. `Hold` and any client error
     /// write nothing.
+    ///
+    /// A `promote` or `reject` choice whose confidence is below
+    /// `min_confidence` (see [`crate::decision::Choice::meets`]) is
+    /// downgraded to `Hold`. Callers normally pass
+    /// [`crate::decision::DecisionConfig::min_confidence`].
     pub fn triage_candidate_claim(
         &self,
         candidate_id: i64,
         client: &dyn DecisionClient,
+        min_confidence: f64,
     ) -> Result<CandidateTriage, Error> {
         let candidate = self.get_candidate_claim(candidate_id)?;
         if candidate.status != "PENDING" {
@@ -110,11 +128,10 @@ impl Store {
             }],
         })
         .to_string();
-        let choice = client.decide(&Decision {
-            state: &state,
-            question: TRIAGE_QUESTION,
-            options: &TRIAGE_OPTIONS,
-        })?;
+        let choice = client.decide(
+            &Decision::new(&state, TRIAGE_QUESTION, &TRIAGE_OPTIONS)
+                .with_descriptions(&TRIAGE_DESCRIPTIONS),
+        )?;
         let triage = match choice.index {
             0 => CandidateTriage::Promote,
             1 => CandidateTriage::Reject,
@@ -125,6 +142,11 @@ impl Store {
                 }
                 .into());
             }
+        };
+        let triage = if choice.meets(min_confidence) {
+            triage
+        } else {
+            CandidateTriage::Hold
         };
         let decision = DecisionLogField {
             model: &choice.model,
@@ -152,14 +174,16 @@ impl Store {
     /// coverage-gap signal (which alone does not justify extraction, see
     /// [`Store::should_extract_memories`]) but the session has undigested
     /// events, asks `client` whether to extract now. `extract` adds
-    /// [`ExtractionTriggerReason::DecisionModel`]; `skip` or any client
-    /// error returns the deterministic decision. Nothing is logged.
+    /// [`ExtractionTriggerReason::DecisionModel`]; `skip`, an `extract`
+    /// below `min_confidence` (see [`crate::decision::Choice::meets`]) or any
+    /// client error returns the deterministic decision. Nothing is logged.
     pub fn extraction_decision_with_client(
         &self,
         session_id: &str,
         event_threshold: usize,
         observation_token_threshold: Option<usize>,
         client: &dyn DecisionClient,
+        min_confidence: f64,
     ) -> Result<ExtractionDecision, Error> {
         let mut decision =
             self.extraction_decision(session_id, event_threshold, observation_token_threshold)?;
@@ -190,12 +214,11 @@ impl Store {
         }
 
         let extract = client
-            .decide(&Decision {
-                state: &state,
-                question: TRIGGER_QUESTION,
-                options: &TRIGGER_OPTIONS,
-            })
-            .is_ok_and(|choice| choice.index == 0);
+            .decide(
+                &Decision::new(&state, TRIGGER_QUESTION, &TRIGGER_OPTIONS)
+                    .with_descriptions(&TRIGGER_DESCRIPTIONS),
+            )
+            .is_ok_and(|choice| choice.index == 0 && choice.meets(min_confidence));
         if extract {
             decision
                 .reasons

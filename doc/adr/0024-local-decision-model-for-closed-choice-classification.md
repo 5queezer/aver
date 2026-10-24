@@ -51,6 +51,7 @@ pub struct Decision<'a> {
     pub state: &'a str,          // context the model reads
     pub question: &'a str,       // what is being decided
     pub options: &'a [&'a str],  // 2..=24 candidate answers, caller-enumerated
+    pub descriptions: Option<&'a [&'a str]>, // one per option, sent as `criteria`
 }
 
 pub struct Choice {
@@ -77,6 +78,18 @@ pub trait DecisionClient {
 - Any model response that does not map to an option index is a
   `DecisionError::InvalidChoice`; callers fall back to the existing
   deterministic behaviour.
+
+### Prompt discipline
+
+Every seam sends a description per option (the systemone `criteria` value)
+while the short option key stays what `Choice.index` refers to. Live calls
+against `tev1:4b` on 2026-10-24 showed bare keys flip answers (predicate
+`needs`: `none` 0.70 with keys, `depends_on` 0.99 with descriptions). A
+model choice may influence a write only when its confidence is at least the
+floor `AVER_DECISION_MIN_CONFIDENCE` (default 0.5, range 0.0..=1.0); below
+it the seam takes its deterministic fallback (triage holds, predicates use
+fuzzy suggestions, scope keeps the caller default, the trigger keeps the
+deterministic decision). A client that reports no confidence meets the floor.
 
 ### Provenance and replay
 
