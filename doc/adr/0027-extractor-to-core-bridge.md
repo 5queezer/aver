@@ -69,6 +69,15 @@ What core accepts today:
    This is the readable literal ADR-0025 recommends, not the ADR-0022 hash.
    `--scope` overrides it.
 
+7. **MCP tool.** `extract` (scope `claims:write`) runs the same walk and
+   per-fact write as the CLI, with `agent_id` taken from the authenticated
+   client and no consolidate call. It reads only under `AVER_EXTRACT_ROOT`
+   (unset means the tool is disabled; the path is canonicalized and must lie
+   inside the root) and refuses trees of more than `AVER_EXTRACT_MAX_FILES`
+   (default 2000) files before writing anything. The file count is checked
+   after the walk, so the cap bounds the writes under the tools mutex, not
+   the parse.
+
 ## Consequences
 
 - (+) Extracted code facts reach memory in the project scope and are returned
