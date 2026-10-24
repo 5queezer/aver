@@ -27,6 +27,9 @@ struct Args {
     limit_questions: Option<usize>,
     #[arg(long)]
     data_dir: Option<PathBuf>,
+    /// Rubric judge: `generative` (default) or `decision` (ADR-0024, ollama only)
+    #[arg(long, default_value = "generative")]
+    judge: aver_eval::beam::BeamJudgeMode,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -45,6 +48,8 @@ fn main() -> anyhow::Result<()> {
         limit_conversations: args.limit_conversations,
         limit_questions: args.limit_questions,
         data_dir: args.data_dir,
+        judge_mode: args.judge,
+        decision_model: aver_core::decision::DecisionConfig::from_env().model,
     })?;
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
