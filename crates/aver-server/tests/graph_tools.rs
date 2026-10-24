@@ -138,10 +138,19 @@ fn communities_filters_members_by_scope() {
         communities(&tools, Some("proj/a"), Some("exact"), None, None),
         vec![names(&["A", "B", "C"])]
     );
-    assert_eq!(
-        communities(&tools, Some("proj/b"), Some("exact"), None, None),
-        vec![names(&["X", "Y"]), names(&["C", "D"])]
-    );
+    // Core groups and scores over the scoped claims only: C-D is no longer
+    // diluted by proj/a's 0.6 edge, so it ties X-Y at 0.95 and ranks by id.
+    let view = tools
+        .communities(CommunitiesParams {
+            scope: Some("proj/b".to_string()),
+            scope_walk: Some("exact".to_string()),
+            min_members: None,
+            top_k: None,
+        })
+        .unwrap();
+    let groups: Vec<Vec<String>> = view.communities.iter().map(|c| c.members.clone()).collect();
+    assert_eq!(groups, vec![names(&["C", "D"]), names(&["X", "Y"])]);
+    assert_eq!(view.communities[0].score, view.communities[1].score);
     // Ancestors of proj/a include global, but P and Q stay singletons.
     assert_eq!(
         communities(&tools, Some("proj/a"), None, Some(1), None).len(),
@@ -171,7 +180,8 @@ fn path_finds_two_hop_path_with_claim_provenance() {
     assert_eq!(view.path[0].provenance, "USER_ASSERTED");
     assert_eq!(view.path[1].confidence, 0.6);
     assert_eq!(view.path[0].scope, "proj/a");
-    assert!(view.path[0].claim_id > 0 && view.path[0].claim_id != view.path[1].claim_id);
+    assert!(view.path[0].claim_id.is_some_and(|id| id > 0));
+    assert!(view.path[1].claim_id.is_some() && view.path[0].claim_id != view.path[1].claim_id);
     assert!((view.confidence - 0.95 * 0.6).abs() < 1e-9);
 
     // Directed: no path back from C to A.
@@ -236,4 +246,25 @@ fn path_does_not_cross_scopes_under_exact_walk() {
     params.scope = Some("proj/a".to_string());
     params.scope_walk = Some("exact".to_string());
     assert!(tools.path(params).unwrap().found);
+}
+
+#[test]
+fn path_step_carries_core_claim_id_from_add_triple() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+    let written = tools
+        .add_triple(AddTripleParams {
+            subject: "M".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "N".to_string(),
+            confidence: Some(0.9),
+            source: "graph-tools-test".to_string(),
+            scope: None,
+        })
+        .unwrap();
+
+    let view = tools.path(path_params("M", "N")).unwrap();
+    assert!(view.found);
+    assert_eq!(view.path.len(), 1);
+    assert_eq!(view.path[0].claim_id, Some(written.triple_id));
 }
