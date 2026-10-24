@@ -439,6 +439,42 @@ async fn read_and_write_scopes_allow_both_tools() {
 }
 
 #[tokio::test]
+async fn graph_tools_require_claims_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let _ = AuthDb::open(&auth_db_path).unwrap();
+    let client_id = register_client(&auth_db_path);
+    let config = base_config(&dir, &auth_db_path);
+    let app = build_router(config).unwrap();
+
+    let (write_only, _) = approve_and_mint_tokens(&app, &client_id, Some("claims:write")).await;
+    let (read_only, _) = approve_and_mint_tokens(&app, &client_id, Some("claims:read")).await;
+
+    for (tool, args) in [
+        ("communities", serde_json::json!({})),
+        ("path", serde_json::json!({"from": "alice", "to": "bob"})),
+    ] {
+        let resp = call_mcp_tool(&app, &write_only, tool, args.clone()).await;
+        let err = resp
+            .get("error")
+            .unwrap_or_else(|| panic!("{tool} without claims:read should be refused: {resp}"));
+        assert!(
+            err["message"]
+                .as_str()
+                .unwrap()
+                .contains("insufficient_scope"),
+            "expected insufficient_scope error for {tool}, got: {err}",
+        );
+
+        let resp = call_mcp_tool(&app, &read_only, tool, args).await;
+        assert!(
+            resp.get("result").is_some() && resp.get("error").is_none(),
+            "{tool} should succeed under claims:read but got: {resp}",
+        );
+    }
+}
+
+#[tokio::test]
 async fn mcp_writes_stamp_agent_id_from_authenticated_client() {
     let dir = tempfile::tempdir().unwrap();
     let auth_db_path = dir.path().join("auth.db");

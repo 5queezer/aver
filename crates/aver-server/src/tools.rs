@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 use aver_core::candidate_decision::CandidateTriage;
@@ -137,6 +137,45 @@ pub struct ExpandParams {
     /// Predicate allowlist for traversal.
     #[serde(default)]
     pub predicates: Option<Vec<String>>,
+    /// ADR-0021 scope filter.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// ADR-0021 walk mode.
+    #[serde(default)]
+    pub scope_walk: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct CommunitiesParams {
+    /// ADR-0021 scope filter applied to community members.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// ADR-0021 walk mode.
+    #[serde(default)]
+    pub scope_walk: Option<String>,
+    /// Drop communities with fewer in-scope members. Defaults to 2.
+    #[serde(default)]
+    pub min_members: Option<usize>,
+    /// Maximum communities to return, highest score first. Defaults to 20, at most 100.
+    #[serde(default)]
+    pub top_k: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct PathParams {
+    /// Entity the path starts from.
+    pub from: String,
+    /// Entity the path ends at.
+    pub to: String,
+    /// Hop limit. Defaults to 4, at most 8.
+    #[serde(default)]
+    pub max_hops: Option<usize>,
+    /// Predicate allowlist for traversal (same semantics as `expand`).
+    #[serde(default)]
+    pub predicates: Option<Vec<String>>,
+    /// Inclusive lower bound on each edge's confidence (0..=1).
+    #[serde(default)]
+    pub min_confidence: Option<f64>,
     /// ADR-0021 scope filter.
     #[serde(default)]
     pub scope: Option<String>,
@@ -443,6 +482,44 @@ pub struct RecallView {
 pub struct GraphView {
     pub nodes: Vec<String>,
     pub edges: Vec<ClaimView>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct CommunityView {
+    pub id: String,
+    pub score: f64,
+    pub members: Vec<String>,
+    pub bridges: Vec<String>,
+    pub size: usize,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct CommunitiesView {
+    pub communities: Vec<CommunityView>,
+    pub scope: String,
+    pub scope_walk: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct PathStepView {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub claim_id: i64,
+    pub confidence: f64,
+    pub provenance: String,
+    pub scope: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct PathView {
+    pub found: bool,
+    pub hops: usize,
+    /// Product of the step confidences; 0 when no path was found.
+    pub confidence: f64,
+    pub path: Vec<PathStepView>,
+    pub scope: String,
+    pub scope_walk: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -1038,6 +1115,151 @@ impl AverTools {
         Ok(GraphView {
             nodes: graph.nodes,
             edges: graph.edges.into_iter().map(ClaimView::from).collect(),
+        })
+    }
+
+    /// Communities from core's `detect_communities`, which runs over the
+    /// whole graph. Under a scope walk other than `any`, members (and
+    /// bridges) are kept only when they touch an ACTIVE claim in scope; the
+    /// grouping and score stay core's whole-graph values.
+    pub fn communities(&self, params: CommunitiesParams) -> anyhow::Result<CommunitiesView> {
+        let top_k = validate_top_k(params.top_k.unwrap_or(20))?;
+        let min_members = params.min_members.unwrap_or(2);
+        let scope = params.scope.as_deref().unwrap_or("global");
+        let walk = parse_scope_walk(params.scope_walk.as_deref(), &params.scope)?;
+        let mut in_scope: HashMap<String, bool> = HashMap::new();
+        let mut communities = Vec::new();
+        for community in self.store.detect_communities()? {
+            let (mut members, mut bridges) = (community.members, community.bridge_nodes);
+            if walk != ScopeWalk::Any {
+                for entity in &members {
+                    if !in_scope.contains_key(entity) {
+                        let touches = !self
+                            .store
+                            .expand_with_scope(entity, 1, None, scope, walk)?
+                            .edges
+                            .is_empty();
+                        in_scope.insert(entity.clone(), touches);
+                    }
+                }
+                members.retain(|entity| in_scope[entity]);
+                bridges.retain(|entity| in_scope[entity]);
+            }
+            if members.is_empty() || members.len() < min_members {
+                continue;
+            }
+            communities.push(CommunityView {
+                id: community.id,
+                score: community.score,
+                size: members.len(),
+                members,
+                bridges,
+            });
+        }
+        communities.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.id.cmp(&b.id)));
+        communities.truncate(top_k);
+        Ok(CommunitiesView {
+            communities,
+            scope: scope.to_string(),
+            scope_walk: walk.as_str().to_string(),
+        })
+    }
+
+    /// Shortest directed claim path from `from` to `to`. Core's `graph_path`
+    /// takes no scope, so the server searches the scoped subgraph from
+    /// `expand_with_scope` instead, ranking like `graph_path`: fewest hops,
+    /// then highest confidence product, then lexicographic entity path.
+    /// Hyperedges are not traversed.
+    pub fn path(&self, params: PathParams) -> anyhow::Result<PathView> {
+        let max_hops = validate_hops(params.max_hops.unwrap_or(4))?;
+        let min_confidence = params.min_confidence.unwrap_or(0.0);
+        if !(0.0..=1.0).contains(&min_confidence) {
+            return Err(Error::InvalidConfidence {
+                value: min_confidence,
+            }
+            .into());
+        }
+        if params.to.trim().is_empty() {
+            return Err(Error::InvalidGraphEntity.into());
+        }
+        let predicate_refs = params
+            .predicates
+            .as_ref()
+            .map(|items| items.iter().map(String::as_str).collect::<Vec<_>>());
+        let scope = params.scope.as_deref().unwrap_or("global");
+        let walk = parse_scope_walk(params.scope_walk.as_deref(), &params.scope)?;
+        let graph = self.store.expand_with_scope(
+            &params.from,
+            max_hops,
+            predicate_refs.as_deref(),
+            scope,
+            walk,
+        )?;
+        let edges: Vec<&Claim> = graph
+            .edges
+            .iter()
+            .filter(|claim| claim.confidence >= min_confidence)
+            .collect();
+
+        let mut best: Option<(Vec<String>, Vec<&Claim>, f64)> = None;
+        if params.from == params.to {
+            best = Some((vec![params.from.clone()], Vec::new(), 1.0));
+        }
+        let mut queue = VecDeque::from([(vec![params.from.clone()], Vec::<&Claim>::new(), 1.0)]);
+        while let Some((entities, steps, confidence)) = queue.pop_front() {
+            if steps.len() == max_hops
+                || best
+                    .as_ref()
+                    .is_some_and(|(_, best_steps, _)| steps.len() >= best_steps.len())
+            {
+                continue;
+            }
+            let current = entities.last().expect("path starts with `from`");
+            for &edge in edges.iter().filter(|edge| &edge.subject == current) {
+                if entities.contains(&edge.object) {
+                    continue;
+                }
+                let mut next_entities = entities.clone();
+                next_entities.push(edge.object.clone());
+                let mut next_steps = steps.clone();
+                next_steps.push(edge);
+                let next_confidence = confidence * edge.confidence;
+                if edge.object == params.to {
+                    let replace = best.as_ref().is_none_or(|(best_entities, _, best_conf)| {
+                        next_confidence.total_cmp(best_conf).is_gt()
+                            || (next_confidence == *best_conf && next_entities < *best_entities)
+                    });
+                    if replace {
+                        best = Some((next_entities, next_steps, next_confidence));
+                    }
+                } else {
+                    queue.push_back((next_entities, next_steps, next_confidence));
+                }
+            }
+        }
+
+        let (found, confidence, steps) = match best {
+            Some((_, steps, confidence)) => (true, confidence, steps),
+            None => (false, 0.0, Vec::new()),
+        };
+        Ok(PathView {
+            found,
+            hops: steps.len(),
+            confidence,
+            path: steps
+                .into_iter()
+                .map(|claim| PathStepView {
+                    subject: claim.subject.clone(),
+                    predicate: claim.predicate.clone(),
+                    object: claim.object.clone(),
+                    claim_id: claim.id,
+                    confidence: claim.confidence,
+                    provenance: claim.provenance.as_str().to_string(),
+                    scope: claim.scope.clone(),
+                })
+                .collect(),
+            scope: scope.to_string(),
+            scope_walk: walk.as_str().to_string(),
         })
     }
 
