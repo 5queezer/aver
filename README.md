@@ -69,6 +69,23 @@ just deploy-server     # after every change: release build, install, restart, pr
 just health            # probe GET /healthz on the running server
 ```
 
+### Install from a release
+
+Tagged releases (`v*`) attach `aver-<os>-<arch>.tar.gz`, `aver-server-<os>-<arch>.tar.gz` (`linux`/`darwin`, `x86_64`/`aarch64`), `aver-mcp.service` and `SHA256SUMS`.
+
+```bash
+V=v0.1.0; R=https://github.com/5queezer/aver/releases/download/$V   # set 5queezer/aver
+curl -fLO $R/aver-server-linux-x86_64.tar.gz -O $R/aver-mcp.service -O $R/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+tar -xzf aver-server-linux-x86_64.tar.gz
+install -Dm755 aver-server ~/.local/bin/aver-server
+install -Dm644 aver-mcp.service ~/.config/systemd/user/aver-mcp.service
+systemctl --user daemon-reload && systemctl --user enable --now aver-mcp
+curl -fsS http://127.0.0.1:3317/healthz
+```
+
+Or let the installer verify checksums for you: `./install.sh --repo 5queezer/aver --version $V --server` installs `aver` to `~/.cargo/bin` and `aver-server` to `~/.local/bin` (`--server-dir` to change).
+
 ### Store and recall a claim
 
 ```bash

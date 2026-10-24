@@ -4,24 +4,27 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build release assets
+    name: Build ${{ matrix.suffix }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            asset: aver-linux-x86_64.tar.gz
+            suffix: linux-x86_64
+          - os: ubuntu-24.04-arm
+            suffix: linux-aarch64
           - os: macos-13
-            asset: aver-darwin-x86_64.tar.gz
+            suffix: darwin-x86_64
           - os: macos-14
-            asset: aver-darwin-aarch64.tar.gz
+            suffix: darwin-aarch64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,45 +37,58 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build CLI
-        run: cargo build --release --locked -p aver-cli
+      - name: Build CLI and server
+        run: cargo build --release --locked -p aver-cli -p aver-server
 
       - name: Package
         shell: bash
         run: |
           mkdir -p dist
-          cp target/release/aver dist/aver
-          tar -C dist -czf "${{ matrix.asset }}" aver
-          shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          for bin in aver aver-server; do
+            strip "target/release/$bin"
+            tar -C target/release -czf "dist/$bin-${{ matrix.suffix }}.tar.gz" "$bin"
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset }}
-          path: |
-            ${{ matrix.asset }}
-            ${{ matrix.asset }}.sha256
+          name: aver-${{ matrix.suffix }}
+          path: dist/*.tar.gz
 
   publish:
     name: Publish GitHub release
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      - name: Assemble checksums
+      - name: Assemble systemd unit and checksums
         run: |
+          cp contrib/systemd/aver-mcp.service dist/aver-mcp.service
           cd dist
-          cat *.sha256 > SHA256SUMS
+          sha256sum -- *.tar.gz aver-mcp.service > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Create release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
             dist/*.tar.gz
+            dist/aver-mcp.service
             dist/SHA256SUMS
+
+      - name: Keep assets for manual runs
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist
