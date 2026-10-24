@@ -1,6 +1,7 @@
 //! Aver core: storage, episodic log, claim CRUD.
 //! See doc/adr/ for architecture decisions.
 
+pub mod decision;
 pub mod extractor;
 mod privacy;
 mod recall;
