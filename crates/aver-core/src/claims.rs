@@ -288,7 +288,6 @@ impl Store {
                 scope: write.scope.to_string(),
             };
             append_jsonl(&self.log_path, &record)?;
-            append_jsonl(&self.agent_log_path(write.agent_id)?, &record)?;
             apply(&self.conn, &record)?;
             Ok(claim_id)
         })();

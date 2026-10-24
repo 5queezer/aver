@@ -298,18 +298,12 @@ fn promote_rejects_unknown_predicate_before_logging() {
         store.close().unwrap();
     }
 
-    // No poisoned add_claim line may reference the rejected predicate, in
-    // any log file. (A failed first promote leaves no claims behind, so
-    // log.jsonl itself may not exist yet.)
-    let mut claim_lines = Vec::new();
-    for path in [
-        dir.path().join("log.jsonl"),
-        dir.path().join("agents/agent-llm/log.jsonl"),
-    ] {
-        if let Ok(contents) = std::fs::read_to_string(&path) {
-            claim_lines.extend(contents.lines().map(str::to_owned).collect::<Vec<_>>());
-        }
-    }
+    // No poisoned add_claim line may reference the rejected predicate. (A
+    // failed first promote leaves no claims behind, so log.jsonl itself may
+    // not exist yet.)
+    let claim_lines: Vec<String> = std::fs::read_to_string(dir.path().join("log.jsonl"))
+        .map(|contents| contents.lines().map(str::to_owned).collect())
+        .unwrap_or_default();
     for line in &claim_lines {
         let value: serde_json::Value = serde_json::from_str(line).unwrap();
         if value["kind"] == "add_claim" {

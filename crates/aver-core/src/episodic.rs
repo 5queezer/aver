@@ -1,7 +1,6 @@
 //! Episodic events, observations, coverage, compaction, extraction triggers.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
 
 use rusqlite::{OptionalExtension, params, types::Type};
 
@@ -38,17 +37,6 @@ impl Observer for MockObserver {
 }
 
 impl Store {
-    pub(crate) fn agent_log_path(&self, agent_id: &str) -> Result<PathBuf, Error> {
-        validate_agent_id(agent_id)?;
-        Ok(self
-            .log_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("agents")
-            .join(agent_id)
-            .join("log.jsonl"))
-    }
-
     pub fn record_event(
         &self,
         session_id: &str,

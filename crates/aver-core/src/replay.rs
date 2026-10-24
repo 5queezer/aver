@@ -50,10 +50,11 @@ pub enum ReplayMode {
 
 /// Replay logs in the deterministic order specified by ADR-0019 §4:
 /// rotated `log.{N}.jsonl.gz` (numeric ascending) → `log.jsonl` →
-/// `events.jsonl` → `observations.jsonl` → `agents/<id>/log.jsonl`
-/// (lexicographic by agent id). Per-agent log records duplicate the global
-/// log; replay treats matching content as idempotent and only errors on
-/// genuine id-with-different-content collisions.
+/// `events.jsonl` → `observations.jsonl`. The per-agent mirror
+/// (`agents/<id>/log.jsonl`) is gone (ADR-0025); existing `agents/`
+/// directories are ignored. Replay treats a record whose id already exists
+/// with identical content as idempotent and only errors on genuine
+/// id-with-different-content collisions.
 ///
 /// Replay BYPASSES the privacy filter — the log is presumed already filtered
 /// at write time (ADR-0019 §4).
@@ -207,20 +208,6 @@ fn collect_replay_inputs(memory_dir: &Path) -> Result<Vec<PathBuf>, Error> {
         let active = memory_dir.join(format!("{series}.jsonl"));
         if active.exists() {
             inputs.push(active);
-        }
-    }
-    let agents_dir = memory_dir.join("agents");
-    if agents_dir.exists() {
-        let mut agent_dirs: Vec<PathBuf> = std::fs::read_dir(&agents_dir)?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_dir())
-            .collect();
-        agent_dirs.sort();
-        for agent_dir in agent_dirs {
-            let log = agent_dir.join("log.jsonl");
-            if log.exists() {
-                inputs.push(log);
-            }
         }
     }
     Ok(inputs)

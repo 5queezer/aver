@@ -186,7 +186,6 @@ impl Store {
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
             let claim_id = self.ids.mint();
-            let agent_id = event.agent_id.clone();
             let claim = LogRecord::AddClaim {
                 ts: now,
                 claim_id,
@@ -201,7 +200,6 @@ impl Store {
                 scope: candidate.scope,
             };
             append_jsonl(&self.log_path, &claim)?;
-            append_jsonl(&self.agent_log_path(&agent_id)?, &claim)?;
             // The promotion marker joins the candidate in the episodic log
             // (FK dependency on candidate_claims, which replays in the
             // events phase; the paired add_claim line replays earlier).
