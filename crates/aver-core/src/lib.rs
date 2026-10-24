@@ -3,6 +3,7 @@
 
 pub mod decision;
 pub mod extractor;
+pub mod predicate_decision;
 mod privacy;
 mod recall;
 pub mod retrieval;
@@ -260,9 +261,9 @@ struct PredicateCandidate {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-struct PredicateSuggestion {
-    accepted: String,
-    canonical: Option<String>,
+pub struct PredicateSuggestion {
+    pub accepted: String,
+    pub canonical: Option<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
