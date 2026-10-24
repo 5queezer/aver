@@ -91,6 +91,11 @@ it the seam takes its deterministic fallback (triage holds, predicates use
 fuzzy suggestions, scope keeps the caller default, the trigger keeps the
 deterministic decision). A client that reports no confidence meets the floor.
 
+- Options are sent in caller order, and order changes the model's confidence
+  (`promote, reject, hold` 0.399 vs `hold, promote, reject` 0.551 on `tev1:4b`),
+  so callers list options deliberately, with the preferred or safe action last
+  only if that is intended.
+
 ### Provenance and replay
 
 - A write influenced by a model decision records provenance `INFERRED` and
