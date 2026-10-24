@@ -1,10 +1,11 @@
 //! Decision-model predicate normalization (ADR-0024).
 
 use crate::decision::{Decision, DecisionClient, MAX_OPTIONS};
-use crate::{
-    Error, PredicateCandidate, PredicateSuggestion, Store, edit_distance, normalize_predicate_name,
+use crate::ontology::{
+    PredicateCandidate, PredicateSuggestion, edit_distance, normalize_predicate_name,
     semantic_predicate_hint, suggest_unknown_predicate,
 };
+use crate::{Error, Store};
 
 const NONE_OPTION: &str = "none";
 const NONE_DESCRIPTION: &str = "no listed predicate fits this input";
