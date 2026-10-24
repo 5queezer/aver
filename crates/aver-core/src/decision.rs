@@ -25,6 +25,8 @@ pub enum DecisionError {
     TooFewOptions { count: usize },
     #[error("decision allows at most {MAX_OPTIONS} options, got {count}")]
     TooManyOptions { count: usize },
+    #[error("decision options must be non-empty and unique, got {option:?}")]
+    DuplicateOption { option: String },
     #[error("decision model unavailable")]
     Unavailable,
 }
@@ -44,6 +46,15 @@ impl Decision<'_> {
         }
         if count > MAX_OPTIONS {
             return Err(DecisionError::TooManyOptions { count });
+        }
+        // systemone keys options by string: duplicates would silently collapse.
+        let mut seen = std::collections::HashSet::new();
+        for &option in self.options {
+            if option.is_empty() || !seen.insert(option) {
+                return Err(DecisionError::DuplicateOption {
+                    option: option.to_string(),
+                });
+            }
         }
         Ok(())
     }
@@ -224,7 +235,8 @@ impl OllamaDecisionClient {
         })
     }
 
-    /// Reads the first answer of a systemone response. `choice` may be an
+    /// Reads the first answer of a systemone response. This shape was
+    /// verified live against `tev1:4b` on 2026-10-24. `choice` may be an
     /// option key (matched by key) or a zero-based index (range-checked);
     /// `answers` may be keyed by question name or a list in question order.
     pub fn parse_response(
@@ -272,6 +284,31 @@ impl DecisionClient for OllamaDecisionClient {
             model: self.model.clone(),
         })
     }
+}
+
+/// Builds a decision client from the environment, or `None` when no model is
+/// opted in.
+///
+/// Opt-in is explicit: only a set, non-blank `AVER_DECISION_MODEL` enables the
+/// client; the default model name alone never does. `AVER_DECISION_URL`
+/// optionally overrides the Ollama base URL (default `http://localhost:11434`).
+/// Without the `ollama` feature this always returns `None`.
+#[cfg(feature = "ollama")]
+pub fn client_from_env() -> Option<Box<dyn DecisionClient + Send + Sync>> {
+    std::env::var("AVER_DECISION_MODEL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())?;
+    let config = DecisionConfig::from_env();
+    Some(Box::new(OllamaDecisionClient::new(
+        config.base_url,
+        config.model,
+    )))
+}
+
+/// See the `ollama`-feature variant; without the feature no client exists.
+#[cfg(not(feature = "ollama"))]
+pub fn client_from_env() -> Option<Box<dyn DecisionClient + Send + Sync>> {
+    None
 }
 
 #[cfg(test)]
@@ -462,5 +499,35 @@ mod tests {
             OllamaDecisionClient::parse_response("not json", &["a", "b"]),
             Err(DecisionError::Json(_))
         ));
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_and_empty_options() {
+        assert!(matches!(
+            decision(&["a", "b", "a"]).validate(),
+            Err(DecisionError::DuplicateOption { option }) if option == "a"
+        ));
+        assert!(matches!(
+            decision(&["a", ""]).validate(),
+            Err(DecisionError::DuplicateOption { option }) if option.is_empty()
+        ));
+    }
+
+    #[test]
+    fn client_from_env_is_none_when_model_unset() {
+        // No test in this crate sets AVER_DECISION_MODEL, so this cannot race.
+        if std::env::var_os("AVER_DECISION_MODEL").is_none() {
+            assert!(client_from_env().is_none());
+        }
+    }
+
+    #[cfg(feature = "ollama")]
+    #[test]
+    fn parse_response_accepts_live_tev1_response() {
+        let body = r#"{"model":"tev1:4b","answers":{"decision":{"type":"choice","choice":"promote","probabilities":{"promote":0.8652696265547987,"reject":0.0638116585936579,"hold":0.07091871485154351},"confidence":0.7979044398321978}},"usage":{"input_tokens":146,"output_tokens":0}}"#;
+        let (index, confidence) =
+            OllamaDecisionClient::parse_response(body, &["promote", "reject", "hold"]).unwrap();
+        assert_eq!(index, 0);
+        assert!((confidence.unwrap() - 0.7979044398321978).abs() < 1e-12);
     }
 }
