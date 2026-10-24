@@ -1,4 +1,5 @@
-//! ADR-0020 slice 3: OAuth scope catalog and tool→scope lookup.
+//! ADR-0020 slice 3: OAuth scope catalog. Each MCP tool declares the scope
+//! it requires next to its handler in `mcp.rs` (see [`ToolScope`]).
 //!
 //! Six scopes mirror the current MCP tool groups. The canonical string form
 //! is what clients send in `scope=` and what discovery advertises under
@@ -124,63 +125,20 @@ pub fn serialize_scope_list(scopes: &[Scope]) -> String {
     out
 }
 
-/// Returns the [`Scope`] required to invoke the named MCP tool, or `None`
-/// if the tool is unknown to the catalog.
-///
-/// Mapping (per ADR-0020 §Scopes, plus tools added since the ADR):
-/// - `recall`, `expand` → `claims:read`
-/// - `remember_claim`, `add_triple`, `contradict`, `consolidate`,
-///   `add_vector_chunk`, `retire_claim` → `claims:write`
-/// - `record_event`, `should_extract_memories` → `events:write`
-/// - `propose_candidate_claim`, `list_candidate_claims`,
-///   `promote_candidate_claim`, `triage_candidate_claim`,
-///   `reject_candidate_claim` → `candidates:manage`
-/// - `recall_observation`, `observation_coverage`, `assemble_compaction_summary`
-///   → `observations:read`
-/// - `record_observation` → `observations:write`
-pub fn required_scope_for_tool(tool: &str) -> Option<Scope> {
-    Some(match tool {
-        "recall" | "expand" => Scope::ClaimsRead,
-        "remember_claim" | "add_triple" | "contradict" | "consolidate" | "add_vector_chunk"
-        | "retire_claim" => Scope::ClaimsWrite,
-        "record_event" | "should_extract_memories" => Scope::EventsWrite,
-        "propose_candidate_claim"
-        | "list_candidate_claims"
-        | "promote_candidate_claim"
-        | "triage_candidate_claim"
-        | "reject_candidate_claim" => Scope::CandidatesManage,
-        "recall_observation" | "observation_coverage" | "assemble_compaction_summary" => {
-            Scope::ObservationsRead
-        }
-        "record_observation" => Scope::ObservationsWrite,
-        _ => return None,
-    })
+/// The OAuth scope an MCP tool requires. Each handler in
+/// [`crate::mcp::AverMcpService`] declares one as a constant next to its
+/// `#[tool]` attribute; [`crate::mcp::AverMcpService::TOOLS`] lists them all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolScope {
+    pub name: &'static str,
+    pub scope: Scope,
 }
 
-/// All MCP tool names exposed by [`crate::mcp::AverMcpService`]. The list is
-/// kept here so the unit test catches any new tool added to the rmcp service
-/// that hasn't been assigned a scope.
-pub const ALL_TOOL_NAMES: &[&str] = &[
-    "recall",
-    "expand",
-    "remember_claim",
-    "add_triple",
-    "contradict",
-    "consolidate",
-    "add_vector_chunk",
-    "record_event",
-    "should_extract_memories",
-    "propose_candidate_claim",
-    "list_candidate_claims",
-    "promote_candidate_claim",
-    "triage_candidate_claim",
-    "reject_candidate_claim",
-    "recall_observation",
-    "observation_coverage",
-    "assemble_compaction_summary",
-    "record_observation",
-    "retire_claim",
-];
+impl ToolScope {
+    pub const fn new(name: &'static str, scope: Scope) -> Self {
+        Self { name, scope }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -250,21 +208,6 @@ mod tests {
     #[test]
     fn parse_lossy_with_only_unknown_yields_empty() {
         assert!(parse_scope_list_lossy("nope nada").is_empty());
-    }
-
-    #[test]
-    fn every_known_tool_has_a_scope() {
-        for tool in ALL_TOOL_NAMES {
-            assert!(
-                required_scope_for_tool(tool).is_some(),
-                "tool {tool:?} is missing a scope mapping",
-            );
-        }
-    }
-
-    #[test]
-    fn unknown_tool_has_no_scope() {
-        assert!(required_scope_for_tool("nonexistent_tool").is_none());
     }
 
     #[test]

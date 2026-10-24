@@ -1,5 +1,4 @@
 use aver_server::mcp::AverMcpService;
-use aver_server::scopes::ALL_TOOL_NAMES;
 use aver_server::tools::{RecallParams, RecordEventParams, RememberClaimParams};
 use rmcp::ServerHandler;
 use schemars::schema_for;
@@ -45,7 +44,7 @@ fn mcp_instructions_are_a_progressive_discovery_card() {
         "avoid storing secrets, credentials, sensitive personal data, transient chat, or facts you cannot explain with provenance"
     ));
 
-    for tool_name in ALL_TOOL_NAMES {
+    for tool_name in AverMcpService::TOOLS.iter().map(|tool| tool.name) {
         assert!(
             instructions.contains(tool_name),
             "missing {tool_name} from instructions"

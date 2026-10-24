@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::http::GrantedScopes;
 use crate::scope_resolution::ResolvedScope;
-use crate::scopes::{ALL_TOOL_NAMES, Scope, required_scope_for_tool};
+use crate::scopes::{Scope, ToolScope};
 use crate::tools::{
     AddTripleParams, AddVectorChunkParams, AssembleCompactionSummaryParams, AverTools,
     ConsolidateParams, ContradictParams, ExpandParams, ListCandidateClaimsParams,
@@ -23,45 +23,24 @@ use crate::tools::{
     TriageCandidateClaimParams,
 };
 
-/// Looks up the scope required for `tool_name` and verifies the request's
-/// granted scopes (carried via `http::request::Parts` in `ctx.extensions`)
-/// include it. Returns an `INVALID_PARAMS`-coded `insufficient_scope` error
-/// per the ADR-0015 unsupported-scope contract when the check fails.
-///
-/// If the tool is not in the catalog, fails closed with `INTERNAL_ERROR` —
-/// reaching that branch indicates a programming bug (every implemented tool
-/// should be mapped).
-fn require_scope(ctx: &RequestContext<RoleServer>, tool_name: &str) -> Result<(), McpError> {
-    let granted: Vec<Scope> = ctx
+/// Verifies the request's granted scopes (carried via `http::request::Parts`
+/// in `ctx.extensions`) include the scope `tool` declares. Returns an
+/// `INVALID_PARAMS`-coded `insufficient_scope` error per the ADR-0015
+/// unsupported-scope contract when the check fails.
+fn require_scope(ctx: &RequestContext<RoleServer>, tool: ToolScope) -> Result<(), McpError> {
+    let granted = ctx
         .extensions
         .get::<http::request::Parts>()
-        .and_then(|parts| parts.extensions.get::<GrantedScopes>())
-        .map(|g| g.0.clone())
-        .unwrap_or_default();
-    check_scope(tool_name, &granted)
-}
-
-/// Pure scope-check used by [`require_scope`] and exercised in unit tests.
-/// Returns `Ok` iff `granted` includes the scope mapped to `tool_name`.
-pub(crate) fn check_scope(tool_name: &str, granted: &[Scope]) -> Result<(), McpError> {
-    let required = match required_scope_for_tool(tool_name) {
-        Some(s) => s,
-        None => {
-            return Err(McpError::new(
-                ErrorCode::INTERNAL_ERROR,
-                format!("tool {tool_name:?} has no scope mapping"),
-                None,
-            ));
-        }
-    };
-    if granted.contains(&required) {
+        .and_then(|parts| parts.extensions.get::<GrantedScopes>());
+    if granted.is_some_and(|g| g.0.contains(&tool.scope)) {
         Ok(())
     } else {
         Err(McpError::new(
             ErrorCode::INVALID_PARAMS,
             format!(
-                "insufficient_scope: tool {tool_name:?} requires scope {}",
-                required.as_str()
+                "insufficient_scope: tool {:?} requires scope {}",
+                tool.name,
+                tool.scope.as_str()
             ),
             None,
         ))
@@ -157,6 +136,33 @@ impl AverMcpService {
         })
     }
 
+    /// ADR-0020: every MCP tool with the OAuth scope it requires. Each entry
+    /// is the constant declared directly above that tool's handler, which
+    /// passes it to [`require_scope`]. The order is the tool index rendered
+    /// in the server instructions.
+    pub const TOOLS: &[ToolScope] = &[
+        Self::RECALL,
+        Self::EXPAND,
+        Self::REMEMBER_CLAIM,
+        Self::ADD_TRIPLE,
+        Self::CONTRADICT,
+        Self::CONSOLIDATE,
+        Self::ADD_VECTOR_CHUNK,
+        Self::RECORD_EVENT,
+        Self::SHOULD_EXTRACT_MEMORIES,
+        Self::PROPOSE_CANDIDATE_CLAIM,
+        Self::LIST_CANDIDATE_CLAIMS,
+        Self::PROMOTE_CANDIDATE_CLAIM,
+        Self::TRIAGE_CANDIDATE_CLAIM,
+        Self::REJECT_CANDIDATE_CLAIM,
+        Self::RECALL_OBSERVATION,
+        Self::OBSERVATION_COVERAGE,
+        Self::ASSEMBLE_COMPACTION_SUMMARY,
+        Self::RECORD_OBSERVATION,
+        Self::RETIRE_CLAIM,
+    ];
+
+    const REMEMBER_CLAIM: ToolScope = ToolScope::new("remember_claim", Scope::ClaimsWrite);
     #[tool(
         description = "Store one explicit, stable long-term fact as a durable claim. Prefer record_event when durability is uncertain; never store secrets or transient chat."
     )]
@@ -165,7 +171,7 @@ impl AverMcpService {
         Parameters(params): Parameters<RememberClaimParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "remember_claim")?;
+        require_scope(&ctx, Self::REMEMBER_CLAIM)?;
         let tools = self.lock_tools()?;
         let result = tools.remember_claim(CoreRememberClaimParams {
             subject: params.subject,
@@ -179,6 +185,7 @@ impl AverMcpService {
         json_tool_result(&tools, result, "remember_claim")
     }
 
+    const ADD_TRIPLE: ToolScope = ToolScope::new("add_triple", Scope::ClaimsWrite);
     #[tool(
         description = "Write a durable `(subject, predicate, object)` triple with required provenance and optional confidence. Prefer remember_claim unless you need explicit source/confidence control."
     )]
@@ -187,7 +194,7 @@ impl AverMcpService {
         Parameters(mut params): Parameters<AddTripleParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "add_triple")?;
+        require_scope(&ctx, Self::ADD_TRIPLE)?;
         if params.scope.is_none() {
             params.scope = Some(request_scope(&ctx).scope);
         }
@@ -196,6 +203,7 @@ impl AverMcpService {
         json_tool_result(&tools, result, "add_triple")
     }
 
+    const EXPAND: ToolScope = ToolScope::new("expand", Scope::ClaimsRead);
     #[tool(
         description = "Traverse the claim graph around a known anchor entity. Use after recall identifies an entity; do not use for broad text search."
     )]
@@ -204,7 +212,7 @@ impl AverMcpService {
         Parameters(mut params): Parameters<ExpandParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "expand")?;
+        require_scope(&ctx, Self::EXPAND)?;
         let resolved = request_scope(&ctx);
         if params.scope_walk.is_none() && params.scope.is_none() {
             params.scope_walk = Some(resolved.default_walk.as_str().to_string());
@@ -217,6 +225,7 @@ impl AverMcpService {
         json_tool_result(&tools, result, "expand")
     }
 
+    const CONTRADICT: ToolScope = ToolScope::new("contradict", Scope::ClaimsWrite);
     #[tool(
         description = "Attach contradictory evidence to an existing claim while keeping it visible to recall. Use retire_claim for explicit invalidation."
     )]
@@ -225,12 +234,13 @@ impl AverMcpService {
         Parameters(params): Parameters<ContradictParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "contradict")?;
+        require_scope(&ctx, Self::CONTRADICT)?;
         let tools = self.lock_tools()?;
         let result = tools.contradict(params);
         json_tool_result(&tools, result, "contradict")
     }
 
+    const CONSOLIDATE: ToolScope = ToolScope::new("consolidate", Scope::ClaimsWrite);
     #[tool(
         description = "Recompute derived claim state after writes, contradictions, or retirements. Use only when you need a refreshed merged view."
     )]
@@ -239,12 +249,13 @@ impl AverMcpService {
         Parameters(params): Parameters<ConsolidateParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "consolidate")?;
+        require_scope(&ctx, Self::CONSOLIDATE)?;
         let tools = self.lock_tools()?;
         let result = tools.consolidate(params);
         json_tool_result(&tools, result, "consolidate")
     }
 
+    const RECORD_EVENT: ToolScope = ToolScope::new("record_event", Scope::EventsWrite);
     #[tool(
         description = "Append raw session history for later extraction. Use for useful context that is not yet a durable fact; prefer remember_claim for explicit stable facts."
     )]
@@ -253,7 +264,7 @@ impl AverMcpService {
         Parameters(mut params): Parameters<RecordEventParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "record_event")?;
+        require_scope(&ctx, Self::RECORD_EVENT)?;
         if params.scope.is_none() {
             params.scope = Some(request_scope(&ctx).scope);
         }
@@ -262,6 +273,8 @@ impl AverMcpService {
         json_tool_result(&tools, result, "record_event")
     }
 
+    const SHOULD_EXTRACT_MEMORIES: ToolScope =
+        ToolScope::new("should_extract_memories", Scope::EventsWrite);
     #[tool(
         description = "Check whether a session has enough recorded events to justify memory extraction. Use before staging event-derived candidate claims."
     )]
@@ -270,12 +283,14 @@ impl AverMcpService {
         Parameters(params): Parameters<ShouldExtractMemoriesParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "should_extract_memories")?;
+        require_scope(&ctx, Self::SHOULD_EXTRACT_MEMORIES)?;
         let tools = self.lock_tools()?;
         let result = tools.should_extract_memories(params);
         json_tool_result(&tools, result, "should_extract_memories")
     }
 
+    const PROPOSE_CANDIDATE_CLAIM: ToolScope =
+        ToolScope::new("propose_candidate_claim", Scope::CandidatesManage);
     #[tool(
         description = "Stage a proposed durable claim from a recorded event. Use in the event-to-claim workflow before human/agent review and promotion."
     )]
@@ -284,7 +299,7 @@ impl AverMcpService {
         Parameters(mut params): Parameters<ProposeCandidateClaimParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "propose_candidate_claim")?;
+        require_scope(&ctx, Self::PROPOSE_CANDIDATE_CLAIM)?;
         if params.scope.is_none() {
             params.scope = Some(request_scope(&ctx).scope);
         }
@@ -293,6 +308,8 @@ impl AverMcpService {
         json_tool_result(&tools, result, "propose_candidate_claim")
     }
 
+    const LIST_CANDIDATE_CLAIMS: ToolScope =
+        ToolScope::new("list_candidate_claims", Scope::CandidatesManage);
     #[tool(
         description = "List staged candidate claims by session/status for review. Use before promote_candidate_claim or reject_candidate_claim."
     )]
@@ -301,12 +318,14 @@ impl AverMcpService {
         Parameters(params): Parameters<ListCandidateClaimsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "list_candidate_claims")?;
+        require_scope(&ctx, Self::LIST_CANDIDATE_CLAIMS)?;
         let tools = self.lock_tools()?;
         let result = tools.list_candidate_claims(params);
         json_tool_result(&tools, result, "list_candidate_claims")
     }
 
+    const PROMOTE_CANDIDATE_CLAIM: ToolScope =
+        ToolScope::new("promote_candidate_claim", Scope::CandidatesManage);
     #[tool(
         description = "Promote one reviewed staged candidate into durable claim memory. Use only after the candidate has been inspected."
     )]
@@ -315,12 +334,14 @@ impl AverMcpService {
         Parameters(params): Parameters<PromoteCandidateClaimParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "promote_candidate_claim")?;
+        require_scope(&ctx, Self::PROMOTE_CANDIDATE_CLAIM)?;
         let tools = self.lock_tools()?;
         let result = tools.promote_candidate_claim(params);
         json_tool_result(&tools, result, "promote_candidate_claim")
     }
 
+    const TRIAGE_CANDIDATE_CLAIM: ToolScope =
+        ToolScope::new("triage_candidate_claim", Scope::CandidatesManage);
     #[tool(
         description = "Let the local decision model promote, reject, or hold one staged candidate claim; promoted claims carry INFERRED provenance with confidence 0.45, and the tool errors unless AVER_DECISION_MODEL is set."
     )]
@@ -329,12 +350,14 @@ impl AverMcpService {
         Parameters(params): Parameters<TriageCandidateClaimParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "triage_candidate_claim")?;
+        require_scope(&ctx, Self::TRIAGE_CANDIDATE_CLAIM)?;
         let tools = self.lock_tools()?;
         let result = tools.triage_candidate_claim(params);
         json_tool_result(&tools, result, "triage_candidate_claim")
     }
 
+    const REJECT_CANDIDATE_CLAIM: ToolScope =
+        ToolScope::new("reject_candidate_claim", Scope::CandidatesManage);
     #[tool(
         description = "Reject a staged candidate claim and record why it should not become durable memory. Use instead of silently dropping bad candidates."
     )]
@@ -343,12 +366,14 @@ impl AverMcpService {
         Parameters(params): Parameters<RejectCandidateClaimParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "reject_candidate_claim")?;
+        require_scope(&ctx, Self::REJECT_CANDIDATE_CLAIM)?;
         let tools = self.lock_tools()?;
         let result = tools.reject_candidate_claim(params);
         json_tool_result(&tools, result, "reject_candidate_claim")
     }
 
+    const RECORD_OBSERVATION: ToolScope =
+        ToolScope::new("record_observation", Scope::ObservationsWrite);
     #[tool(
         description = "Record a source-backed session observation for continuity, handoff, or compaction. Use source event ids for auditability."
     )]
@@ -357,7 +382,7 @@ impl AverMcpService {
         Parameters(mut params): Parameters<RecordObservationParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "record_observation")?;
+        require_scope(&ctx, Self::RECORD_OBSERVATION)?;
         if params.scope.is_none() {
             params.scope = Some(request_scope(&ctx).scope);
         }
@@ -366,6 +391,8 @@ impl AverMcpService {
         json_tool_result(&tools, result, "record_observation")
     }
 
+    const RECALL_OBSERVATION: ToolScope =
+        ToolScope::new("recall_observation", Scope::ObservationsRead);
     #[tool(
         description = "Fetch one observation plus its supporting events when you already have an observation id. Use for exact provenance, not semantic search."
     )]
@@ -374,12 +401,14 @@ impl AverMcpService {
         Parameters(params): Parameters<RecallObservationParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "recall_observation")?;
+        require_scope(&ctx, Self::RECALL_OBSERVATION)?;
         let tools = self.lock_tools()?;
         let result = tools.recall_observation(params);
         json_tool_result(&tools, result, "recall_observation")
     }
 
+    const OBSERVATION_COVERAGE: ToolScope =
+        ToolScope::new("observation_coverage", Scope::ObservationsRead);
     #[tool(
         description = "Show which session events have observation coverage and which still need summarization. Use before compaction/handoff cleanup."
     )]
@@ -388,12 +417,14 @@ impl AverMcpService {
         Parameters(params): Parameters<ObservationCoverageParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "observation_coverage")?;
+        require_scope(&ctx, Self::OBSERVATION_COVERAGE)?;
         let tools = self.lock_tools()?;
         let result = tools.observation_coverage(params);
         json_tool_result(&tools, result, "observation_coverage")
     }
 
+    const ASSEMBLE_COMPACTION_SUMMARY: ToolScope =
+        ToolScope::new("assemble_compaction_summary", Scope::ObservationsRead);
     #[tool(
         description = "Assemble a deterministic handoff/compaction summary from recorded observations. Use after source-backed observations exist."
     )]
@@ -402,12 +433,13 @@ impl AverMcpService {
         Parameters(params): Parameters<AssembleCompactionSummaryParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "assemble_compaction_summary")?;
+        require_scope(&ctx, Self::ASSEMBLE_COMPACTION_SUMMARY)?;
         let tools = self.lock_tools()?;
         let result = tools.assemble_compaction_summary(params);
         json_tool_result(&tools, result, "assemble_compaction_summary")
     }
 
+    const ADD_VECTOR_CHUNK: ToolScope = ToolScope::new("add_vector_chunk", Scope::ClaimsWrite);
     #[tool(
         description = "Attach extra retrieval text to an existing claim for vector/hybrid recall tuning. Use sparingly when normal claim text is insufficient."
     )]
@@ -416,12 +448,13 @@ impl AverMcpService {
         Parameters(params): Parameters<AddVectorChunkParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "add_vector_chunk")?;
+        require_scope(&ctx, Self::ADD_VECTOR_CHUNK)?;
         let tools = self.lock_tools()?;
         let result = tools.add_vector_chunk(params);
         json_tool_result(&tools, result, "add_vector_chunk")
     }
 
+    const RETIRE_CLAIM: ToolScope = ToolScope::new("retire_claim", Scope::ClaimsWrite);
     #[tool(
         description = "Mark a claim as INVALIDATED so default `recall` queries no longer surface it. \
         For evidentiary contradictions that should remain in active reads pending consolidation, \
@@ -432,12 +465,13 @@ impl AverMcpService {
         Parameters(params): Parameters<RetireClaimParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "retire_claim")?;
+        require_scope(&ctx, Self::RETIRE_CLAIM)?;
         let tools = self.lock_tools()?;
         let result = tools.retire_claim(params);
         json_tool_result(&tools, result, "retire_claim")
     }
 
+    const RECALL: ToolScope = ToolScope::new("recall", Scope::ClaimsRead);
     #[tool(
         description = "Search durable claims by text query. Start here for stored facts, preferences, project context, or when you do not know an exact entity id."
     )]
@@ -446,7 +480,7 @@ impl AverMcpService {
         Parameters(params): Parameters<RecallParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, "recall")?;
+        require_scope(&ctx, Self::RECALL)?;
         let tools = self.lock_tools()?;
         let result = tools.recall({
             let resolved = request_scope(&ctx);
@@ -538,13 +572,17 @@ fn mcp_tool_instructions() -> String {
                 "Progressively load observation audit tools only for handoff, compaction, or provenance checks: {}. ",
                 "Use advanced claim-maintenance tools sparingly for contradiction handling, invalidation, consolidation, and retrieval tuning: {}."
             ),
-            ALL_TOOL_NAMES.len(),
+            AverMcpService::TOOLS.len(),
             primary_tools.join(", "),
             specialized_tools.join(", "),
             maintenance_tools.join(", "),
             event_tools.join(", "),
             observation_tools.join(", "),
-            ALL_TOOL_NAMES.join(", "),
+            AverMcpService::TOOLS
+                .iter()
+                .map(|tool| tool.name)
+                .collect::<Vec<_>>()
+                .join(", "),
             event_tools.join(", "),
             observation_tools.join(", "),
             maintenance_tools.join(", "),
@@ -570,6 +608,58 @@ impl ServerHandler for AverMcpService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[test]
+    fn declared_tool_scopes_match_router_and_pre_refactor_mapping() {
+        // Tool -> scope mapping as `scopes::required_scope_for_tool` encoded it
+        // before tools declared their own scope. Behaviour must not drift.
+        let fixture: BTreeMap<&str, Scope> = [
+            ("recall", Scope::ClaimsRead),
+            ("expand", Scope::ClaimsRead),
+            ("remember_claim", Scope::ClaimsWrite),
+            ("add_triple", Scope::ClaimsWrite),
+            ("contradict", Scope::ClaimsWrite),
+            ("consolidate", Scope::ClaimsWrite),
+            ("add_vector_chunk", Scope::ClaimsWrite),
+            ("retire_claim", Scope::ClaimsWrite),
+            ("record_event", Scope::EventsWrite),
+            ("should_extract_memories", Scope::EventsWrite),
+            ("propose_candidate_claim", Scope::CandidatesManage),
+            ("list_candidate_claims", Scope::CandidatesManage),
+            ("promote_candidate_claim", Scope::CandidatesManage),
+            ("triage_candidate_claim", Scope::CandidatesManage),
+            ("reject_candidate_claim", Scope::CandidatesManage),
+            ("recall_observation", Scope::ObservationsRead),
+            ("observation_coverage", Scope::ObservationsRead),
+            ("assemble_compaction_summary", Scope::ObservationsRead),
+            ("record_observation", Scope::ObservationsWrite),
+        ]
+        .into_iter()
+        .collect();
+
+        let declared: BTreeMap<&str, Scope> = AverMcpService::TOOLS
+            .iter()
+            .map(|tool| (tool.name, tool.scope))
+            .collect();
+        assert_eq!(
+            declared.len(),
+            AverMcpService::TOOLS.len(),
+            "duplicate tool declaration"
+        );
+        assert_eq!(declared, fixture);
+
+        // Every routed tool has a declaration and vice versa: the router is
+        // the source of which tools exist, not a hand-kept name list.
+        let routed: BTreeSet<String> = AverMcpService::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        let declared_names: BTreeSet<String> =
+            declared.keys().map(|name| name.to_string()).collect();
+        assert_eq!(routed, declared_names);
+    }
 
     #[test]
     fn services_sharing_tools_observe_each_others_writes() {
