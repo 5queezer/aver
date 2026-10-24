@@ -2,6 +2,7 @@
 
 use aver_core::Store;
 use aver_core::decision::{DecisionError, MockDecisionClient};
+use aver_core::{CandidateWrite, EventWrite};
 use rusqlite::Connection;
 
 const ALLOWED: [&str; 3] = ["global", "proj/aver", "session/abc"];
@@ -95,7 +96,7 @@ fn state_and_options_reach_client() {
 fn suggested_scope_composes_with_candidate_staging() {
     let (dir, store) = open_store();
     let event_id = store
-        .record_event("session_x", "user_message", "hi", "test")
+        .record_event(EventWrite::new("session_x", "user_message", "hi", "test"))
         .unwrap();
     let client = MockDecisionClient::with_indices(vec![1]);
     let scope = store
@@ -103,7 +104,7 @@ fn suggested_scope_composes_with_candidate_staging() {
         .unwrap()
         .unwrap();
     let id = store
-        .propose_candidate_claim_with_scope(event_id, "subj", "uses", "obj", &scope)
+        .propose_candidate_claim(CandidateWrite::new(event_id, "subj", "uses", "obj").scope(&scope))
         .unwrap();
     let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
     let stored: String = conn

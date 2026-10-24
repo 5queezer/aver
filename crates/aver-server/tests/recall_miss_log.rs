@@ -44,6 +44,8 @@ fn add_claim(tools: &AverTools, subject: &str, object: &str, confidence: f64) {
             confidence: Some(confidence),
             source: "test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
 }

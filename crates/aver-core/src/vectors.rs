@@ -5,12 +5,13 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{params, types::Type};
 
 use crate::apply::apply;
+use crate::claims::SqlParams;
 use crate::error::Error;
 use crate::log::{LogRecord, append_jsonl};
 use crate::recall::graph_score_for_query_claim;
 use crate::retrieval;
 use crate::store::{Store, VECTOR_INDEX_DIM};
-use crate::types::{Claim, ClaimStatus, VectorChunk};
+use crate::types::{Claim, ClaimStatus, RecallFilters, RecallQuery, VectorChunk};
 use crate::validation::{
     validate_embedding_model, validate_embedding_vector, validate_recall_query, validate_top_k,
     validate_vector_chunk_text,
@@ -265,7 +266,7 @@ impl Store {
         drop(stmt);
 
         // Merge with text-search results.
-        let text_claims = self.recall_text(query)?;
+        let text_claims = self.recall_text(RecallQuery::new(query))?;
         let text_score_base = 0.5_f64;
         for claim in &text_claims {
             scores
@@ -384,24 +385,10 @@ impl Store {
         Ok(claims)
     }
 
-    /// Hybrid recall over vector chunks plus text fallback. Vector-ranked
-    /// claims are returned first; text recall fills any remaining slots with
-    /// distinct claims so sparse vector indexes remain useful.
+    /// ADR-0004 hybrid recall: the vector half plus the keyword half blended
+    /// by `weights`, ACTIVE claims only, no other filters. Embeds the query
+    /// with `client`; `top_k == 0` returns nothing without embedding.
     pub fn recall_hybrid_claims(
-        &self,
-        query: &str,
-        client: &impl vector::EmbeddingClient,
-        top_k: usize,
-    ) -> Result<Vec<Claim>, Error> {
-        self.recall_hybrid_claims_with_alpha(
-            query,
-            client,
-            top_k,
-            retrieval::HybridWeights::for_query(query),
-        )
-    }
-
-    pub fn recall_hybrid_claims_with_alpha(
         &self,
         query: &str,
         client: &impl vector::EmbeddingClient,
@@ -412,23 +399,105 @@ impl Store {
             return Ok(Vec::new());
         }
         validate_recall_query(query)?;
-        let query_embedding = client.embed(query)?;
+        let embedding = client.embed(query)?;
+        self.recall_hybrid_claims_with_filters(
+            query,
+            &embedding,
+            top_k,
+            weights,
+            &RecallFilters::default(),
+        )
+    }
 
-        // ADR-0017: vector half. When the query embedding matches the
-        // canonical dimension and the `vec0` index is present, run a single
-        // KNN MATCH instead of an O(N) scan + per-row cosine in Rust. The
-        // fanout (`top_k * 4`) gives the graph half room to re-rank without
-        // starving on vector-only candidates. Distance is L2 over (assumed)
-        // L2-normalised embeddings; we map to a similarity score in [0, 1]
-        // via `1 - distance / 2` then clamp, matching the cosine-derived
-        // range produced by `normalized_cosine_score`. Off-dimension queries
-        // and unindexed installs fall back to the JSON full-scan path.
+    /// ADR-0004 hybrid recall with ADR-0021 scope and ADR-0023 typed filters
+    /// pushed into candidate selection on both halves, for callers that
+    /// already hold the query embedding (the server embeds once and ranks
+    /// claims and chunks separately).
+    ///
+    /// Vector half (ADR-0017): when the embedding has the canonical
+    /// dimension and the `vec0` index exists, one KNN MATCH over a fanout
+    /// pool; otherwise the JSON full scan. Candidates from the pool are kept
+    /// only if they pass `filters`; the keyword half runs with the same
+    /// filters. Scores blend `weights.alpha` × vector similarity with the
+    /// graph score; ties break by id.
+    pub fn recall_hybrid_claims_with_filters(
+        &self,
+        query: &str,
+        embedding: &[f32],
+        top_k: usize,
+        weights: retrieval::HybridWeights,
+        filters: &RecallFilters,
+    ) -> Result<Vec<Claim>, Error> {
+        if top_k == 0 {
+            return Ok(Vec::new());
+        }
+        validate_recall_query(query)?;
+        validate_embedding_vector(embedding)?;
+        self.validate_filters(filters)?;
+
+        let vector_scores = self.vector_scores(embedding, top_k)?;
+        let Some((filter_sql, filter_params)) = self.claim_filter_sql(filters)? else {
+            return Ok(Vec::new());
+        };
+
+        let mut candidates: HashMap<i64, Claim> = self
+            .recall_text(RecallQuery::new(query).filters(filters.clone()))?
+            .into_iter()
+            .map(|claim| (claim.id, claim))
+            .collect();
+        let mut vector_ids: Vec<i64> = vector_scores
+            .keys()
+            .filter(|id| !candidates.contains_key(id))
+            .copied()
+            .collect();
+        vector_ids.sort_unstable();
+        if !vector_ids.is_empty() {
+            let placeholders = std::iter::repeat_n("?", vector_ids.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let mut params: SqlParams = vector_ids
+                .iter()
+                .map(|id| Box::new(*id) as Box<dyn rusqlite::ToSql>)
+                .collect();
+            params.extend(filter_params);
+            for claim in
+                self.claims_where(&format!("id IN ({placeholders}) AND {filter_sql}"), params)?
+            {
+                candidates.insert(claim.id, claim);
+            }
+        }
+
+        let mut ranked: Vec<(f64, Claim)> = candidates
+            .into_values()
+            .map(|claim| {
+                let vector_score = vector_scores.get(&claim.id).copied().unwrap_or(0.0);
+                let graph_score = graph_score_for_query_claim(query, &claim);
+                (weights.blend(vector_score, graph_score), claim)
+            })
+            .collect();
+        ranked.sort_by(|(a_score, a_claim), (b_score, b_claim)| {
+            b_score
+                .total_cmp(a_score)
+                .then_with(|| a_claim.id.cmp(&b_claim.id))
+        });
+        ranked.truncate(top_k);
+        Ok(ranked.into_iter().map(|(_, claim)| claim).collect())
+    }
+
+    /// Best vector similarity per claim for `embedding`. ADR-0017: a single
+    /// KNN MATCH over the `vec0` index when the dimension is canonical and
+    /// the index exists; the fanout (`4 × top_k`, at least 64) leaves the
+    /// graph half and the filters room to re-rank without starving on
+    /// vector-only candidates. Distance is L2 over (assumed) L2-normalised
+    /// embeddings, mapped to `1 - distance / 2` and clamped to [0, 1] to
+    /// match `normalized_cosine_score`. Off-dimension queries and unindexed
+    /// installs fall back to the JSON full scan.
+    fn vector_scores(&self, embedding: &[f32], top_k: usize) -> Result<HashMap<i64, f64>, Error> {
         let mut vector_scores: HashMap<i64, f64> = HashMap::new();
-        let use_vec_index =
-            query_embedding.len() == VECTOR_INDEX_DIM && self.has_table("vector_index");
+        let use_vec_index = embedding.len() == VECTOR_INDEX_DIM && self.has_table("vector_index");
         if use_vec_index {
-            let fanout = top_k.saturating_mul(4).max(top_k);
-            let q_json = serde_json::to_string(&query_embedding)?;
+            let fanout = top_k.saturating_mul(4).max(64);
+            let q_json = serde_json::to_string(embedding)?;
             let mut stmt = self.conn.prepare(
                 "SELECT vc.claim_id, vi.distance
                    FROM vector_index vi
@@ -460,9 +529,8 @@ impl Store {
             })?;
             for row in rows {
                 let (claim_id, embedding_json) = row?;
-                if let Some(embedding) = parse_optional_embedding(embedding_json)?
-                    && let Some(score) =
-                        vector::normalized_cosine_score(&query_embedding, &embedding)
+                if let Some(stored) = parse_optional_embedding(embedding_json)?
+                    && let Some(score) = vector::normalized_cosine_score(embedding, &stored)
                 {
                     vector_scores
                         .entry(claim_id)
@@ -471,28 +539,7 @@ impl Store {
                 }
             }
         }
-
-        let text_claims = self.recall_text(query)?;
-        let mut candidate_ids: HashSet<i64> = text_claims.iter().map(|claim| claim.id).collect();
-        candidate_ids.extend(vector_scores.keys().copied());
-
-        let mut candidates = Vec::new();
-        for claim_id in candidate_ids {
-            let claim = self.get_claim(claim_id)?;
-            if claim.status != ClaimStatus::Active {
-                continue;
-            }
-            let vector_score = vector_scores.get(&claim_id).copied().unwrap_or(0.0);
-            let graph_score = graph_score_for_query_claim(query, &claim);
-            candidates.push((weights.blend(vector_score, graph_score), claim));
-        }
-        candidates.sort_by(|(a_score, a_claim), (b_score, b_claim)| {
-            b_score
-                .total_cmp(a_score)
-                .then_with(|| a_claim.id.cmp(&b_claim.id))
-        });
-        candidates.truncate(top_k);
-        Ok(candidates.into_iter().map(|(_, claim)| claim).collect())
+        Ok(vector_scores)
     }
 }
 

@@ -238,6 +238,9 @@ impl AverMcpService {
         if params.scope.is_none() {
             params.scope = Some(request_scope(&ctx).scope);
         }
+        if params.agent_id.is_none() {
+            params.agent_id = Some(request_agent_id(&ctx));
+        }
         let tools = self.lock_tools()?;
         let result = tools.add_triple(params);
         json_tool_result(&tools, result, "add_triple")
@@ -315,10 +318,15 @@ impl AverMcpService {
     )]
     async fn contradict(
         &self,
-        Parameters(params): Parameters<ContradictParams>,
+        Parameters(mut params): Parameters<ContradictParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, Self::CONTRADICT)?;
+        if let Some(new_claim) = params.new_claim.as_mut()
+            && new_claim.agent_id.is_none()
+        {
+            new_claim.agent_id = Some(request_agent_id(&ctx));
+        }
         let tools = self.lock_tools()?;
         let result = tools.contradict(params);
         json_tool_result(&tools, result, "contradict")

@@ -16,10 +16,19 @@ use aver_core::{ExtractorFact, Provenance};
 
 use crate::{Error, ExtractedFact, extract_facts_for_path, language_for_path};
 
-/// Extractor predicates that core's seeded ontology accepts. The extractor
-/// also emits `extends` and `implements`, and ADR-0007 names `has_test`;
-/// none of the three is seeded, so those facts are skipped.
-pub const SUPPORTED_PREDICATES: &[&str] = &["defines", "calls", "imports", "tests", "uses"];
+/// Extractor predicates that core's seeded ontology accepts (`seed.rs`
+/// seats every one of them, including the inheritance edges `extends` and
+/// `implements` and ADR-0007's `has_test`).
+pub const SUPPORTED_PREDICATES: &[&str] = &[
+    "defines",
+    "calls",
+    "imports",
+    "tests",
+    "uses",
+    "extends",
+    "implements",
+    "has_test",
+];
 
 /// Directory names never descended into by [`extract_tree`], in addition to
 /// hidden (dot) entries.
@@ -279,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn extends_and_implements_are_skipped() {
+    fn extends_and_implements_are_mapped() {
         for (predicate, source, path) in [
             (
                 "extends",
@@ -297,7 +306,9 @@ mod tests {
                 .iter()
                 .find(|fact| fact.predicate == predicate)
                 .unwrap_or_else(|| panic!("fixture must emit {predicate}"));
-            assert_eq!(to_core_fact(path, fact), None);
+            let core = to_core_fact(path, fact).expect("inheritance edges are seeded predicates");
+            assert_eq!(core.predicate, predicate);
+            assert_eq!(core.provenance, Some(Provenance::Extracted));
         }
     }
 
@@ -346,6 +357,7 @@ mod tests {
                 "aver_extractor",
                 aver_core::AgentKind::DeterministicParser,
                 path,
+                "global",
                 &facts,
             )
             .unwrap();
@@ -354,6 +366,7 @@ mod tests {
                 "aver_extractor",
                 aver_core::AgentKind::DeterministicParser,
                 "app/User.php",
+                "global",
                 &[to_core_fact(
                     "app/User.php",
                     &ExtractedFact {
@@ -397,7 +410,8 @@ mod tests {
             .collect();
         assert_eq!(names, ["a.rs", "b.py", "c.rs"]);
         assert_eq!(all.files_scanned(), 3);
-        assert_eq!(all.skipped.get("extends"), Some(&1));
+        assert!(all.skipped.is_empty(), "{:?}", all.skipped);
+        assert_eq!(all.facts_by_predicate().get("extends"), Some(&1));
         assert_eq!(
             all.duplicates, 2,
             "`b calls a` is written once per run, within and across files"

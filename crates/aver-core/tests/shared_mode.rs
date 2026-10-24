@@ -1,5 +1,6 @@
 //! T102 — v0.9 starts by declaring a shared-mode feature flag.
 
+use aver_core::ClaimWrite;
 use aver_core::{GraphStorageAdapter, StorageMode};
 
 #[test]
@@ -22,12 +23,24 @@ fn detect_communities_groups_connected_claim_entities() {
     let dir = tempfile::tempdir().unwrap();
     let store = aver_core::Store::open(dir.path()).unwrap();
     store
-        .add_claim("PaymentGateway", "depends_on", "StripeSDK", "s1")
+        .add_claim(ClaimWrite::new(
+            "PaymentGateway",
+            "depends_on",
+            "StripeSDK",
+            "s1",
+        ))
         .unwrap();
     store
-        .add_claim("StripeSDK", "owned_by", "BillingTeam", "s2")
+        .add_claim(ClaimWrite::new(
+            "StripeSDK",
+            "owned_by",
+            "BillingTeam",
+            "s2",
+        ))
         .unwrap();
-    store.add_claim("Parser", "emits", "Facts", "s3").unwrap();
+    store
+        .add_claim(ClaimWrite::new("Parser", "emits", "Facts", "s3"))
+        .unwrap();
 
     let communities = store.detect_communities().unwrap();
 
@@ -56,24 +69,24 @@ fn agent_trust_score_uses_bounded_agreement_rate() {
     let dir = tempfile::tempdir().unwrap();
     let store = aver_core::Store::open(dir.path()).unwrap();
     store
-        .add_claim_from_agent(
+        .add_claim(ClaimWrite::from_agent(
             "parser_agent",
             aver_core::AgentKind::DeterministicParser,
             "Parser",
-            "emits",
+            "prefers",
             "Facts",
             "s1",
-        )
+        ))
         .unwrap();
     store
-        .add_claim_from_agent(
+        .add_claim(ClaimWrite::from_agent(
             "parser_agent",
             aver_core::AgentKind::DeterministicParser,
             "Parser",
-            "emits",
+            "prefers",
             "Triples",
             "s2",
-        )
+        ))
         .unwrap();
     store.consolidate().unwrap();
 

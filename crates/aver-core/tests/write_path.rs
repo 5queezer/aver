@@ -2,6 +2,7 @@
 //! JSONL alone is row-identical to the original, and two stores merge by
 //! concatenating their logs.
 
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -113,39 +114,42 @@ fn populate(dir: &Path, tag: &str) {
 
     // Claims with each provenance; the first also auto-extends the ontology.
     let user = store
-        .add_claim_with_scope(
-            &format!("{tag}-svc"),
-            &format!("{tag}_brand_new_predicate"),
-            "Config:db",
-            "notes",
-            "proj/aver",
+        .add_claim(
+            ClaimWrite::new(
+                format!("{tag}-svc"),
+                format!("{tag}_brand_new_predicate"),
+                "Config:db",
+                "notes",
+            )
+            .scope("proj/aver"),
         )
         .unwrap();
     store
-        .add_claim_from_agent(
+        .add_claim(ClaimWrite::from_agent(
             "parser",
             AgentKind::DeterministicParser,
-            &format!("{tag}-svc"),
+            format!("{tag}-svc"),
             "depends_on",
             "Service:queue",
             "tree_sitter",
-        )
+        ))
         .unwrap();
     let inferred = store
-        .add_claim_from_agent(
+        .add_claim(ClaimWrite::from_agent(
             "llm",
             AgentKind::Llm,
-            &format!("{tag}-llm"),
+            format!("{tag}-llm"),
             "prefers",
             "tabs",
             "chat",
-        )
+        ))
         .unwrap();
     store
         .ingest_extractor_facts(
             "extractor",
             AgentKind::ExternalTool,
             "scan",
+            "global",
             &[
                 ExtractorFact::new(format!("{tag}-ambiguous"), "relates_to", "something")
                     .with_provenance(Provenance::Ambiguous),
@@ -154,26 +158,32 @@ fn populate(dir: &Path, tag: &str) {
         .unwrap();
     // Duplicate and conflicting pairs for merge/supersede, a contradicted
     // claim for decay.
-    store.add_claim("dup", "depends_on", "x", "src1").unwrap();
-    store.add_claim("dup", "depends_on", "x", "src2").unwrap();
     store
-        .add_claim("conflict", "depends_on", "old", "src")
+        .add_claim(ClaimWrite::new("dup", "depends_on", "x", "src1"))
         .unwrap();
     store
-        .add_claim("conflict", "depends_on", "new", "src")
+        .add_claim(ClaimWrite::new("dup", "depends_on", "x", "src2"))
         .unwrap();
-    let weak = store.add_claim("weak", "depends_on", "y", "src").unwrap();
+    store
+        .add_claim(ClaimWrite::new("conflict", "prefers", "old", "src"))
+        .unwrap();
+    store
+        .add_claim(ClaimWrite::new("conflict", "prefers", "new", "src"))
+        .unwrap();
+    let weak = store
+        .add_claim(ClaimWrite::new("weak", "depends_on", "y", "src"))
+        .unwrap();
     store.add_contradiction(weak, "disputed").unwrap();
     store
         .contradict(
             user,
             "outdated",
-            Some(aver_core::NewClaim {
-                subject: &format!("{tag}-svc"),
-                predicate: "depends_on",
-                object: "Config:db2",
-                source: "review",
-            }),
+            Some(ClaimWrite::new(
+                format!("{tag}-svc"),
+                "depends_on",
+                "Config:db2",
+                "review",
+            )),
         )
         .unwrap();
     let report = store.consolidate_report().unwrap();
@@ -207,28 +217,40 @@ fn populate(dir: &Path, tag: &str) {
     for i in 0..3 {
         events.push(
             store
-                .record_event_with_scope(&session, "note", &format!("note {i}"), "src", "proj/aver")
+                .record_event(
+                    EventWrite::new(&session, "note", format!("note {i}"), "src")
+                        .scope("proj/aver"),
+                )
                 .unwrap(),
         );
     }
     for (i, event) in events.iter().enumerate() {
         store
-            .record_observation_with_scope(
-                &session,
-                &format!("observed {i}"),
-                ObservationRelevance::Low,
-                &[*event],
-                "manual",
-                "proj/aver",
+            .record_observation(
+                ObservationWrite::new(
+                    &session,
+                    format!("observed {i}"),
+                    ObservationRelevance::Low,
+                    &[*event],
+                    "manual",
+                )
+                .scope("proj/aver"),
             )
             .unwrap();
     }
     assert_eq!(store.prune_observations(&session, 1).unwrap(), 2);
     let promoted = store
-        .propose_candidate_claim_with_scope(events[0], "alpha", "depends_on", "beta", "proj/aver")
+        .propose_candidate_claim(
+            CandidateWrite::new(events[0], "alpha", "depends_on", "beta").scope("proj/aver"),
+        )
         .unwrap();
     let rejected = store
-        .propose_candidate_claim(events[1], "gamma", "depends_on", "delta")
+        .propose_candidate_claim(CandidateWrite::new(
+            events[1],
+            "gamma",
+            "depends_on",
+            "delta",
+        ))
         .unwrap();
     store.promote_candidate_claim(promoted).unwrap();
     store
@@ -246,7 +268,12 @@ fn populate(dir: &Path, tag: &str) {
 
     // A rejected write bumps the telemetry counter, which is not logged.
     store
-        .add_claim("key", "is", "-----BEGIN PRIVATE KEY-----", "src")
+        .add_claim(ClaimWrite::new(
+            "key",
+            "is",
+            "-----BEGIN PRIVATE KEY-----",
+            "src",
+        ))
         .expect_err("privacy filter must reject the secret");
     store.close().unwrap();
 }

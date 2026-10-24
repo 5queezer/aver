@@ -3,6 +3,7 @@
 //! T3 — get_claim returns full ADR-0003 metadata: provenance,
 //! confidence, status, and source_refs.
 
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite, RecallQuery};
 use aver_core::{ClaimStatus, Provenance, Store};
 
 #[test]
@@ -11,7 +12,12 @@ fn add_claim_appends_to_episodic_log_and_mirrors_to_sqlite() {
     let store = Store::open(dir.path()).unwrap();
 
     let claim_id = store
-        .add_claim("auth_service", "depends_on", "stripe_sdk", "test_session")
+        .add_claim(ClaimWrite::new(
+            "auth_service",
+            "depends_on",
+            "stripe_sdk",
+            "test_session",
+        ))
         .expect("add_claim should succeed");
 
     // SQLite mirror: claim is queryable by id, with the right s/p/o.
@@ -42,7 +48,7 @@ fn get_claim_returns_provenance_confidence_status_and_source_refs() {
     let store = Store::open(dir.path()).unwrap();
 
     let id = store
-        .add_claim("a", "rel", "b", "test_session")
+        .add_claim(ClaimWrite::new("a", "rel", "b", "test_session"))
         .expect("add_claim should succeed");
     let c = store
         .get_claim(id)
@@ -67,7 +73,7 @@ fn add_claim_log_entry_claim_id_matches_sqlite_row_id() {
     let store = Store::open(dir.path()).unwrap();
 
     let claim_id = store
-        .add_claim("a", "rel", "b", "test_session")
+        .add_claim(ClaimWrite::new("a", "rel", "b", "test_session"))
         .expect("add_claim should succeed");
 
     // SQLite row's id matches the value returned by add_claim.
@@ -90,14 +96,24 @@ fn recall_text_returns_claim_by_keyword() {
     let store = Store::open(dir.path()).unwrap();
 
     let auth_id = store
-        .add_claim("auth_service", "depends_on", "stripe_sdk", "test_session")
+        .add_claim(ClaimWrite::new(
+            "auth_service",
+            "depends_on",
+            "stripe_sdk",
+            "test_session",
+        ))
         .expect("add auth claim");
     store
-        .add_claim("billing_worker", "emits", "invoice_event", "test_session")
+        .add_claim(ClaimWrite::new(
+            "billing_worker",
+            "emits",
+            "invoice_event",
+            "test_session",
+        ))
         .expect("add billing claim");
 
     let matches = store
-        .recall_text("stripe")
+        .recall_text(RecallQuery::new("stripe"))
         .expect("recall_text should search stored claims");
 
     assert_eq!(matches.len(), 1);
@@ -112,16 +128,26 @@ fn recall_text_ranks_claims_by_multi_token_overlap() {
     let store = Store::open(dir.path()).unwrap();
 
     let language_id = store
-        .add_claim("project", "language", "Rust", "test_session")
+        .add_claim(ClaimWrite::new(
+            "project",
+            "language",
+            "Rust",
+            "test_session",
+        ))
         .unwrap();
     let name_id = store
-        .add_claim("project", "name", "Aver", "test_session")
+        .add_claim(ClaimWrite::new("project", "name", "Aver", "test_session"))
         .unwrap();
     store
-        .add_claim("meeting", "attendee", "Bob", "test_session")
+        .add_claim(ClaimWrite::new(
+            "meeting",
+            "attendee",
+            "Bob",
+            "test_session",
+        ))
         .unwrap();
 
-    let matches = store.recall_text("Aver project").unwrap();
+    let matches = store.recall_text(RecallQuery::new("Aver project")).unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -135,16 +161,28 @@ fn recall_text_filters_weak_compound_token_distractors() {
     let store = Store::open(dir.path()).unwrap();
 
     let language_id = store
-        .add_claim("project", "language", "Rust", "test_session")
+        .add_claim(ClaimWrite::new(
+            "project",
+            "language",
+            "Rust",
+            "test_session",
+        ))
         .unwrap();
     let name_id = store
-        .add_claim("project", "name", "Aver", "test_session")
+        .add_claim(ClaimWrite::new("project", "name", "Aver", "test_session"))
         .unwrap();
     store
-        .add_claim("project", "old_language", "Python", "test_session")
+        .add_claim(ClaimWrite::new(
+            "project",
+            "old_language",
+            "Python",
+            "test_session",
+        ))
         .unwrap();
 
-    let matches = store.recall_text("Aver language").unwrap();
+    let matches = store
+        .recall_text(RecallQuery::new("Aver language"))
+        .unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -158,16 +196,21 @@ fn recall_text_prefers_claims_covering_multiple_query_tokens() {
     let store = Store::open(dir.path()).unwrap();
 
     store
-        .add_claim("project", "language", "Rust", "test_session")
+        .add_claim(ClaimWrite::new(
+            "project",
+            "language",
+            "Rust",
+            "test_session",
+        ))
         .unwrap();
     store
-        .add_claim("user", "name", "Alice", "test_session")
+        .add_claim(ClaimWrite::new("user", "name", "Alice", "test_session"))
         .unwrap();
     let user_rust_id = store
-        .add_claim("user", "likes", "Rust", "test_session")
+        .add_claim(ClaimWrite::new("user", "likes", "Rust", "test_session"))
         .unwrap();
 
-    let matches = store.recall_text("Rust user").unwrap();
+    let matches = store.recall_text(RecallQuery::new("Rust user")).unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -181,16 +224,26 @@ fn recall_text_ranks_ambiguous_single_token_queries_deterministically() {
     let store = Store::open(dir.path()).unwrap();
 
     let project_rust_id = store
-        .add_claim("project", "language", "Rust", "test_session")
+        .add_claim(ClaimWrite::new(
+            "project",
+            "language",
+            "Rust",
+            "test_session",
+        ))
         .unwrap();
     let user_rust_id = store
-        .add_claim("user", "likes", "Rust", "test_session")
+        .add_claim(ClaimWrite::new("user", "likes", "Rust", "test_session"))
         .unwrap();
     let benchmark_rust_id = store
-        .add_claim("benchmark", "language", "Rust", "test_session")
+        .add_claim(ClaimWrite::new(
+            "benchmark",
+            "language",
+            "Rust",
+            "test_session",
+        ))
         .unwrap();
 
-    let matches = store.recall_text("Rust").unwrap();
+    let matches = store.recall_text(RecallQuery::new("Rust")).unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -204,16 +257,26 @@ fn recall_text_preserves_multi_answer_single_token_matches() {
     let store = Store::open(dir.path()).unwrap();
 
     let first = store
-        .add_claim("project", "language", "Rust", "test_session")
+        .add_claim(ClaimWrite::new(
+            "project",
+            "language",
+            "Rust",
+            "test_session",
+        ))
         .unwrap();
     let second = store
-        .add_claim("user", "likes", "Rust", "test_session")
+        .add_claim(ClaimWrite::new("user", "likes", "Rust", "test_session"))
         .unwrap();
     let third = store
-        .add_claim("benchmark", "language", "Rust", "test_session")
+        .add_claim(ClaimWrite::new(
+            "benchmark",
+            "language",
+            "Rust",
+            "test_session",
+        ))
         .unwrap();
 
-    let matches = store.recall_text("Rust").unwrap();
+    let matches = store.recall_text(RecallQuery::new("Rust")).unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -227,13 +290,20 @@ fn recall_text_singularizes_plural_query_tokens() {
     let store = Store::open(dir.path()).unwrap();
 
     let project_rust_id = store
-        .add_claim("project", "language", "Rust", "test_session")
+        .add_claim(ClaimWrite::new(
+            "project",
+            "language",
+            "Rust",
+            "test_session",
+        ))
         .unwrap();
     store
-        .add_claim("user", "likes", "Rust", "test_session")
+        .add_claim(ClaimWrite::new("user", "likes", "Rust", "test_session"))
         .unwrap();
 
-    let matches = store.recall_text("projects using Rust").unwrap();
+    let matches = store
+        .recall_text(RecallQuery::new("projects using Rust"))
+        .unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -247,13 +317,25 @@ fn recall_text_splits_camel_case_claim_tokens() {
     let store = Store::open(dir.path()).unwrap();
 
     let bench_name_id = store
-        .add_claim("benchmark", "name", "MemoryAgentBench", "test_session")
+        .add_claim(ClaimWrite::new(
+            "benchmark",
+            "name",
+            "MemoryAgentBench",
+            "test_session",
+        ))
         .unwrap();
     store
-        .add_claim("benchmark", "topic", "memory_recall", "test_session")
+        .add_claim(ClaimWrite::new(
+            "benchmark",
+            "topic",
+            "memory_recall",
+            "test_session",
+        ))
         .unwrap();
 
-    let matches = store.recall_text("memory agent bench benchmark").unwrap();
+    let matches = store
+        .recall_text(RecallQuery::new("memory agent bench benchmark"))
+        .unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -267,13 +349,25 @@ fn recall_text_matches_attendee_role_from_attends_query() {
     let store = Store::open(dir.path()).unwrap();
 
     let attendee_id = store
-        .add_claim("meeting", "attendee", "Bob", "test_session")
+        .add_claim(ClaimWrite::new(
+            "meeting",
+            "attendee",
+            "Bob",
+            "test_session",
+        ))
         .unwrap();
     store
-        .add_claim("meeting", "topic", "project_planning", "test_session")
+        .add_claim(ClaimWrite::new(
+            "meeting",
+            "topic",
+            "project_planning",
+            "test_session",
+        ))
         .unwrap();
 
-    let matches = store.recall_text("who attends meetings").unwrap();
+    let matches = store
+        .recall_text(RecallQuery::new("who attends meetings"))
+        .unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -287,13 +381,20 @@ fn recall_text_matches_acronym_claim_from_expanded_query() {
     let store = Store::open(dir.path()).unwrap();
 
     let mcp_id = store
-        .add_claim("protocol", "name", "MCP", "test_session")
+        .add_claim(ClaimWrite::new("protocol", "name", "MCP", "test_session"))
         .unwrap();
     store
-        .add_claim("protocol", "transport", "HTTP", "test_session")
+        .add_claim(ClaimWrite::new(
+            "protocol",
+            "transport",
+            "HTTP",
+            "test_session",
+        ))
         .unwrap();
 
-    let matches = store.recall_text("model context protocol").unwrap();
+    let matches = store
+        .recall_text(RecallQuery::new("model context protocol"))
+        .unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -307,13 +408,25 @@ fn recall_text_matches_camel_case_identifier_from_acronym_query() {
     let store = Store::open(dir.path()).unwrap();
 
     let bench_name_id = store
-        .add_claim("benchmark", "name", "MemoryAgentBench", "test_session")
+        .add_claim(ClaimWrite::new(
+            "benchmark",
+            "name",
+            "MemoryAgentBench",
+            "test_session",
+        ))
         .unwrap();
     store
-        .add_claim("benchmark", "topic", "memory_recall", "test_session")
+        .add_claim(ClaimWrite::new(
+            "benchmark",
+            "topic",
+            "memory_recall",
+            "test_session",
+        ))
         .unwrap();
 
-    let matches = store.recall_text("MAB benchmark").unwrap();
+    let matches = store
+        .recall_text(RecallQuery::new("MAB benchmark"))
+        .unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -327,13 +440,13 @@ fn recall_text_matches_versioned_acronym_identifier() {
     let store = Store::open(dir.path()).unwrap();
 
     store
-        .add_claim("protocol", "name", "MCP1", "test_session")
+        .add_claim(ClaimWrite::new("protocol", "name", "MCP1", "test_session"))
         .unwrap();
     let mcp2_id = store
-        .add_claim("protocol", "name", "MCP2", "test_session")
+        .add_claim(ClaimWrite::new("protocol", "name", "MCP2", "test_session"))
         .unwrap();
 
-    let matches = store.recall_text("MCP 2").unwrap();
+    let matches = store.recall_text(RecallQuery::new("MCP 2")).unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -347,13 +460,25 @@ fn recall_text_matches_versioned_camel_case_identifier() {
     let store = Store::open(dir.path()).unwrap();
 
     store
-        .add_claim("component", "name", "MemoryAgent1", "test_session")
+        .add_claim(ClaimWrite::new(
+            "component",
+            "name",
+            "MemoryAgent1",
+            "test_session",
+        ))
         .unwrap();
     let agent2_id = store
-        .add_claim("component", "name", "MemoryAgent2", "test_session")
+        .add_claim(ClaimWrite::new(
+            "component",
+            "name",
+            "MemoryAgent2",
+            "test_session",
+        ))
         .unwrap();
 
-    let matches = store.recall_text("memory agent 2").unwrap();
+    let matches = store
+        .recall_text(RecallQuery::new("memory agent 2"))
+        .unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -367,13 +492,20 @@ fn recall_text_matches_mixed_case_identifier_with_numeric_suffix() {
     let store = Store::open(dir.path()).unwrap();
 
     let oauth2_id = store
-        .add_claim("server", "supports", "OAuth2", "test_session")
+        .add_claim(ClaimWrite::new(
+            "server",
+            "supports",
+            "OAuth2",
+            "test_session",
+        ))
         .unwrap();
     store
-        .add_claim("server", "version", "2", "test_session")
+        .add_claim(ClaimWrite::new("server", "version", "2", "test_session"))
         .unwrap();
 
-    let matches = store.recall_text("OAuth 2 server").unwrap();
+    let matches = store
+        .recall_text(RecallQuery::new("OAuth 2 server"))
+        .unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -387,13 +519,18 @@ fn recall_text_matches_mixed_case_identifier_without_numeric_hint() {
     let store = Store::open(dir.path()).unwrap();
 
     let oauth2_id = store
-        .add_claim("server", "supports", "OAuth2", "test_session")
+        .add_claim(ClaimWrite::new(
+            "server",
+            "supports",
+            "OAuth2",
+            "test_session",
+        ))
         .unwrap();
     store
-        .add_claim("server", "version", "2", "test_session")
+        .add_claim(ClaimWrite::new("server", "version", "2", "test_session"))
         .unwrap();
 
-    let matches = store.recall_text("OAuth server").unwrap();
+    let matches = store.recall_text(RecallQuery::new("OAuth server")).unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -407,13 +544,15 @@ fn recall_text_singularizes_ies_plural_query_tokens() {
     let store = Store::open(dir.path()).unwrap();
 
     let company_id = store
-        .add_claim("company", "name", "Acme", "test_session")
+        .add_claim(ClaimWrite::new("company", "name", "Acme", "test_session"))
         .unwrap();
     store
-        .add_claim("user", "employer", "Acme", "test_session")
+        .add_claim(ClaimWrite::new("user", "employer", "Acme", "test_session"))
         .unwrap();
 
-    let matches = store.recall_text("companies named Acme").unwrap();
+    let matches = store
+        .recall_text(RecallQuery::new("companies named Acme"))
+        .unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -427,13 +566,20 @@ fn recall_text_matches_multi_digit_version_identifier() {
     let store = Store::open(dir.path()).unwrap();
 
     let oauth21_id = store
-        .add_claim("server", "supports", "OAuth21", "test_session")
+        .add_claim(ClaimWrite::new(
+            "server",
+            "supports",
+            "OAuth21",
+            "test_session",
+        ))
         .unwrap();
     store
-        .add_claim("server", "version", "2", "test_session")
+        .add_claim(ClaimWrite::new("server", "version", "2", "test_session"))
         .unwrap();
 
-    let matches = store.recall_text("OAuth 2 1 server").unwrap();
+    let matches = store
+        .recall_text(RecallQuery::new("OAuth 2 1 server"))
+        .unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -447,13 +593,20 @@ fn recall_text_matches_v_prefixed_version_query_to_compact_identifier() {
     let store = Store::open(dir.path()).unwrap();
 
     store
-        .add_claim("server", "version", "2", "test_session")
+        .add_claim(ClaimWrite::new("server", "version", "2", "test_session"))
         .unwrap();
     let oauth2_id = store
-        .add_claim("server", "supports", "OAuth2", "test_session")
+        .add_claim(ClaimWrite::new(
+            "server",
+            "supports",
+            "OAuth2",
+            "test_session",
+        ))
         .unwrap();
 
-    let matches = store.recall_text("supports OAuth v2").unwrap();
+    let matches = store
+        .recall_text(RecallQuery::new("supports OAuth v2"))
+        .unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -467,13 +620,15 @@ fn recall_text_normalizes_common_irregular_plural_query_tokens() {
     let store = Store::open(dir.path()).unwrap();
 
     store
-        .add_claim("user", "name", "Alice", "test_session")
+        .add_claim(ClaimWrite::new("user", "name", "Alice", "test_session"))
         .unwrap();
     let child_id = store
-        .add_claim("child", "name", "Alice", "test_session")
+        .add_claim(ClaimWrite::new("child", "name", "Alice", "test_session"))
         .unwrap();
 
-    let matches = store.recall_text("children Alice").unwrap();
+    let matches = store
+        .recall_text(RecallQuery::new("children Alice"))
+        .unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -487,13 +642,13 @@ fn recall_text_normalizes_people_plural_query_tokens() {
     let store = Store::open(dir.path()).unwrap();
 
     store
-        .add_claim("user", "name", "Alice", "test_session")
+        .add_claim(ClaimWrite::new("user", "name", "Alice", "test_session"))
         .unwrap();
     let person_id = store
-        .add_claim("person", "name", "Alice", "test_session")
+        .add_claim(ClaimWrite::new("person", "name", "Alice", "test_session"))
         .unwrap();
 
-    let matches = store.recall_text("people Alice").unwrap();
+    let matches = store.recall_text(RecallQuery::new("people Alice")).unwrap();
 
     assert_eq!(
         matches.iter().map(|claim| claim.id).collect::<Vec<_>>(),
@@ -506,7 +661,12 @@ fn claim_text_renders_subject_predicate_object_for_embedding() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let claim_id = store
-        .add_claim("auth_service", "depends_on", "stripe_sdk", "test_session")
+        .add_claim(ClaimWrite::new(
+            "auth_service",
+            "depends_on",
+            "stripe_sdk",
+            "test_session",
+        ))
         .unwrap();
 
     let claim = store.get_claim(claim_id).unwrap();
@@ -520,7 +680,12 @@ fn add_claim_records_default_agent_provenance() {
     let store = Store::open(dir.path()).unwrap();
 
     let claim_id = store
-        .add_claim("shared_mode", "tracks", "agent_provenance", "test_session")
+        .add_claim(ClaimWrite::new(
+            "shared_mode",
+            "tracks",
+            "agent_provenance",
+            "test_session",
+        ))
         .unwrap();
 
     let claim = store.get_claim(claim_id).unwrap();
@@ -536,14 +701,14 @@ fn add_claim_from_agent_records_explicit_agent_provenance() {
     let store = Store::open(dir.path()).unwrap();
 
     let claim_id = store
-        .add_claim_from_agent(
+        .add_claim(ClaimWrite::from_agent(
             "parser_agent",
             aver_core::AgentKind::DeterministicParser,
             "module",
             "defines",
             "SharedStore",
             "tree_sitter",
-        )
+        ))
         .unwrap();
 
     let claim = store.get_claim(claim_id).unwrap();
@@ -561,14 +726,14 @@ fn add_claim_from_llm_agent_applies_inferred_confidence_policy() {
     let store = Store::open(dir.path()).unwrap();
 
     let claim_id = store
-        .add_claim_from_agent(
+        .add_claim(ClaimWrite::from_agent(
             "summary_bot",
             aver_core::AgentKind::Llm,
             "project",
             "prefers",
             "offline_tests",
             "prose_extractor",
-        )
+        ))
         .unwrap();
 
     let claim = store.get_claim(claim_id).unwrap();
@@ -583,7 +748,12 @@ fn add_claim_records_last_verified_at_for_policy_scoring() {
     let store = Store::open(dir.path()).unwrap();
 
     let claim_id = store
-        .add_claim("project", "language", "Rust", "test_session")
+        .add_claim(ClaimWrite::new(
+            "project",
+            "language",
+            "Rust",
+            "test_session",
+        ))
         .unwrap();
     let claim = store.get_claim(claim_id).unwrap();
 
@@ -597,14 +767,14 @@ fn add_claim_from_agent_logs_agent_attribution_in_the_single_log() {
     let store = Store::open(dir.path()).unwrap();
 
     let claim_id = store
-        .add_claim_from_agent(
+        .add_claim(ClaimWrite::from_agent(
             "parser_agent",
             aver_core::AgentKind::DeterministicParser,
             "module",
             "defines",
             "SharedStore",
             "tree_sitter",
-        )
+        ))
         .unwrap();
 
     // ADR-0026: one log. Agent attribution lives on the record itself; no
@@ -626,14 +796,14 @@ fn add_claim_from_agent_rejects_path_like_agent_id() {
     let store = Store::open(dir.path()).unwrap();
 
     let err = store
-        .add_claim_from_agent(
+        .add_claim(ClaimWrite::from_agent(
             "../escape",
             aver_core::AgentKind::ExternalTool,
             "module",
             "defines",
             "UnsafeAgent",
             "test_session",
-        )
+        ))
         .unwrap_err();
 
     assert!(matches!(err, aver_core::Error::InvalidAgentId { .. }));
@@ -644,8 +814,12 @@ fn add_claim_from_agent_rejects_path_like_agent_id() {
 fn consolidate_supersedes_duplicate_claims() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    let first = store.add_claim("a", "rel", "b", "s1").unwrap();
-    let duplicate = store.add_claim("a", "rel", "b", "s2").unwrap();
+    let first = store
+        .add_claim(ClaimWrite::new("a", "rel", "b", "s1"))
+        .unwrap();
+    let duplicate = store
+        .add_claim(ClaimWrite::new("a", "rel", "b", "s2"))
+        .unwrap();
 
     let superseded = store.consolidate().unwrap();
 
@@ -661,8 +835,12 @@ fn consolidate_supersedes_duplicate_claims() {
 fn consolidate_merges_duplicate_source_refs_into_survivor() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    let first = store.add_claim("a", "rel", "b", "s1").unwrap();
-    store.add_claim("a", "rel", "b", "s2").unwrap();
+    let first = store
+        .add_claim(ClaimWrite::new("a", "rel", "b", "s1"))
+        .unwrap();
+    store
+        .add_claim(ClaimWrite::new("a", "rel", "b", "s2"))
+        .unwrap();
 
     store.consolidate().unwrap();
 
@@ -677,10 +855,10 @@ fn consolidate_supersedes_older_conflicting_claim() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let older = store
-        .add_claim("feature", "status", "planned", "s1")
+        .add_claim(ClaimWrite::new("feature", "prefers", "planned", "s1"))
         .unwrap();
     let newer = store
-        .add_claim("feature", "status", "shipped", "s2")
+        .add_claim(ClaimWrite::new("feature", "prefers", "shipped", "s2"))
         .unwrap();
 
     let superseded = store.consolidate().unwrap();
@@ -698,13 +876,23 @@ fn expand_walks_claim_graph_by_entity_and_predicate() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     store
-        .add_claim("PaymentGateway", "depends_on", "StripeSDK", "s1")
+        .add_claim(ClaimWrite::new(
+            "PaymentGateway",
+            "depends_on",
+            "StripeSDK",
+            "s1",
+        ))
         .unwrap();
     store
-        .add_claim("StripeSDK", "owned_by", "BillingTeam", "s2")
+        .add_claim(ClaimWrite::new(
+            "StripeSDK",
+            "owned_by",
+            "BillingTeam",
+            "s2",
+        ))
         .unwrap();
     store
-        .add_claim("Unrelated", "depends_on", "Other", "s3")
+        .add_claim(ClaimWrite::new("Unrelated", "depends_on", "Other", "s3"))
         .unwrap();
 
     let graph = store
@@ -742,7 +930,12 @@ fn add_claim_records_entities_with_fallback_and_prefix_types() {
     let store = Store::open(dir.path()).unwrap();
 
     store
-        .add_claim("Function:Store::add_claim", "calls", "append_jsonl", "s1")
+        .add_claim(ClaimWrite::new(
+            "Function:Store::add_claim",
+            "calls",
+            "append_jsonl",
+            "s1",
+        ))
         .unwrap();
 
     assert_eq!(
@@ -763,13 +956,28 @@ fn expand_predicate_filter_matches_descendant_predicates() {
     let store = Store::open(dir.path()).unwrap();
 
     store
-        .add_claim("PaymentGateway", "calls", "StripeSDK", "s1")
+        .add_claim(ClaimWrite::new(
+            "PaymentGateway",
+            "calls",
+            "StripeSDK",
+            "s1",
+        ))
         .unwrap();
     store
-        .add_claim("PaymentGateway", "imports", "HttpClient", "s2")
+        .add_claim(ClaimWrite::new(
+            "PaymentGateway",
+            "imports",
+            "HttpClient",
+            "s2",
+        ))
         .unwrap();
     store
-        .add_claim("PaymentGateway", "authored", "BillingTeam", "s3")
+        .add_claim(ClaimWrite::new(
+            "PaymentGateway",
+            "authored",
+            "BillingTeam",
+            "s3",
+        ))
         .unwrap();
 
     let graph = store
@@ -789,7 +997,12 @@ fn contradict_records_auditable_contradiction_without_deleting_claim() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let claim_id = store
-        .add_claim("stripe-python", "status", "deprecated", "s1")
+        .add_claim(ClaimWrite::new(
+            "stripe-python",
+            "status",
+            "deprecated",
+            "s1",
+        ))
         .unwrap();
 
     let contradiction = store
@@ -814,7 +1027,12 @@ fn confidence_decay_lowers_active_contradicted_claim_confidence() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let claim_id = store
-        .add_claim("stripe-python", "status", "deprecated", "s1")
+        .add_claim(ClaimWrite::new(
+            "stripe-python",
+            "status",
+            "deprecated",
+            "s1",
+        ))
         .unwrap();
     store
         .contradict(claim_id, "vendor docs say current", None)
@@ -831,16 +1049,36 @@ fn consolidate_report_counts_merged_superseded_and_decayed_claims() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let duplicate_a = store
-        .add_claim("PaymentGateway", "depends_on", "StripeSDK", "session-1")
+        .add_claim(ClaimWrite::new(
+            "PaymentGateway",
+            "depends_on",
+            "StripeSDK",
+            "session-1",
+        ))
         .unwrap();
     let duplicate_b = store
-        .add_claim("PaymentGateway", "depends_on", "StripeSDK", "session-2")
+        .add_claim(ClaimWrite::new(
+            "PaymentGateway",
+            "depends_on",
+            "StripeSDK",
+            "session-2",
+        ))
         .unwrap();
     let stale = store
-        .add_claim("StripeSDK", "status", "deprecated", "session-3")
+        .add_claim(ClaimWrite::new(
+            "StripeSDK",
+            "prefers",
+            "deprecated",
+            "session-3",
+        ))
         .unwrap();
     store
-        .add_claim("StripeSDK", "status", "current", "session-4")
+        .add_claim(ClaimWrite::new(
+            "StripeSDK",
+            "prefers",
+            "current",
+            "session-4",
+        ))
         .unwrap();
     store
         .contradict(stale, "vendor docs now say current", None)
@@ -872,7 +1110,7 @@ fn add_claim_rejects_empty_subject_before_log_write() {
     let store = Store::open(dir.path()).unwrap();
 
     let err = store
-        .add_claim(" ", "depends_on", "StripeSDK", "test")
+        .add_claim(ClaimWrite::new(" ", "depends_on", "StripeSDK", "test"))
         .expect_err("blank subjects should be rejected");
 
     assert!(err.to_string().contains("subject"));
@@ -889,7 +1127,7 @@ fn recall_text_rejects_empty_queries() {
     let store = Store::open(dir.path()).unwrap();
 
     let err = store
-        .recall_text(" ")
+        .recall_text(RecallQuery::new(" "))
         .expect_err("blank recall queries should be rejected");
 
     assert!(err.to_string().contains("query"));
@@ -900,7 +1138,12 @@ fn contradict_rejects_empty_reason() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let claim_id = store
-        .add_claim("PaymentGateway", "depends_on", "StripeSDK", "test")
+        .add_claim(ClaimWrite::new(
+            "PaymentGateway",
+            "depends_on",
+            "StripeSDK",
+            "test",
+        ))
         .unwrap();
 
     let err = store
@@ -1000,7 +1243,12 @@ fn add_claim_rejects_empty_source_before_log_write() {
     let store = Store::open(dir.path()).unwrap();
 
     let err = store
-        .add_claim("PaymentGateway", "depends_on", "StripeSDK", " ")
+        .add_claim(ClaimWrite::new(
+            "PaymentGateway",
+            "depends_on",
+            "StripeSDK",
+            " ",
+        ))
         .expect_err("blank claim sources should be rejected before audit logging");
 
     assert!(err.to_string().contains("source"));
@@ -1013,7 +1261,7 @@ fn migration_0009_rejects_out_of_range_confidence_and_invalid_status() {
     let store = Store::open(dir.path()).unwrap();
 
     let valid_id = store
-        .add_claim_with_confidence("a", "rel", "b", "test_session", 0.7)
+        .add_claim(ClaimWrite::new("a", "rel", "b", "test_session").confidence(0.7))
         .expect("confidence 0.7 should be accepted by triggers");
     assert_eq!(store.get_claim(valid_id).unwrap().confidence, 0.7);
 
@@ -1052,10 +1300,10 @@ fn promote_candidate_claim_records_last_verified_at_like_add_claim() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event_id = store
-        .record_event("session-1", "message", "payload", "test")
+        .record_event(EventWrite::new("session-1", "message", "payload", "test"))
         .unwrap();
     let candidate_id = store
-        .propose_candidate_claim(event_id, "project", "uses", "rust")
+        .propose_candidate_claim(CandidateWrite::new(event_id, "project", "uses", "rust"))
         .unwrap();
     let claim_id = store.promote_candidate_claim(candidate_id).unwrap();
 
@@ -1086,7 +1334,7 @@ fn add_claim_on_seedless_database_errors_instead_of_panicking() {
     drop(conn);
 
     let err = store
-        .add_claim("alpha", "uses", "beta", "test")
+        .add_claim(ClaimWrite::new("alpha", "uses", "beta", "test"))
         .expect_err("missing ontology seed must be a typed error, not a panic");
     assert!(
         matches!(err, aver_core::Error::MissingEntityType { name: "Thing" }),

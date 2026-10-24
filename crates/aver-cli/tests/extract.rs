@@ -59,9 +59,9 @@ fn extract_then_recall_returns_project_scoped_code_claims() {
         summary.contains("extract: scope=proj/fixture files_scanned=2 files_failed=0"),
         "{summary}"
     );
-    // Python `CsvReport(Report)` is an `extends` fact; core has no such
-    // predicate, so it is counted, not written.
-    assert!(summary.contains("skipped=extends:1,"), "{summary}");
+    // Python `CsvReport(Report)` is an `extends` fact; `extends` is a seeded
+    // predicate (child of depends_on), so it is written, not skipped.
+    assert!(!summary.contains("extends:"), "{summary}");
     let ingested: i64 = summary
         .split("facts_ingested=")
         .nth(1)
@@ -70,10 +70,18 @@ fn extract_then_recall_returns_project_scoped_code_claims() {
         .parse()
         .unwrap();
     assert!(ingested > 0, "{summary}");
+    let conn = rusqlite::Connection::open(memory.join("db.sqlite")).unwrap();
+    let extends: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM claims WHERE predicate = 'extends'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(extends, 1, "the inheritance edge must be written");
 
     // Every written claim is still ACTIVE, EXTRACTED at 0.90, in the project
     // scope: extract does not consolidate (see `ingest_extracted`).
-    let conn = rusqlite::Connection::open(memory.join("db.sqlite")).unwrap();
     let (active, total): (i64, i64) = conn
         .query_row(
             "SELECT SUM(status = 'ACTIVE' AND provenance = 'EXTRACTED'

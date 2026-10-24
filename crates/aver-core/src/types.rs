@@ -315,12 +315,196 @@ pub struct ContradictionRecord {
     pub created_at: i64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NewClaim<'a> {
-    pub subject: &'a str,
-    pub predicate: &'a str,
-    pub object: &'a str,
-    pub source: &'a str,
+/// One claim write (ADR-0026 one write path). Build with [`ClaimWrite::new`]
+/// (local human, USER_ASSERTED, 0.95, scope "global") or
+/// [`ClaimWrite::from_agent`], then override with the builder setters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaimWrite {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub source: String,
+    pub agent_id: String,
+    pub agent_kind: AgentKind,
+    pub provenance: Provenance,
+    pub confidence: f64,
+    /// ADR-0021 memory scope; `"global"` unless set.
+    pub scope: String,
+}
+
+impl ClaimWrite {
+    /// A USER_ASSERTED claim by the local human (`agent_id` "local",
+    /// confidence 0.95, scope "global").
+    pub fn new(
+        subject: impl Into<String>,
+        predicate: impl Into<String>,
+        object: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Self {
+        Self::from_agent(
+            "local",
+            AgentKind::Human,
+            subject,
+            predicate,
+            object,
+            source,
+        )
+    }
+
+    /// A claim attributed to `agent_id`/`agent_kind`, with the provenance and
+    /// policy confidence that kind implies (ADR-0003).
+    pub fn from_agent(
+        agent_id: impl Into<String>,
+        agent_kind: AgentKind,
+        subject: impl Into<String>,
+        predicate: impl Into<String>,
+        object: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Self {
+        let provenance = agent_kind.default_provenance();
+        Self {
+            subject: subject.into(),
+            predicate: predicate.into(),
+            object: object.into(),
+            source: source.into(),
+            agent_id: agent_id.into(),
+            agent_kind,
+            provenance,
+            confidence: provenance.policy_confidence(),
+            scope: "global".to_string(),
+        }
+    }
+
+    /// Override the provenance; the confidence follows the new provenance's
+    /// policy value unless [`ClaimWrite::confidence`] is set afterwards.
+    pub fn provenance(mut self, provenance: Provenance) -> Self {
+        self.provenance = provenance;
+        self.confidence = provenance.policy_confidence();
+        self
+    }
+
+    pub fn confidence(mut self, confidence: f64) -> Self {
+        self.confidence = confidence;
+        self
+    }
+
+    pub fn scope(mut self, scope: impl Into<String>) -> Self {
+        self.scope = scope.into();
+        self
+    }
+}
+
+/// One episodic event write (ADR-0014). Defaults: `agent_id` "local",
+/// `AgentKind::Human`, scope "global".
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventWrite {
+    pub session_id: String,
+    pub kind: String,
+    pub payload: String,
+    pub source: String,
+    pub agent_id: String,
+    pub agent_kind: AgentKind,
+    pub scope: String,
+}
+
+impl EventWrite {
+    pub fn new(
+        session_id: impl Into<String>,
+        kind: impl Into<String>,
+        payload: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            kind: kind.into(),
+            payload: payload.into(),
+            source: source.into(),
+            agent_id: "local".to_string(),
+            agent_kind: AgentKind::Human,
+            scope: "global".to_string(),
+        }
+    }
+
+    pub fn agent(mut self, agent_id: impl Into<String>, agent_kind: AgentKind) -> Self {
+        self.agent_id = agent_id.into();
+        self.agent_kind = agent_kind;
+        self
+    }
+
+    pub fn scope(mut self, scope: impl Into<String>) -> Self {
+        self.scope = scope.into();
+        self
+    }
+}
+
+/// One observation write (ADR-0016). The agent attribution comes from the
+/// first source event; scope defaults to "global".
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObservationWrite {
+    pub session_id: String,
+    pub content: String,
+    pub relevance: ObservationRelevance,
+    pub source_event_ids: Vec<i64>,
+    pub derivation: String,
+    pub scope: String,
+}
+
+impl ObservationWrite {
+    pub fn new(
+        session_id: impl Into<String>,
+        content: impl Into<String>,
+        relevance: ObservationRelevance,
+        source_event_ids: &[i64],
+        derivation: impl Into<String>,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            content: content.into(),
+            relevance,
+            source_event_ids: source_event_ids.to_vec(),
+            derivation: derivation.into(),
+            scope: "global".to_string(),
+        }
+    }
+
+    pub fn scope(mut self, scope: impl Into<String>) -> Self {
+        self.scope = scope.into();
+        self
+    }
+}
+
+/// One staged candidate claim (ADR-0005/0014), citing the event it was
+/// extracted from. Scope defaults to "global" and rides onto the promoted
+/// claim.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CandidateWrite {
+    pub event_id: i64,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub scope: String,
+}
+
+impl CandidateWrite {
+    pub fn new(
+        event_id: i64,
+        subject: impl Into<String>,
+        predicate: impl Into<String>,
+        object: impl Into<String>,
+    ) -> Self {
+        Self {
+            event_id,
+            subject: subject.into(),
+            predicate: predicate.into(),
+            object: object.into(),
+            scope: "global".to_string(),
+        }
+    }
+
+    pub fn scope(mut self, scope: impl Into<String>) -> Self {
+        self.scope = scope.into();
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -433,6 +617,44 @@ impl Default for RecallFilters {
             min_confidence: None,
             status: Some(ClaimStatus::Active),
         }
+    }
+}
+
+/// One keyword-recall request: the query text, the ADR-0021/0023 filters
+/// and an optional result cap. `RecallQuery::new(q)` reproduces the
+/// unfiltered, uncapped search.
+#[derive(Debug, Clone)]
+pub struct RecallQuery {
+    pub query: String,
+    pub filters: RecallFilters,
+    /// `None` returns every match in rank order.
+    pub top_k: Option<usize>,
+}
+
+impl RecallQuery {
+    pub fn new(query: impl Into<String>) -> Self {
+        Self {
+            query: query.into(),
+            filters: RecallFilters::default(),
+            top_k: None,
+        }
+    }
+
+    /// Restrict to `scope` under `walk` (keeps the other filters).
+    pub fn scope(mut self, scope: impl Into<String>, walk: ScopeWalk) -> Self {
+        self.filters.scope = scope.into();
+        self.filters.scope_walk = walk;
+        self
+    }
+
+    pub fn filters(mut self, filters: RecallFilters) -> Self {
+        self.filters = filters;
+        self
+    }
+
+    pub fn top_k(mut self, top_k: usize) -> Self {
+        self.top_k = Some(top_k);
+        self
     }
 }
 
@@ -592,6 +814,16 @@ pub enum AgentKind {
 }
 
 impl AgentKind {
+    /// Provenance a claim gets when its writer does not say otherwise
+    /// (ADR-0003 policy table).
+    pub fn default_provenance(self) -> Provenance {
+        match self {
+            Self::Human => Provenance::UserAsserted,
+            Self::DeterministicParser | Self::ExternalTool => Provenance::Extracted,
+            Self::Llm => Provenance::Inferred,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Human => "HUMAN",

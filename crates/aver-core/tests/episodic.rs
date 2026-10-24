@@ -1,4 +1,5 @@
 use aver_core::{AgentKind, MockObserver, ObservationDraft, ObservationRelevance, Store};
+use aver_core::{CandidateWrite, EventWrite, ObservationWrite, RecallQuery};
 use serde_json::Value;
 
 #[test]
@@ -7,12 +8,12 @@ fn record_event_persists_episode_event() {
     let store = Store::open(dir.path()).unwrap();
 
     let event_id = store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "user_message",
             "Remember that Aver should batch memory extraction.",
             "conversation",
-        )
+        ))
         .unwrap();
 
     let event = store.get_event(event_id).unwrap();
@@ -35,12 +36,12 @@ fn record_event_appends_to_episodic_log() {
     let store = Store::open(dir.path()).unwrap();
 
     let event_id = store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "explicit_remember",
             "Aver should not write durable memory after every message.",
             "conversation",
-        )
+        ))
         .unwrap();
 
     let log = std::fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
@@ -59,16 +60,21 @@ fn propose_candidate_claim_requires_event_provenance() {
     let store = Store::open(dir.path()).unwrap();
 
     let event_id = store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "user_message",
             "Aver should batch memory extraction.",
             "conversation",
-        )
+        ))
         .unwrap();
 
     let candidate_id = store
-        .propose_candidate_claim(event_id, "Aver", "concerns", "memory_extraction")
+        .propose_candidate_claim(CandidateWrite::new(
+            event_id,
+            "Aver",
+            "concerns",
+            "memory_extraction",
+        ))
         .unwrap();
 
     let candidate = store.get_candidate_claim(candidate_id).unwrap();
@@ -78,10 +84,15 @@ fn propose_candidate_claim_requires_event_provenance() {
     assert_eq!(candidate.predicate, "concerns");
     assert_eq!(candidate.object, "memory_extraction");
     assert_eq!(candidate.status, "PENDING");
-    assert!(store.recall_text("memory_extraction").unwrap().is_empty());
+    assert!(
+        store
+            .recall_text(RecallQuery::new("memory_extraction"))
+            .unwrap()
+            .is_empty()
+    );
 
     let err = store
-        .propose_candidate_claim(9999, "ghost", "has", "no_event")
+        .propose_candidate_claim(CandidateWrite::new(9999, "ghost", "has", "no_event"))
         .unwrap_err();
     assert!(matches!(
         err,
@@ -95,15 +106,20 @@ fn promote_candidate_claim_creates_durable_claim_with_event_source() {
     let store = Store::open(dir.path()).unwrap();
 
     let event_id = store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "user_message",
             "Aver should batch memory extraction.",
             "conversation",
-        )
+        ))
         .unwrap();
     let candidate_id = store
-        .propose_candidate_claim(event_id, "Aver", "concerns", "memory_extraction")
+        .propose_candidate_claim(CandidateWrite::new(
+            event_id,
+            "Aver",
+            "concerns",
+            "memory_extraction",
+        ))
         .unwrap();
 
     let claim_id = store.promote_candidate_claim(candidate_id).unwrap();
@@ -125,15 +141,15 @@ fn reject_candidate_claim_marks_rejected_with_reason() {
     let store = Store::open(dir.path()).unwrap();
 
     let event_id = store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "assistant_observation",
             "Maybe Aver uses Redis for storage.",
             "conversation",
-        )
+        ))
         .unwrap();
     let candidate_id = store
-        .propose_candidate_claim(event_id, "Aver", "uses", "Redis")
+        .propose_candidate_claim(CandidateWrite::new(event_id, "Aver", "uses", "Redis"))
         .unwrap();
 
     store
@@ -147,7 +163,12 @@ fn reject_candidate_claim_marks_rejected_with_reason() {
         candidate.rejection_reason,
         Some("unsupported by source".to_string())
     );
-    assert!(store.recall_text("Redis").unwrap().is_empty());
+    assert!(
+        store
+            .recall_text(RecallQuery::new("Redis"))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -156,15 +177,20 @@ fn promote_candidate_claim_twice_returns_existing_claim() {
     let store = Store::open(dir.path()).unwrap();
 
     let event_id = store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "explicit_remember",
             "Aver uses triggered episodic memory.",
             "conversation",
-        )
+        ))
         .unwrap();
     let candidate_id = store
-        .propose_candidate_claim(event_id, "Aver", "uses", "triggered_episodic_memory")
+        .propose_candidate_claim(CandidateWrite::new(
+            event_id,
+            "Aver",
+            "uses",
+            "triggered_episodic_memory",
+        ))
         .unwrap();
 
     let first_claim_id = store.promote_candidate_claim(candidate_id).unwrap();
@@ -173,7 +199,7 @@ fn promote_candidate_claim_twice_returns_existing_claim() {
     assert_eq!(second_claim_id, first_claim_id);
     assert_eq!(
         store
-            .recall_text("triggered_episodic_memory")
+            .recall_text(RecallQuery::new("triggered_episodic_memory"))
             .unwrap()
             .len(),
         1
@@ -188,12 +214,12 @@ fn should_extract_memories_triggers_on_explicit_remember_event() {
     assert!(!store.should_extract_memories("session-1", 3).unwrap());
 
     store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "explicit_remember",
             "Remember that Aver batches durable memory writes.",
             "conversation",
-        )
+        ))
         .unwrap();
 
     assert!(store.should_extract_memories("session-1", 3).unwrap());
@@ -205,22 +231,22 @@ fn should_extract_memories_triggers_on_event_count_threshold() {
     let store = Store::open(dir.path()).unwrap();
 
     store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "user_message",
             "first relevant fact",
             "conversation",
-        )
+        ))
         .unwrap();
     assert!(!store.should_extract_memories("session-1", 2).unwrap());
 
     store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "tool_result",
             "second relevant fact",
             "conversation",
-        )
+        ))
         .unwrap();
     assert!(store.should_extract_memories("session-1", 2).unwrap());
 }
@@ -231,7 +257,7 @@ fn record_event_rejects_empty_session_id_before_log_write() {
     let store = Store::open(dir.path()).unwrap();
 
     let err = store
-        .record_event(" ", "message", "hello", "test")
+        .record_event(EventWrite::new(" ", "message", "hello", "test"))
         .expect_err("blank session ids should be rejected");
 
     assert!(err.to_string().contains("session_id"));
@@ -247,11 +273,21 @@ fn propose_candidate_claim_rejects_empty_subject() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event_id = store
-        .record_event("s1", "message", "remember something", "test")
+        .record_event(EventWrite::new(
+            "s1",
+            "message",
+            "remember something",
+            "test",
+        ))
         .unwrap();
 
     let err = store
-        .propose_candidate_claim(event_id, " ", "depends_on", "StripeSDK")
+        .propose_candidate_claim(CandidateWrite::new(
+            event_id,
+            " ",
+            "depends_on",
+            "StripeSDK",
+        ))
         .expect_err("blank candidate subjects should be rejected");
 
     assert!(err.to_string().contains("subject"));
@@ -274,10 +310,20 @@ fn reject_candidate_claim_rejects_empty_reason() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event_id = store
-        .record_event("s1", "message", "remember something", "test")
+        .record_event(EventWrite::new(
+            "s1",
+            "message",
+            "remember something",
+            "test",
+        ))
         .unwrap();
     let candidate_id = store
-        .propose_candidate_claim(event_id, "PaymentGateway", "depends_on", "StripeSDK")
+        .propose_candidate_claim(CandidateWrite::new(
+            event_id,
+            "PaymentGateway",
+            "depends_on",
+            "StripeSDK",
+        ))
         .unwrap();
 
     let err = store
@@ -292,10 +338,20 @@ fn promote_candidate_claim_rejects_rejected_candidate() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event_id = store
-        .record_event("s1", "message", "remember something", "test")
+        .record_event(EventWrite::new(
+            "s1",
+            "message",
+            "remember something",
+            "test",
+        ))
         .unwrap();
     let candidate_id = store
-        .propose_candidate_claim(event_id, "PaymentGateway", "depends_on", "StripeSDK")
+        .propose_candidate_claim(CandidateWrite::new(
+            event_id,
+            "PaymentGateway",
+            "depends_on",
+            "StripeSDK",
+        ))
         .unwrap();
     store
         .reject_candidate_claim(candidate_id, "not supported by source")
@@ -313,10 +369,20 @@ fn reject_candidate_claim_rejects_promoted_candidate() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event_id = store
-        .record_event("s1", "message", "remember something", "test")
+        .record_event(EventWrite::new(
+            "s1",
+            "message",
+            "remember something",
+            "test",
+        ))
         .unwrap();
     let candidate_id = store
-        .propose_candidate_claim(event_id, "PaymentGateway", "depends_on", "StripeSDK")
+        .propose_candidate_claim(CandidateWrite::new(
+            event_id,
+            "PaymentGateway",
+            "depends_on",
+            "StripeSDK",
+        ))
         .unwrap();
     store.promote_candidate_claim(candidate_id).unwrap();
 
@@ -417,7 +483,7 @@ fn record_event_rejects_empty_source_before_log_write() {
     let store = Store::open(dir.path()).unwrap();
 
     let err = store
-        .record_event("session-1", "message", "hello", " ")
+        .record_event(EventWrite::new("session-1", "message", "hello", " "))
         .expect_err("blank event sources should be rejected before audit logging");
 
     assert!(err.to_string().contains("source"));
@@ -429,23 +495,20 @@ fn observer_projects_source_backed_observations() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let first = store
-        .record_event_from_agent(
-            "claude",
-            AgentKind::Llm,
-            "session-1",
-            "user_message",
-            "Use observation projections for compaction continuity.",
-            "conversation",
+        .record_event(
+            EventWrite::new(
+                "session-1",
+                "user_message",
+                "Use observation projections for compaction continuity.",
+                "conversation",
+            )
+            .agent("claude", AgentKind::Llm),
         )
         .unwrap();
     let second = store
-        .record_event_from_agent(
-            "claude",
-            AgentKind::Llm,
-            "session-1",
-            "tool_result",
-            "ADR-0016 was accepted.",
-            "tool",
+        .record_event(
+            EventWrite::new("session-1", "tool_result", "ADR-0016 was accepted.", "tool")
+                .agent("claude", AgentKind::Llm),
         )
         .unwrap();
 
@@ -475,13 +538,13 @@ fn record_observation_rejects_missing_event_provenance() {
     let store = Store::open(dir.path()).unwrap();
 
     let err = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "unsupported observation",
             ObservationRelevance::Medium,
             &[999],
             "mock-observer",
-        )
+        ))
         .expect_err("observations must cite existing events");
 
     assert!(err.to_string().contains("event"));
@@ -492,17 +555,22 @@ fn record_observation_applies_privacy_filter_before_persistence() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event = store
-        .record_event("session-1", "user_message", "safe payload", "conversation")
+        .record_event(EventWrite::new(
+            "session-1",
+            "user_message",
+            "safe payload",
+            "conversation",
+        ))
         .unwrap();
 
     let err = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz1234567890",
             ObservationRelevance::Critical,
             &[event],
             "mock-observer",
-        )
+        ))
         .expect_err("secret-bearing observations must be rejected");
 
     assert!(err.to_string().contains("privacy"));
@@ -519,10 +587,20 @@ fn coverage_reports_unobserved_events_for_session() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let first = store
-        .record_event("session-1", "user_message", "first fact", "conversation")
+        .record_event(EventWrite::new(
+            "session-1",
+            "user_message",
+            "first fact",
+            "conversation",
+        ))
         .unwrap();
     let second = store
-        .record_event("session-1", "tool_result", "second fact", "tool")
+        .record_event(EventWrite::new(
+            "session-1",
+            "tool_result",
+            "second fact",
+            "tool",
+        ))
         .unwrap();
 
     let initial = store.observation_coverage("session-1").unwrap();
@@ -531,13 +609,13 @@ fn coverage_reports_unobserved_events_for_session() {
     assert_eq!(initial.uncovered_event_ids, vec![first, second]);
 
     store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "The first event has been observed.",
             ObservationRelevance::Medium,
             &[first],
             "mock-observer",
-        )
+        ))
         .unwrap();
 
     let updated = store.observation_coverage("session-1").unwrap();
@@ -552,23 +630,38 @@ fn catch_up_observer_should_not_reobserve_already_covered_events_before_summary(
     let store = Store::open(dir.path()).unwrap();
 
     let first = store
-        .record_event("session-1", "user_message", "first fact", "conversation")
+        .record_event(EventWrite::new(
+            "session-1",
+            "user_message",
+            "first fact",
+            "conversation",
+        ))
         .unwrap();
     let second = store
-        .record_event("session-1", "tool_result", "second fact", "tool")
+        .record_event(EventWrite::new(
+            "session-1",
+            "tool_result",
+            "second fact",
+            "tool",
+        ))
         .unwrap();
     let third = store
-        .record_event("session-1", "assistant_observation", "third fact", "tool")
+        .record_event(EventWrite::new(
+            "session-1",
+            "assistant_observation",
+            "third fact",
+            "tool",
+        ))
         .unwrap();
 
     store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "Already covered event in baseline projection.",
             ObservationRelevance::High,
             &[second],
             "mock-observer",
-        )
+        ))
         .unwrap();
 
     let before = store.assemble_compaction_summary("session-1").unwrap();
@@ -597,21 +690,21 @@ fn recall_observation_returns_exact_source_events() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event = store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "tool_result",
             "Build failed: E0425 cannot find function assemble_compaction_summary.",
             "cargo test",
-        )
+        ))
         .unwrap();
     let observation_id = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "Build failed: E0425 cannot find function assemble_compaction_summary.",
             ObservationRelevance::High,
             &[event],
             "mock-observer",
-        )
+        ))
         .unwrap();
 
     let recalled = store.recall_observation(&observation_id).unwrap();
@@ -632,21 +725,21 @@ fn assemble_compaction_summary_mechanically_renders_observations() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event = store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "user_message",
             "Use observations.",
             "conversation",
-        )
+        ))
         .unwrap();
     store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "User asked Aver to use observations for session continuity.",
             ObservationRelevance::Medium,
             &[event],
             "mock-observer",
-        )
+        ))
         .unwrap();
 
     let summary = store.assemble_compaction_summary("session-1").unwrap();
@@ -662,38 +755,63 @@ fn assemble_compaction_summary_flags_uncovered_event_gaps_as_incomplete_continui
     let store = Store::open(dir.path()).unwrap();
 
     let first = store
-        .record_event("session-1", "user_message", "one", "conversation")
+        .record_event(EventWrite::new(
+            "session-1",
+            "user_message",
+            "one",
+            "conversation",
+        ))
         .unwrap();
     let second = store
-        .record_event("session-1", "user_message", "two", "conversation")
+        .record_event(EventWrite::new(
+            "session-1",
+            "user_message",
+            "two",
+            "conversation",
+        ))
         .unwrap();
     let third = store
-        .record_event("session-1", "user_message", "three", "conversation")
+        .record_event(EventWrite::new(
+            "session-1",
+            "user_message",
+            "three",
+            "conversation",
+        ))
         .unwrap();
     let fourth = store
-        .record_event("session-1", "user_message", "four", "conversation")
+        .record_event(EventWrite::new(
+            "session-1",
+            "user_message",
+            "four",
+            "conversation",
+        ))
         .unwrap();
     let fifth = store
-        .record_event("session-1", "user_message", "five", "conversation")
+        .record_event(EventWrite::new(
+            "session-1",
+            "user_message",
+            "five",
+            "conversation",
+        ))
         .unwrap();
 
     store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "Observed initial pair of events.",
             ObservationRelevance::High,
             &[first, second],
             "mock-observer",
-        )
+        ))
         .unwrap();
     store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "Observed final event only.",
             ObservationRelevance::High,
             &[fifth],
             "mock-observer",
-        )
+        ))
         .unwrap();
 
     let summary = store.assemble_compaction_summary("session-1").unwrap();
@@ -711,32 +829,47 @@ fn automatic_pruning_blocks_when_uncovered_gaps_remain_without_or_after_failed_c
     let store = Store::open(dir.path()).unwrap();
 
     let first = store
-        .record_event("session-1", "user_message", "one", "conversation")
+        .record_event(EventWrite::new(
+            "session-1",
+            "user_message",
+            "one",
+            "conversation",
+        ))
         .unwrap();
     let second = store
-        .record_event("session-1", "user_message", "two", "conversation")
+        .record_event(EventWrite::new(
+            "session-1",
+            "user_message",
+            "two",
+            "conversation",
+        ))
         .unwrap();
     let third = store
-        .record_event("session-1", "user_message", "three", "conversation")
+        .record_event(EventWrite::new(
+            "session-1",
+            "user_message",
+            "three",
+            "conversation",
+        ))
         .unwrap();
 
     let low = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "Observed first event only.",
             ObservationRelevance::Low,
             &[first],
             "mock-observer",
-        )
+        ))
         .unwrap();
     let high = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "Observed third event only.",
             ObservationRelevance::High,
             &[third],
             "mock-observer",
-        )
+        ))
         .unwrap();
 
     let pre_summary = store.assemble_compaction_summary("session-1").unwrap();
@@ -791,30 +924,30 @@ fn prune_observations_removes_lowest_relevance_projection_only() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event = store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "user_message",
             "Use observations.",
             "conversation",
-        )
+        ))
         .unwrap();
     let low = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "Routine status update.",
             ObservationRelevance::Low,
             &[event],
             "mock-observer",
-        )
+        ))
         .unwrap();
     let high = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "User decided observations must preserve source provenance.",
             ObservationRelevance::High,
             &[event],
             "mock-observer",
-        )
+        ))
         .unwrap();
 
     let pruned = store.prune_observations("session-1", 1).unwrap();
@@ -832,30 +965,30 @@ fn prune_observations_appends_tombstone_marker_and_preserves_original_observatio
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event = store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "user_message",
             "Use observations.",
             "conversation",
-        )
+        ))
         .unwrap();
     let low = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "Routine status update.",
             ObservationRelevance::Low,
             &[event],
             "mock-observer",
-        )
+        ))
         .unwrap();
     let high = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "User decided observations must preserve source provenance.",
             ObservationRelevance::High,
             &[event],
             "mock-observer",
-        )
+        ))
         .unwrap();
 
     let pruned = store.prune_observations("session-1", 1).unwrap();
@@ -912,30 +1045,30 @@ fn pruned_observations_are_hidden_from_list_and_compaction_summary() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event = store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "user_message",
             "Use observations.",
             "conversation",
-        )
+        ))
         .unwrap();
     let low = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "Routine status update.",
             ObservationRelevance::Low,
             &[event],
             "mock-observer",
-        )
+        ))
         .unwrap();
     let high = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "User decided observations must preserve source provenance.",
             ObservationRelevance::High,
             &[event],
             "mock-observer",
-        )
+        ))
         .unwrap();
 
     let pruned = store.prune_observations("session-1", 1).unwrap();
@@ -956,30 +1089,30 @@ fn recall_pruned_observation_includes_audit_marker_and_prune_status() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event = store
-        .record_event(
+        .record_event(EventWrite::new(
             "session-1",
             "tool_result",
             "Build failed: E0425 cannot find function assemble_compaction_summary.",
             "cargo test",
-        )
+        ))
         .unwrap();
     let low = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "Build failed: E0425 cannot find function assemble_compaction_summary.",
             ObservationRelevance::Low,
             &[event],
             "mock-observer",
-        )
+        ))
         .unwrap();
     let _high = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "Build stayed green after the observation layer shipped.",
             ObservationRelevance::High,
             &[event],
             "mock-observer",
-        )
+        ))
         .unwrap();
 
     let pruned = store.prune_observations("session-1", 1).unwrap();
@@ -1022,26 +1155,26 @@ fn record_observation_is_idempotent_for_identical_retry() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event_id = store
-        .record_event("session-1", "message", "payload", "test")
+        .record_event(EventWrite::new("session-1", "message", "payload", "test"))
         .unwrap();
 
     let first = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "continuity note",
             ObservationRelevance::High,
             &[event_id],
             "observer",
-        )
+        ))
         .unwrap();
     let second = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "continuity note",
             ObservationRelevance::High,
             &[event_id],
             "observer",
-        )
+        ))
         .unwrap();
 
     assert_eq!(first, second);
@@ -1065,16 +1198,16 @@ fn record_observation_detects_id_collision_instead_of_overwriting() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event_id = store
-        .record_event("session-1", "message", "payload", "test")
+        .record_event(EventWrite::new("session-1", "message", "payload", "test"))
         .unwrap();
     let id = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "continuity note",
             ObservationRelevance::High,
             &[event_id],
             "observer",
-        )
+        ))
         .unwrap();
 
     // Simulate a colliding row: same id, different content (the state an
@@ -1088,13 +1221,13 @@ fn record_observation_detects_id_collision_instead_of_overwriting() {
     drop(conn);
 
     let err = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "continuity note",
             ObservationRelevance::High,
             &[event_id],
             "observer",
-        )
+        ))
         .expect_err("a collision must error, not silently overwrite");
     assert!(
         matches!(err, aver_core::Error::ObservationIdCollision { .. }),

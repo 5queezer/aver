@@ -4,6 +4,7 @@
 //! concurrency, lenient replay, and the vector-chunk derived-projection
 //! boundary.
 
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -85,19 +86,21 @@ fn replay_preserves_scope_for_claims_events_observations() {
     let (claim_id, event_id, observation_id) = {
         let store = Store::open(dir.path()).unwrap();
         let claim_id = store
-            .add_claim_with_scope("alpha", "depends_on", "beta", "src", "project/sub")
+            .add_claim(ClaimWrite::new("alpha", "depends_on", "beta", "src").scope("project/sub"))
             .unwrap();
         let event_id = store
-            .record_event_with_scope("s1", "note", "payload", "src", "project/sub")
+            .record_event(EventWrite::new("s1", "note", "payload", "src").scope("project/sub"))
             .unwrap();
         let observation_id = store
-            .record_observation_with_scope(
-                "s1",
-                "an observation",
-                ObservationRelevance::High,
-                &[event_id],
-                "manual",
-                "project/sub",
+            .record_observation(
+                ObservationWrite::new(
+                    "s1",
+                    "an observation",
+                    ObservationRelevance::High,
+                    &[event_id],
+                    "manual",
+                )
+                .scope("project/sub"),
             )
             .unwrap();
         store.close().unwrap();
@@ -126,7 +129,7 @@ fn replay_preserves_retired_claim_status_and_reason() {
     let claim_id = {
         let store = Store::open(dir.path()).unwrap();
         let claim_id = store
-            .add_claim("alpha", "depends_on", "beta", "src")
+            .add_claim(ClaimWrite::new("alpha", "depends_on", "beta", "src"))
             .unwrap();
         store.retire_claim(claim_id, "superseded by docs").unwrap();
         store.close().unwrap();
@@ -159,19 +162,14 @@ fn replay_preserves_contradictions() {
     let (claim_a, claim_b) = {
         let store = Store::open(dir.path()).unwrap();
         let claim_a = store
-            .add_claim("alpha", "depends_on", "beta", "src")
+            .add_claim(ClaimWrite::new("alpha", "depends_on", "beta", "src"))
             .unwrap();
         // contradict with a replacement claim + a plain audit record.
         let record = store
             .contradict(
                 claim_a,
                 "outdated dependency",
-                Some(aver_core::NewClaim {
-                    subject: "alpha",
-                    predicate: "depends_on",
-                    object: "gamma",
-                    source: "review",
-                }),
+                Some(ClaimWrite::new("alpha", "depends_on", "gamma", "review")),
             )
             .unwrap();
         let claim_b = record.new_claim_id.unwrap();
@@ -197,12 +195,19 @@ fn replay_preserves_candidate_lifecycle() {
     let dir = tempfile::tempdir().unwrap();
     let (promoted_id, rejected_id, claim_id) = {
         let store = Store::open(dir.path()).unwrap();
-        let event_id = store.record_event("s1", "note", "payload", "src").unwrap();
+        let event_id = store
+            .record_event(EventWrite::new("s1", "note", "payload", "src"))
+            .unwrap();
         let promoted_id = store
-            .propose_candidate_claim(event_id, "alpha", "depends_on", "beta")
+            .propose_candidate_claim(CandidateWrite::new(event_id, "alpha", "depends_on", "beta"))
             .unwrap();
         let rejected_id = store
-            .propose_candidate_claim(event_id, "gamma", "depends_on", "delta")
+            .propose_candidate_claim(CandidateWrite::new(
+                event_id,
+                "gamma",
+                "depends_on",
+                "delta",
+            ))
             .unwrap();
         let claim_id = store.promote_candidate_claim(promoted_id).unwrap();
         store
@@ -235,28 +240,35 @@ fn replay_preserves_consolidation_outcome() {
     {
         let store = Store::open(dir.path()).unwrap();
         // Duplicate pair -> merge + supersede of the non-survivor.
-        store.add_claim("dup", "depends_on", "x", "src1").unwrap();
-        store.add_claim("dup", "depends_on", "x", "src2").unwrap();
-        // Conflict pair -> the older claim is superseded by the newer.
         store
-            .add_claim("conflict", "depends_on", "old", "src")
+            .add_claim(ClaimWrite::new("dup", "depends_on", "x", "src1"))
             .unwrap();
         store
-            .add_claim("conflict", "depends_on", "new", "src")
+            .add_claim(ClaimWrite::new("dup", "depends_on", "x", "src2"))
+            .unwrap();
+        // Conflict pair on a single-valued predicate -> the older claim is
+        // superseded by the newer.
+        store
+            .add_claim(ClaimWrite::new("conflict", "prefers", "old", "src"))
+            .unwrap();
+        store
+            .add_claim(ClaimWrite::new("conflict", "prefers", "new", "src"))
             .unwrap();
         // Contradicted claim -> decayed by consolidation.
-        let contradicted = store.add_claim("weak", "depends_on", "y", "src").unwrap();
+        let contradicted = store
+            .add_claim(ClaimWrite::new("weak", "depends_on", "y", "src"))
+            .unwrap();
         store.add_contradiction(contradicted, "disputed").unwrap();
         // INFERRED claim -> explicit exponential decay step.
         store
-            .add_claim_from_agent(
+            .add_claim(ClaimWrite::from_agent(
                 "agent-llm",
                 AgentKind::Llm,
                 "inferred",
                 "depends_on",
                 "z",
                 "chat",
-            )
+            ))
             .unwrap();
         let report = store.consolidate_report().unwrap();
         assert!(report.superseded >= 2 && report.decayed >= 1);
@@ -280,10 +292,17 @@ fn promote_rejects_unknown_predicate_before_logging() {
     {
         let store = Store::open(dir.path()).unwrap();
         let event_id = store
-            .record_event_from_agent("agent-llm", AgentKind::Llm, "s1", "note", "payload", "src")
+            .record_event(
+                EventWrite::new("s1", "note", "payload", "src").agent("agent-llm", AgentKind::Llm),
+            )
             .unwrap();
         let candidate_id = store
-            .propose_candidate_claim(event_id, "alpha", "definitely_not_a_predicate", "beta")
+            .propose_candidate_claim(CandidateWrite::new(
+                event_id,
+                "alpha",
+                "definitely_not_a_predicate",
+                "beta",
+            ))
             .unwrap();
         let err = store
             .promote_candidate_claim(candidate_id)
@@ -325,9 +344,11 @@ fn replay_preserves_promoted_claim_provenance() {
         let store = Store::open(dir.path()).unwrap();
         // HUMAN-authored event, but the candidate keeps the INFERRED default
         // provenance — replay must not derive USER_ASSERTED from agent_kind.
-        let event_id = store.record_event("s1", "note", "payload", "src").unwrap();
+        let event_id = store
+            .record_event(EventWrite::new("s1", "note", "payload", "src"))
+            .unwrap();
         let candidate_id = store
-            .propose_candidate_claim(event_id, "alpha", "depends_on", "beta")
+            .propose_candidate_claim(CandidateWrite::new(event_id, "alpha", "depends_on", "beta"))
             .unwrap();
         let claim_id = store.promote_candidate_claim(candidate_id).unwrap();
         store.close().unwrap();
@@ -351,10 +372,15 @@ fn replay_entity_typing_matches_live() {
     {
         let store = Store::open(dir.path()).unwrap();
         store
-            .add_claim("Service:api", "depends_on", "Config:db", "src")
+            .add_claim(ClaimWrite::new(
+                "Service:api",
+                "depends_on",
+                "Config:db",
+                "src",
+            ))
             .unwrap();
         store
-            .add_claim("plain-thing", "depends_on", "x", "src")
+            .add_claim(ClaimWrite::new("plain-thing", "depends_on", "x", "src"))
             .unwrap();
         store.close().unwrap();
     }
@@ -415,12 +441,12 @@ fn concurrent_writers_allocate_unique_claim_ids() {
             barrier.wait();
             for i in 0..25 {
                 store
-                    .add_claim(
-                        &format!("t{thread_index}-subject-{i}"),
+                    .add_claim(ClaimWrite::new(
+                        format!("t{thread_index}-subject-{i}"),
                         "depends_on",
                         "object",
                         "race-test",
-                    )
+                    ))
                     .unwrap();
             }
             store.close().unwrap();
@@ -537,7 +563,7 @@ fn vector_chunks_are_rebuilt_by_replay() {
     let (claim_id, chunk_id, plain_chunk_id) = {
         let store = Store::open(dir.path()).unwrap();
         let claim_id = store
-            .add_claim("alpha", "depends_on", "beta", "src")
+            .add_claim(ClaimWrite::new("alpha", "depends_on", "beta", "src"))
             .unwrap();
         let client = MockEmbeddingClient::new(vec![0.5; aver_core::VECTOR_INDEX_DIM]);
         let chunk_id = store
@@ -597,7 +623,12 @@ fn failed_claim_append_does_not_extend_ontology() {
     let store = Store::open(dir.path()).unwrap();
     std::fs::create_dir(dir.path().join("log.jsonl")).unwrap();
     store
-        .add_claim("alpha", "new_claim_predicate", "beta", "src")
+        .add_claim(ClaimWrite::new(
+            "alpha",
+            "new_claim_predicate",
+            "beta",
+            "src",
+        ))
         .expect_err("a directory at log.jsonl must make append fail");
 
     let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
@@ -652,9 +683,11 @@ fn failed_hyperedge_append_does_not_extend_ontology() {
 fn rejecting_candidate_twice_with_same_reason_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    let event_id = store.record_event("s1", "note", "payload", "src").unwrap();
+    let event_id = store
+        .record_event(EventWrite::new("s1", "note", "payload", "src"))
+        .unwrap();
     let candidate_id = store
-        .propose_candidate_claim(event_id, "alpha", "depends_on", "beta")
+        .propose_candidate_claim(CandidateWrite::new(event_id, "alpha", "depends_on", "beta"))
         .unwrap();
     store
         .reject_candidate_claim(candidate_id, "duplicate")
@@ -678,9 +711,11 @@ fn rejecting_candidate_twice_with_same_reason_is_idempotent() {
 fn rejecting_candidate_twice_with_different_reason_is_rejected_without_logging() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    let event_id = store.record_event("s1", "note", "payload", "src").unwrap();
+    let event_id = store
+        .record_event(EventWrite::new("s1", "note", "payload", "src"))
+        .unwrap();
     let candidate_id = store
-        .propose_candidate_claim(event_id, "alpha", "depends_on", "beta")
+        .propose_candidate_claim(CandidateWrite::new(event_id, "alpha", "depends_on", "beta"))
         .unwrap();
     store
         .reject_candidate_claim(candidate_id, "duplicate")

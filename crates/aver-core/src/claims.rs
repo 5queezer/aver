@@ -11,12 +11,16 @@ use crate::privacy::{PrivacyRejection, privacy_filter, privacy_filter_path};
 use crate::recall::{query_tokens_for_recall, recall_token_score};
 use crate::store::{Store, scope_filter_sql};
 use crate::types::{
-    AgentKind, Claim, ConsolidationReport, ContradictionRecord, ExtractorFact, NewClaim,
-    PredicateWalk, Provenance, RecallFilters, ScopeWalk,
+    AgentKind, Claim, ClaimWrite, ConsolidationReport, ContradictionRecord, ExtractorFact,
+    PredicateWalk, Provenance, RecallFilters, RecallQuery,
 };
 use crate::validation::{
     validate_agent_id, validate_claim_field, validate_contradiction_reason, validate_scope,
+    validate_top_k,
 };
+/// Bound parameters for a dynamically built claims query.
+pub(crate) type SqlParams = Vec<Box<dyn rusqlite::ToSql>>;
+
 type ClaimRow = (
     i64,
     String,
@@ -33,187 +37,40 @@ type ClaimRow = (
     String, // scope (ADR-0021)
 );
 
-struct ClaimWrite<'a> {
-    agent_id: &'a str,
-    agent_kind: AgentKind,
-    provenance: Provenance,
-    subject: &'a str,
-    predicate: &'a str,
-    object: &'a str,
-    source: &'a str,
-    confidence: f64,
-    /// ADR-0021 memory scope. `"global"` is the safe default that reproduces
-    /// pre-scope behavior verbatim.
-    scope: &'a str,
-}
-
-pub(crate) fn provenance_for_agent_kind(agent_kind: AgentKind) -> Provenance {
-    match agent_kind {
-        AgentKind::Human => Provenance::UserAsserted,
-        AgentKind::DeterministicParser | AgentKind::ExternalTool => Provenance::Extracted,
-        AgentKind::Llm => Provenance::Inferred,
-    }
-}
-
 impl Store {
-    /// Append a USER_ASSERTED claim. Pre-allocates the claim id, writes
-    /// the JSONL log line first (source of truth, ADR-0005), then mirrors
-    /// into SQLite with the same explicit id so audit replay can rebuild
-    /// the DB from the log without id drift.
-    /// Default confidence is 0.95 per ADR-0003's policy table.
-    pub fn add_claim(
-        &self,
-        subject: &str,
-        predicate: &str,
-        object: &str,
-        source: &str,
-    ) -> Result<i64, Error> {
-        self.add_claim_with_confidence(subject, predicate, object, source, 0.95)
+    /// Append one claim (ADR-0026 one write path): validate → privacy gate →
+    /// mint the id → log → apply. Build the write with [`ClaimWrite::new`]
+    /// or [`ClaimWrite::from_agent`] plus the builder setters.
+    pub fn add_claim(&self, write: ClaimWrite) -> Result<i64, Error> {
+        self.insert_claim(write)
     }
 
-    pub fn add_claim_with_confidence(
-        &self,
-        subject: &str,
-        predicate: &str,
-        object: &str,
-        source: &str,
-        confidence: f64,
-    ) -> Result<i64, Error> {
-        self.insert_claim(ClaimWrite {
-            agent_id: "local",
-            agent_kind: AgentKind::Human,
-            provenance: Provenance::UserAsserted,
-            subject,
-            predicate,
-            object,
-            source,
-            confidence,
-            scope: "global",
-        })
-    }
-
-    pub fn add_claim_from_agent(
-        &self,
-        agent_id: &str,
-        agent_kind: AgentKind,
-        subject: &str,
-        predicate: &str,
-        object: &str,
-        source: &str,
-    ) -> Result<i64, Error> {
-        let provenance = provenance_for_agent_kind(agent_kind);
-        self.insert_claim(ClaimWrite {
-            agent_id,
-            agent_kind,
-            provenance,
-            subject,
-            predicate,
-            object,
-            source,
-            confidence: provenance.policy_confidence(),
-            scope: "global",
-        })
-    }
-
-    /// ADR-0021: variant of `add_claim` that records under an explicit scope.
-    pub fn add_claim_with_scope(
-        &self,
-        subject: &str,
-        predicate: &str,
-        object: &str,
-        source: &str,
-        scope: &str,
-    ) -> Result<i64, Error> {
-        validate_scope(scope)?;
-        self.insert_claim(ClaimWrite {
-            agent_id: "local",
-            agent_kind: AgentKind::Human,
-            provenance: Provenance::UserAsserted,
-            subject,
-            predicate,
-            object,
-            source,
-            confidence: 0.95,
-            scope,
-        })
-    }
-
-    /// ADR-0021: variant of `add_claim_with_confidence` that records under an
-    /// explicit scope.
-    pub fn add_claim_with_confidence_and_scope(
-        &self,
-        subject: &str,
-        predicate: &str,
-        object: &str,
-        source: &str,
-        confidence: f64,
-        scope: &str,
-    ) -> Result<i64, Error> {
-        validate_scope(scope)?;
-        self.insert_claim(ClaimWrite {
-            agent_id: "local",
-            agent_kind: AgentKind::Human,
-            provenance: Provenance::UserAsserted,
-            subject,
-            predicate,
-            object,
-            source,
-            confidence,
-            scope,
-        })
-    }
-
-    /// ADR-0021: variant of `add_claim_from_agent` that records under an
-    /// explicit scope.
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_claim_from_agent_with_scope(
-        &self,
-        agent_id: &str,
-        agent_kind: AgentKind,
-        subject: &str,
-        predicate: &str,
-        object: &str,
-        source: &str,
-        scope: &str,
-    ) -> Result<i64, Error> {
-        validate_scope(scope)?;
-        let provenance = provenance_for_agent_kind(agent_kind);
-        self.insert_claim(ClaimWrite {
-            agent_id,
-            agent_kind,
-            provenance,
-            subject,
-            predicate,
-            object,
-            source,
-            confidence: provenance.policy_confidence(),
-            scope,
-        })
-    }
-
+    /// Ingest extractor facts under one agent attribution, source and scope,
+    /// then consolidate. A fact's explicit provenance overrides the
+    /// agent-kind default.
     pub fn ingest_extractor_facts(
         &self,
         agent_id: &str,
         agent_kind: AgentKind,
         source: &str,
+        scope: &str,
         facts: &[ExtractorFact],
     ) -> Result<Vec<i64>, Error> {
         let writes = facts
             .iter()
             .map(|fact| {
-                let provenance = fact
-                    .provenance
-                    .unwrap_or_else(|| provenance_for_agent_kind(agent_kind));
-                ClaimWrite {
+                let write = ClaimWrite::from_agent(
                     agent_id,
                     agent_kind,
-                    provenance,
-                    subject: &fact.subject,
-                    predicate: &fact.predicate,
-                    object: &fact.object,
+                    &fact.subject,
+                    &fact.predicate,
+                    &fact.object,
                     source,
-                    confidence: provenance.policy_confidence(),
-                    scope: "global",
+                )
+                .scope(scope);
+                match fact.provenance {
+                    Some(provenance) => write.provenance(provenance),
+                    None => write,
                 }
             })
             .collect::<Vec<_>>();
@@ -230,17 +87,18 @@ impl Store {
         Ok(ids)
     }
 
-    fn validate_claim_write(&self, write: &ClaimWrite<'_>) -> Result<(), Error> {
-        validate_claim_field("subject", write.subject)?;
-        validate_claim_field("predicate", write.predicate)?;
-        validate_claim_field("object", write.object)?;
-        validate_claim_field("source", write.source)?;
+    fn validate_claim_write(&self, write: &ClaimWrite) -> Result<(), Error> {
+        validate_claim_field("subject", &write.subject)?;
+        validate_claim_field("predicate", &write.predicate)?;
+        validate_claim_field("object", &write.object)?;
+        validate_claim_field("source", &write.source)?;
+        validate_scope(&write.scope)?;
         if !(0.0..=1.0).contains(&write.confidence) {
             return Err(Error::InvalidConfidence {
                 value: write.confidence,
             });
         }
-        validate_agent_id(write.agent_id)?;
+        validate_agent_id(&write.agent_id)?;
         if let Err(rejection) = privacy_filter(&format!(
             "{} {} {} {} {} {}",
             write.agent_id,
@@ -253,18 +111,17 @@ impl Store {
             self.record_privacy_rejection(rejection)?;
             return Err(Error::Privacy(rejection));
         }
-        for possible_path in [write.subject, write.object, write.source] {
+        for possible_path in [&write.subject, &write.object, &write.source] {
             self.privacy_filter_path_recording(possible_path)?;
         }
 
-        self.validate_ontology(write.predicate, write.provenance)
-            .map(|_| ())
+        self.validate_ontology(&write.predicate, write.provenance)
     }
 
     /// The one claim write path (ADR-0026): validate → privacy gate → mint
     /// the id → build the record → append it to the log → `apply` it to the
     /// projection, all inside one write transaction.
-    fn insert_claim(&self, write: ClaimWrite<'_>) -> Result<i64, Error> {
+    fn insert_claim(&self, write: ClaimWrite) -> Result<i64, Error> {
         self.validate_claim_write(&write)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
@@ -277,15 +134,15 @@ impl Store {
             let record = LogRecord::AddClaim {
                 ts: now,
                 claim_id,
-                subject: write.subject.to_string(),
-                predicate: write.predicate.to_string(),
-                object: write.object.to_string(),
-                source: write.source.to_string(),
-                agent_id: write.agent_id.to_string(),
+                subject: write.subject,
+                predicate: write.predicate,
+                object: write.object,
+                source: write.source,
+                agent_id: write.agent_id,
                 agent_kind: write.agent_kind.as_str().to_string(),
                 confidence: write.confidence,
                 provenance: Some(write.provenance.as_str().to_string()),
-                scope: write.scope.to_string(),
+                scope: write.scope,
             };
             append_jsonl(&self.log_path, &record)?;
             apply(&self.conn, &record)?;
@@ -461,15 +318,14 @@ impl Store {
         &self,
         claim_id: i64,
         reason: &str,
-        new_claim: Option<NewClaim<'_>>,
+        new_claim: Option<ClaimWrite>,
     ) -> Result<ContradictionRecord, Error> {
         self.ensure_claim_exists(claim_id)?;
         validate_contradiction_reason(reason)?;
         self.privacy_filter_recording(reason)?;
-        let new_claim_id = if let Some(claim) = new_claim {
-            Some(self.add_claim(claim.subject, claim.predicate, claim.object, claim.source)?)
-        } else {
-            None
+        let new_claim_id = match new_claim {
+            Some(claim) => Some(self.add_claim(claim)?),
+            None => None,
         };
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         // The contradiction id is writer-minted (ADR-0026) so the log record
@@ -684,10 +540,22 @@ impl Store {
                   ORDER BY id",
             )?;
             let duplicate_changed = self.supersede_claim_ids(&duplicate_ids, now)?;
+            // Only single-valued predicates (migration 0010 `cardinality`)
+            // treat a newer object as a replacement; multi-valued predicates
+            // such as `defines` or `calls` accumulate objects. Aliases follow
+            // the cardinality of the predicate they resolve to.
             let conflict_ids = self.claim_ids_matching(
                 "SELECT id
                    FROM claims
                   WHERE status = 'ACTIVE'
+                    AND predicate IN (
+                        SELECT name FROM predicate_types WHERE cardinality = 'single'
+                        UNION
+                        SELECT predicate_alias.alias
+                          FROM predicate_alias
+                          JOIN predicate_types ON predicate_types.id = predicate_alias.predicate_id
+                         WHERE predicate_types.cardinality = 'single'
+                    )
                     AND EXISTS (
                         SELECT 1
                           FROM claims newer
@@ -811,184 +679,43 @@ impl Store {
         }
     }
 
-    pub fn recall_text(&self, query: &str) -> Result<Vec<Claim>, Error> {
-        self.recall_text_inner(query, "global", ScopeWalk::Any)
+    /// Keyword recall with ADR-0021 scope and ADR-0023 typed filters.
+    /// `RecallQuery::new(q)` reproduces the unfiltered search; `top_k` caps
+    /// the ranked result.
+    pub fn recall_text(&self, query: RecallQuery) -> Result<Vec<Claim>, Error> {
+        let RecallQuery {
+            query,
+            filters,
+            top_k,
+        } = query;
+        if let Some(top_k) = top_k {
+            validate_top_k(top_k)?;
+        }
+        let mut claims = self.recall_text_with_filters(&query, filters)?;
+        if let Some(top_k) = top_k {
+            claims.truncate(top_k);
+        }
+        Ok(claims)
     }
 
-    /// ADR-0021: variant of `recall_text` that filters by `scope` per `walk`.
-    /// `scope_walk = Any` ignores the scope argument and reproduces today's
-    /// global-search behavior.
-    pub fn recall_text_with_scope(
-        &self,
-        query: &str,
-        scope: &str,
-        walk: ScopeWalk,
-    ) -> Result<Vec<Claim>, Error> {
-        validate_scope(scope)?;
-        self.recall_text_inner(query, scope, walk)
-    }
-
-    fn recall_text_inner(
-        &self,
-        query: &str,
-        scope: &str,
-        walk: ScopeWalk,
-    ) -> Result<Vec<Claim>, Error> {
-        let filters = RecallFilters {
-            scope: scope.to_string(),
-            scope_walk: walk,
-            ..RecallFilters::default()
-        };
-        self.recall_text_with_filters(query, filters)
-    }
-
-    /// ADR-0023: typed-filter recall. Combines scope (ADR-0021) with
-    /// agent_id, agent_kind, predicate (with closure walk), min_confidence,
-    /// and status filters. `RecallFilters::default()` reproduces today's
-    /// behavior verbatim.
-    pub fn recall_text_with_filters(
+    /// Combines scope (ADR-0021) with agent_id, agent_kind, predicate (with
+    /// closure walk), min_confidence and status filters (ADR-0023).
+    fn recall_text_with_filters(
         &self,
         query: &str,
         filters: RecallFilters,
     ) -> Result<Vec<Claim>, Error> {
-        validate_scope(&filters.scope)?;
-        if let Some(min) = filters.min_confidence
-            && !(0.0..=1.0).contains(&min)
-        {
-            return Err(Error::InvalidConfidence { value: min });
-        }
+        self.validate_filters(&filters)?;
         let query_tokens = query_tokens_for_recall(query);
         if query_tokens.is_empty() {
             return Err(Error::InvalidRecallQuery);
         }
-
-        let mut where_parts: Vec<String> = Vec::new();
-        let mut bind: Vec<String> = Vec::new();
-        let mut bind_f: Vec<f64> = Vec::new();
-
-        // Status filter (default ACTIVE; None = any).
-        if let Some(status) = filters.status {
-            where_parts.push("status = ?".to_string());
-            bind.push(status.as_str().to_string());
-        }
-        // Scope filter via the same helper as scope-only recall.
-        let (scope_clause, scope_params) = scope_filter_sql(&filters.scope, filters.scope_walk);
-        where_parts.push(scope_clause);
-        bind.extend(scope_params);
-        // Agent filters.
-        if let Some(agent_id) = &filters.agent_id {
-            where_parts.push("agent_id = ?".to_string());
-            bind.push(agent_id.clone());
-        }
-        if let Some(agent_kind) = filters.agent_kind {
-            where_parts.push("agent_kind = ?".to_string());
-            bind.push(agent_kind.as_str().to_string());
-        }
-        // Predicate filter, optionally walking ADR-0010's closure.
-        if let Some(predicate) = &filters.predicate {
-            match filters.predicate_walk {
-                PredicateWalk::Exact => {
-                    where_parts.push("predicate = ?".to_string());
-                    bind.push(predicate.clone());
-                }
-                PredicateWalk::Descendants => {
-                    let allowed = self.expand_predicate_filter(&[predicate.as_str()])?;
-                    if allowed.is_empty() {
-                        return Ok(Vec::new());
-                    }
-                    let placeholders = std::iter::repeat_n("?", allowed.len())
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    where_parts.push(format!("predicate IN ({placeholders})"));
-                    let mut allowed: Vec<String> = allowed.into_iter().collect();
-                    allowed.sort();
-                    bind.extend(allowed);
-                }
-            }
-        }
-        // Min confidence (separate from string binds because rusqlite types).
-        let confidence_clause = filters
-            .min_confidence
-            .map(|_| "confidence >= ?".to_string());
-        if let Some(c) = filters.min_confidence {
-            bind_f.push(c);
-        }
-        let mut where_sql = where_parts.join(" AND ");
-        if let Some(c) = confidence_clause {
-            where_sql.push_str(" AND ");
-            where_sql.push_str(&c);
-        }
-
-        let sql = format!(
-            "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs,
-                    agent_id, agent_kind, write_ts, last_verified_at, scope
-               FROM claims
-              WHERE {where_sql}
-              ORDER BY id"
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        // Build a mixed-type param list. rusqlite::params_from_iter requires
-        // a uniform type, so we collect into Box<dyn ToSql> values.
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        for s in bind {
-            params.push(Box::new(s));
-        }
-        for f in bind_f {
-            params.push(Box::new(f));
-        }
-        let rows = stmt.query_map(
-            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, f64>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, String>(8)?,
-                    row.get::<_, String>(9)?,
-                    row.get::<_, i64>(10)?,
-                    row.get::<_, Option<i64>>(11)?,
-                    row.get::<_, String>(12)?,
-                ))
-            },
-        )?;
+        let Some((where_sql, params)) = self.claim_filter_sql(&filters)? else {
+            return Ok(Vec::new());
+        };
 
         let mut scored_claims = Vec::new();
-        for row in rows {
-            let (
-                id,
-                subject,
-                predicate,
-                object,
-                provenance,
-                confidence,
-                status,
-                source_refs,
-                agent_id,
-                agent_kind,
-                write_ts,
-                last_verified_at,
-                scope,
-            ) = row?;
-            let claim = Claim {
-                id,
-                subject,
-                predicate,
-                object,
-                provenance: provenance.parse()?,
-                confidence,
-                status: status.parse()?,
-                source_refs: serde_json::from_str(&source_refs)?,
-                agent_id,
-                agent_kind: agent_kind.parse()?,
-                write_ts,
-                last_verified_at,
-                scope,
-            };
+        for claim in self.claims_where(&where_sql, params)? {
             let score = recall_token_score(&query_tokens, &claim);
             if score > 0 {
                 scored_claims.push((score, claim));
@@ -1033,6 +760,146 @@ impl Store {
                 .then_with(|| a_claim.id.cmp(&b_claim.id))
         });
         Ok(scored_claims.into_iter().map(|(_, claim)| claim).collect())
+    }
+
+    /// Range checks shared by every recall entry point.
+    pub(crate) fn validate_filters(&self, filters: &RecallFilters) -> Result<(), Error> {
+        validate_scope(&filters.scope)?;
+        if let Some(min) = filters.min_confidence
+            && !(0.0..=1.0).contains(&min)
+        {
+            return Err(Error::InvalidConfidence { value: min });
+        }
+        Ok(())
+    }
+
+    /// The `WHERE` fragment (and its bound params) that applies ADR-0021
+    /// scope and ADR-0023 typed filters to `claims`. `None` means no claim
+    /// can match (a predicate filter that expands to nothing).
+    pub(crate) fn claim_filter_sql(
+        &self,
+        filters: &RecallFilters,
+    ) -> Result<Option<(String, SqlParams)>, Error> {
+        let mut where_parts: Vec<String> = Vec::new();
+        let mut params: SqlParams = Vec::new();
+
+        // Status filter (default ACTIVE; None = any).
+        if let Some(status) = filters.status {
+            where_parts.push("status = ?".to_string());
+            params.push(Box::new(status.as_str().to_string()));
+        }
+        let (scope_clause, scope_params) = scope_filter_sql(&filters.scope, filters.scope_walk);
+        where_parts.push(scope_clause);
+        for param in scope_params {
+            params.push(Box::new(param));
+        }
+        if let Some(agent_id) = &filters.agent_id {
+            where_parts.push("agent_id = ?".to_string());
+            params.push(Box::new(agent_id.clone()));
+        }
+        if let Some(agent_kind) = filters.agent_kind {
+            where_parts.push("agent_kind = ?".to_string());
+            params.push(Box::new(agent_kind.as_str().to_string()));
+        }
+        // Predicate filter, optionally walking ADR-0010's closure.
+        if let Some(predicate) = &filters.predicate {
+            match filters.predicate_walk {
+                PredicateWalk::Exact => {
+                    where_parts.push("predicate = ?".to_string());
+                    params.push(Box::new(predicate.clone()));
+                }
+                PredicateWalk::Descendants => {
+                    let allowed = self.expand_predicate_filter(&[predicate.as_str()])?;
+                    if allowed.is_empty() {
+                        return Ok(None);
+                    }
+                    let placeholders = std::iter::repeat_n("?", allowed.len())
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    where_parts.push(format!("predicate IN ({placeholders})"));
+                    let mut allowed: Vec<String> = allowed.into_iter().collect();
+                    allowed.sort();
+                    for name in allowed {
+                        params.push(Box::new(name));
+                    }
+                }
+            }
+        }
+        if let Some(min) = filters.min_confidence {
+            where_parts.push("confidence >= ?".to_string());
+            params.push(Box::new(min));
+        }
+        Ok(Some((where_parts.join(" AND "), params)))
+    }
+
+    /// Load claims matching an arbitrary `WHERE` fragment, in id order.
+    pub(crate) fn claims_where(
+        &self,
+        where_sql: &str,
+        params: SqlParams,
+    ) -> Result<Vec<Claim>, Error> {
+        let sql = format!(
+            "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs,
+                    agent_id, agent_kind, write_ts, last_verified_at, scope
+               FROM claims
+              WHERE {where_sql}
+              ORDER BY id"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, f64>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, String>(12)?,
+                ))
+            },
+        )?;
+        let mut claims = Vec::new();
+        for row in rows {
+            let (
+                id,
+                subject,
+                predicate,
+                object,
+                provenance,
+                confidence,
+                status,
+                source_refs,
+                agent_id,
+                agent_kind,
+                write_ts,
+                last_verified_at,
+                scope,
+            ) = row?;
+            claims.push(Claim {
+                id,
+                subject,
+                predicate,
+                object,
+                provenance: provenance.parse()?,
+                confidence,
+                status: status.parse()?,
+                source_refs: serde_json::from_str(&source_refs)?,
+                agent_id,
+                agent_kind: agent_kind.parse()?,
+                write_ts,
+                last_verified_at,
+                scope,
+            });
+        }
+        Ok(claims)
     }
 
     /// ADR-0023: retire a claim by flipping its status to INVALIDATED.

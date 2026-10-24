@@ -17,7 +17,6 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::claims::provenance_for_agent_kind;
 use crate::error::Error;
 use crate::log::{Decision, LogRecord};
 use crate::ontology::ensure_entity_on;
@@ -78,7 +77,7 @@ pub(crate) fn apply(conn: &Connection, record: &LogRecord) -> Result<Applied, Er
                 Some(raw) => raw
                     .parse::<Provenance>()
                     .map_err(|_| invalid(format!("unknown 'provenance' value: {raw}")))?,
-                None => provenance_for_agent_kind(agent_kind),
+                None => agent_kind.default_provenance(),
             };
             add_claim(
                 conn,

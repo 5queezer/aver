@@ -1,3 +1,4 @@
+use aver_core::ClaimWrite;
 use aver_core::{Store, vector::MockEmbeddingClient};
 
 fn open_store() -> (Store, tempfile::TempDir) {
@@ -17,7 +18,9 @@ fn embedding_status_returns_zeros_on_empty_store() {
 #[test]
 fn embedding_status_shows_chunk_without_embedding() {
     let (store, _dir) = open_store();
-    let claim_id = store.add_claim("Aver", "uses", "SQLite", "test").unwrap();
+    let claim_id = store
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
+        .unwrap();
     store
         .add_vector_chunk(claim_id, "Aver uses SQLite", "nomic-embed-text")
         .unwrap();
@@ -30,7 +33,9 @@ fn embedding_status_shows_chunk_without_embedding() {
 #[test]
 fn backfill_fills_embeddings_with_mock_client() {
     let (store, _dir) = open_store();
-    let claim_id = store.add_claim("Aver", "uses", "SQLite", "test").unwrap();
+    let claim_id = store
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
+        .unwrap();
     store
         .add_vector_chunk(claim_id, "Aver uses SQLite", "nomic-embed-text")
         .unwrap();
@@ -47,7 +52,9 @@ fn backfill_fills_embeddings_with_mock_client() {
 #[test]
 fn backfill_skips_already_embedded_chunks() {
     let (store, _dir) = open_store();
-    let claim_id = store.add_claim("Aver", "uses", "SQLite", "test").unwrap();
+    let claim_id = store
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
+        .unwrap();
     let client = MockEmbeddingClient::new(vec![1.0, 0.0, 0.0]);
     store
         .add_embedded_vector_chunk_for_claim(claim_id, "nomic-embed-text", &client)
@@ -60,7 +67,9 @@ fn backfill_skips_already_embedded_chunks() {
 #[test]
 fn recall_text_with_embedding_returns_matching_claim() {
     let (store, _dir) = open_store();
-    let claim_id = store.add_claim("Aver", "prefers", "Rust", "test").unwrap();
+    let claim_id = store
+        .add_claim(ClaimWrite::new("Aver", "prefers", "Rust", "test"))
+        .unwrap();
     let client = MockEmbeddingClient::new(vec![1.0, 0.0, 0.0]);
     store
         .add_embedded_vector_chunk_for_claim(claim_id, "nomic-embed-text", &client)

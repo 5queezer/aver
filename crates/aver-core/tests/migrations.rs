@@ -2,6 +2,7 @@
 //! `claims` table exists. See ADR-0006 for the schema.
 
 use aver_core::Store;
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite};
 
 #[test]
 fn fresh_database_has_claims_table() {
@@ -768,7 +769,7 @@ fn contradiction_reason_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let claim_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("claim insert should succeed");
     drop(store);
 
@@ -792,7 +793,7 @@ fn contradiction_created_at_must_be_positive() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let claim_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("claim insert should succeed");
     drop(store);
 
@@ -816,7 +817,7 @@ fn contradiction_new_claim_must_not_equal_claim() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let claim_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("claim insert should succeed");
     drop(store);
 
@@ -861,7 +862,7 @@ fn contradiction_new_claim_id_must_be_positive_when_set() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let claim_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("claim insert should succeed");
     drop(store);
 
@@ -1070,7 +1071,7 @@ fn claims_source_refs_must_be_valid_json_array() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid source_refs produced by Store should insert");
     drop(store);
 
@@ -1108,7 +1109,7 @@ fn claims_source_refs_array_elements_must_be_text() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid source_refs produced by Store should insert");
     drop(store);
 
@@ -1137,7 +1138,7 @@ fn claims_source_refs_must_not_be_empty() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid source_refs produced by Store should insert");
     drop(store);
 
@@ -1160,7 +1161,7 @@ fn claims_source_refs_text_elements_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid source_refs produced by Store should insert");
     drop(store);
 
@@ -1183,7 +1184,7 @@ fn claims_source_refs_must_not_contain_duplicates() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid source_refs produced by Store should insert");
     drop(store);
 
@@ -1206,7 +1207,7 @@ fn claims_agent_id_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid claim should insert");
     drop(store);
 
@@ -1229,7 +1230,7 @@ fn claims_subject_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid claim should insert");
     drop(store);
 
@@ -1251,7 +1252,7 @@ fn claims_object_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid claim should insert");
     drop(store);
 
@@ -1270,7 +1271,7 @@ fn claims_predicate_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid claim should insert");
     drop(store);
 
@@ -1293,7 +1294,7 @@ fn claims_created_at_must_be_positive() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid claim should insert");
     drop(store);
 
@@ -1313,7 +1314,7 @@ fn claims_last_seen_at_must_be_positive() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid claim should insert");
     drop(store);
 
@@ -1336,7 +1337,7 @@ fn claims_last_seen_at_must_not_precede_created_at() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid claim should insert");
     drop(store);
 
@@ -1365,7 +1366,7 @@ fn claims_write_ts_must_be_positive() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid claim should insert");
     drop(store);
 
@@ -1384,7 +1385,7 @@ fn claims_created_at_must_not_precede_write_ts() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid claim should insert");
     drop(store);
 
@@ -1413,7 +1414,7 @@ fn claims_last_verified_at_must_be_positive_when_set() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid claim should insert");
     drop(store);
 
@@ -1442,7 +1443,7 @@ fn claims_last_verified_at_must_not_precede_created_at_when_set() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid claim should insert");
     drop(store);
 
@@ -1476,7 +1477,7 @@ fn claims_agent_id_allows_only_portable_identifier_chars() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let valid_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("valid claim should insert");
     drop(store);
 
@@ -1505,7 +1506,7 @@ fn candidate_claim_subject_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let event_id = store
-        .record_event("session-1", "message", "payload", "test")
+        .record_event(EventWrite::new("session-1", "message", "payload", "test"))
         .expect("event insert should succeed");
     drop(store);
 
@@ -1529,7 +1530,7 @@ fn candidate_claim_predicate_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let event_id = store
-        .record_event("session-1", "message", "payload", "test")
+        .record_event(EventWrite::new("session-1", "message", "payload", "test"))
         .expect("event insert should succeed");
     drop(store);
 
@@ -1553,7 +1554,7 @@ fn candidate_claim_object_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let event_id = store
-        .record_event("session-1", "message", "payload", "test")
+        .record_event(EventWrite::new("session-1", "message", "payload", "test"))
         .expect("event insert should succeed");
     drop(store);
 
@@ -1577,10 +1578,10 @@ fn rejected_candidate_claims_must_have_nonblank_reason() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let event_id = store
-        .record_event("session-1", "message", "payload", "test")
+        .record_event(EventWrite::new("session-1", "message", "payload", "test"))
         .expect("event insert should succeed");
     let candidate_id = store
-        .propose_candidate_claim(event_id, "Aver", "uses", "SQLite")
+        .propose_candidate_claim(CandidateWrite::new(event_id, "Aver", "uses", "SQLite"))
         .expect("candidate insert should succeed");
     drop(store);
 
@@ -1604,10 +1605,10 @@ fn promoted_candidate_claims_must_reference_claim() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let event_id = store
-        .record_event("session-1", "message", "payload", "test")
+        .record_event(EventWrite::new("session-1", "message", "payload", "test"))
         .expect("event insert should succeed");
     let candidate_id = store
-        .propose_candidate_claim(event_id, "Aver", "uses", "SQLite")
+        .propose_candidate_claim(CandidateWrite::new(event_id, "Aver", "uses", "SQLite"))
         .expect("candidate insert should succeed");
     drop(store);
 
@@ -1630,13 +1631,13 @@ fn rejected_candidate_claims_must_not_reference_promoted_claim() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let event_id = store
-        .record_event("session-1", "message", "payload", "test")
+        .record_event(EventWrite::new("session-1", "message", "payload", "test"))
         .expect("event insert should succeed");
     let candidate_id = store
-        .propose_candidate_claim(event_id, "Aver", "uses", "SQLite")
+        .propose_candidate_claim(CandidateWrite::new(event_id, "Aver", "uses", "SQLite"))
         .expect("candidate insert should succeed");
     let claim_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("claim insert should succeed");
     drop(store);
 
@@ -1661,13 +1662,13 @@ fn promoted_candidate_claims_must_not_have_rejection_reason() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let event_id = store
-        .record_event("session-1", "message", "payload", "test")
+        .record_event(EventWrite::new("session-1", "message", "payload", "test"))
         .expect("event insert should succeed");
     let candidate_id = store
-        .propose_candidate_claim(event_id, "Aver", "uses", "SQLite")
+        .propose_candidate_claim(CandidateWrite::new(event_id, "Aver", "uses", "SQLite"))
         .expect("candidate insert should succeed");
     let claim_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("claim insert should succeed");
     drop(store);
 
@@ -1692,10 +1693,10 @@ fn pending_candidate_claims_must_not_have_rejection_reason() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let event_id = store
-        .record_event("session-1", "message", "payload", "test")
+        .record_event(EventWrite::new("session-1", "message", "payload", "test"))
         .expect("event insert should succeed");
     let candidate_id = store
-        .propose_candidate_claim(event_id, "Aver", "uses", "SQLite")
+        .propose_candidate_claim(CandidateWrite::new(event_id, "Aver", "uses", "SQLite"))
         .expect("candidate insert should succeed");
     drop(store);
 
@@ -1718,13 +1719,13 @@ fn pending_candidate_claims_must_not_reference_promoted_claim() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let event_id = store
-        .record_event("session-1", "message", "payload", "test")
+        .record_event(EventWrite::new("session-1", "message", "payload", "test"))
         .expect("event insert should succeed");
     let candidate_id = store
-        .propose_candidate_claim(event_id, "Aver", "uses", "SQLite")
+        .propose_candidate_claim(CandidateWrite::new(event_id, "Aver", "uses", "SQLite"))
         .expect("candidate insert should succeed");
     let claim_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("claim insert should succeed");
     drop(store);
 
@@ -1747,7 +1748,7 @@ fn candidate_claim_created_at_must_be_positive() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let event_id = store
-        .record_event("session-1", "message", "payload", "test")
+        .record_event(EventWrite::new("session-1", "message", "payload", "test"))
         .expect("event insert should succeed");
     drop(store);
 
@@ -1792,10 +1793,10 @@ fn candidate_claim_promoted_claim_id_must_be_positive_when_set() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let event_id = store
-        .record_event("session-1", "message", "payload", "test")
+        .record_event(EventWrite::new("session-1", "message", "payload", "test"))
         .expect("event insert should succeed");
     let candidate_id = store
-        .propose_candidate_claim(event_id, "Aver", "uses", "SQLite")
+        .propose_candidate_claim(CandidateWrite::new(event_id, "Aver", "uses", "SQLite"))
         .expect("candidate insert should succeed");
     drop(store);
 
@@ -1820,16 +1821,21 @@ fn observations_source_event_ids_must_be_valid_json_array() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let event_id = store
-        .record_event("session-1", "user_message", "safe payload", "test")
+        .record_event(EventWrite::new(
+            "session-1",
+            "user_message",
+            "safe payload",
+            "test",
+        ))
         .expect("event insert should succeed");
     let observation_id = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session-1",
             "Aver remembers schema facts.",
             aver_core::ObservationRelevance::High,
             &[event_id],
             "observer",
-        )
+        ))
         .expect("valid source_event_ids produced by Store should insert");
     drop(store);
 
@@ -2158,7 +2164,7 @@ fn vector_chunk_embedding_json_must_be_null_or_json_array() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let claim_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("claim insert should succeed");
     store
         .add_vector_chunk(claim_id, "chunk without embedding", "nomic-embed-text")
@@ -2198,7 +2204,7 @@ fn vector_chunk_embedding_json_array_elements_must_be_numeric() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let claim_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("claim insert should succeed");
     drop(store);
 
@@ -2229,7 +2235,7 @@ fn vector_chunk_embedding_json_must_not_be_empty_array() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let claim_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("claim insert should succeed");
     drop(store);
 
@@ -2253,7 +2259,7 @@ fn vector_chunk_text_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let claim_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("claim insert should succeed");
     drop(store);
 
@@ -2277,7 +2283,7 @@ fn vector_chunk_embedding_model_must_not_be_blank() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let claim_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("claim insert should succeed");
     drop(store);
 
@@ -2301,7 +2307,7 @@ fn vector_chunk_created_at_must_be_positive() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
     let claim_id = store
-        .add_claim("Aver", "uses", "SQLite", "test")
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
         .expect("claim insert should succeed");
     drop(store);
 

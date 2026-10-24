@@ -1,3 +1,4 @@
+use aver_core::{EventWrite, ObservationWrite};
 use aver_core::{ObservationRelevance, Store};
 use aver_server::{
     auth::{AuthDb, hash_token},
@@ -180,22 +181,37 @@ async fn mcp_observation_coverage_requires_observations_read_scope() {
     let store = Store::open(dir.path().join("memory")).unwrap();
     let session_id = "obs-session";
     let first = store
-        .record_event(session_id, "message", "first build", "test")
+        .record_event(EventWrite::new(
+            session_id,
+            "message",
+            "first build",
+            "test",
+        ))
         .unwrap();
     let second = store
-        .record_event(session_id, "message", "second build", "test")
+        .record_event(EventWrite::new(
+            session_id,
+            "message",
+            "second build",
+            "test",
+        ))
         .unwrap();
     let third = store
-        .record_event(session_id, "message", "third build", "test")
+        .record_event(EventWrite::new(
+            session_id,
+            "message",
+            "third build",
+            "test",
+        ))
         .unwrap();
     let _ = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             session_id,
             "event 1 and 3 were summarized",
             ObservationRelevance::High,
             &[first, third],
             "spec test",
-        )
+        ))
         .unwrap();
 
     let resp = call_mcp_tool(
@@ -270,20 +286,20 @@ async fn mcp_compaction_summary_reports_uncovered_ranges_and_requires_observatio
     let store = Store::open(dir.path().join("memory")).unwrap();
     let session_id = "sum-session";
     let first = store
-        .record_event(session_id, "message", "first", "cli")
+        .record_event(EventWrite::new(session_id, "message", "first", "cli"))
         .unwrap();
     let second = store
-        .record_event(session_id, "message", "second", "cli")
+        .record_event(EventWrite::new(session_id, "message", "second", "cli"))
         .unwrap();
     let _ = first;
     let _ = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             session_id,
             "summary gap probe",
             ObservationRelevance::High,
             &[second],
             "spec test",
-        )
+        ))
         .unwrap();
 
     let resp = call_mcp_tool(
@@ -320,28 +336,38 @@ async fn mcp_recall_observation_surface_returns_audit_status_when_pruned() {
     let store = Store::open(dir.path().join("memory")).unwrap();
     let session_id = "audit-session";
     let event_a = store
-        .record_event(session_id, "tool_result", "low signal", "runner")
+        .record_event(EventWrite::new(
+            session_id,
+            "tool_result",
+            "low signal",
+            "runner",
+        ))
         .unwrap();
     let event_b = store
-        .record_event(session_id, "tool_result", "high signal", "runner")
+        .record_event(EventWrite::new(
+            session_id,
+            "tool_result",
+            "high signal",
+            "runner",
+        ))
         .unwrap();
     let low_id = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             session_id,
             "low-priority observation",
             ObservationRelevance::Low,
             &[event_a],
             "audit test",
-        )
+        ))
         .unwrap();
     let _ = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             session_id,
             "high-priority observation",
             ObservationRelevance::High,
             &[event_b],
             "audit test",
-        )
+        ))
         .unwrap();
 
     let pruned = store.prune_observations(session_id, 1).unwrap();

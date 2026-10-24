@@ -1,6 +1,7 @@
 //! ADR-0019 — operational policy: WAL checkpoint, vacuum, replay,
 //! log rotation, schema version.
 
+use aver_core::{ClaimWrite, EventWrite, ObservationWrite};
 use std::io::Write;
 
 use aver_core::{
@@ -16,12 +17,12 @@ fn open_sets_wal_autocheckpoint_to_4000() {
     // Write a few claims to make sure WAL is active.
     for i in 0..5 {
         store
-            .add_claim(
-                &format!("subj{i}"),
+            .add_claim(ClaimWrite::new(
+                format!("subj{i}"),
                 "rel",
-                &format!("obj{i}"),
+                format!("obj{i}"),
                 "test_session",
-            )
+            ))
             .unwrap();
     }
     let value = store
@@ -36,7 +37,12 @@ fn close_truncates_wal() {
     let store = Store::open(dir.path()).unwrap();
     for i in 0..50 {
         store
-            .add_claim(&format!("s{i}"), "p", &format!("o{i}"), "src")
+            .add_claim(ClaimWrite::new(
+                format!("s{i}"),
+                "p",
+                format!("o{i}"),
+                "src",
+            ))
             .unwrap();
     }
     store.close().expect("close should succeed");
@@ -62,7 +68,7 @@ fn fresh_open_sets_user_version_to_baseline_schema_version() {
     assert_eq!(v, aver_core::SCHEMA_VERSION);
     // 0001..0008 + the 0009 baseline (legacy 0009..0119). Bump this when a
     // new migrations/0010_*.sql lands.
-    assert_eq!(v, 119);
+    assert_eq!(v, 120);
 }
 
 #[test]
@@ -113,7 +119,12 @@ fn vacuum_runs_against_test_db() {
     let store = Store::open(dir.path()).unwrap();
     for i in 0..50 {
         store
-            .add_claim(&format!("s{i}"), "p", &format!("o{i}"), "src")
+            .add_claim(ClaimWrite::new(
+                format!("s{i}"),
+                "p",
+                format!("o{i}"),
+                "src",
+            ))
             .unwrap();
     }
     store.close().unwrap();
@@ -131,7 +142,12 @@ fn vacuum_into_writes_a_copy() {
     let store = Store::open(dir.path()).unwrap();
     for i in 0..10 {
         store
-            .add_claim(&format!("s{i}"), "p", &format!("o{i}"), "src")
+            .add_claim(ClaimWrite::new(
+                format!("s{i}"),
+                "p",
+                format!("o{i}"),
+                "src",
+            ))
             .unwrap();
     }
     store.close().unwrap();
@@ -231,26 +247,26 @@ fn replay_rebuilds_db_from_logs() {
     // Build a small db.
     let alpha_id = {
         let store = Store::open(dir.path()).unwrap();
-        let alpha_id = store.add_claim("alpha", "rel", "beta", "src").unwrap();
-        store.add_claim("gamma", "rel", "delta", "src").unwrap();
+        let alpha_id = store
+            .add_claim(ClaimWrite::new("alpha", "rel", "beta", "src"))
+            .unwrap();
+        store
+            .add_claim(ClaimWrite::new("gamma", "rel", "delta", "src"))
+            .unwrap();
         let event_id = store
-            .record_event_from_agent(
-                "local",
-                AgentKind::Human,
-                "session1",
-                "note",
-                "hello world",
-                "src",
+            .record_event(
+                EventWrite::new("session1", "note", "hello world", "src")
+                    .agent("local", AgentKind::Human),
             )
             .unwrap();
         store
-            .record_observation(
+            .record_observation(ObservationWrite::new(
                 "session1",
                 "an observation",
                 ObservationRelevance::Medium,
                 &[event_id],
                 "manual",
-            )
+            ))
             .unwrap();
         store.close().unwrap();
         alpha_id

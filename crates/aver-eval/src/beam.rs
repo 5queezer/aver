@@ -1,3 +1,4 @@
+use aver_core::ClaimWrite;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -493,12 +494,9 @@ impl BeamMemory<'_> {
             let embedding_text = safe_truncate(&object, 4096);
             match self {
                 Self::Direct(store) => {
-                    let id = store.add_claim_with_confidence(
-                        &subject,
-                        &predicate,
-                        &object,
-                        BEAM_SOURCE,
-                        BEAM_CLAIM_CONFIDENCE,
+                    let id = store.add_claim(
+                        ClaimWrite::new(&subject, &predicate, &object, BEAM_SOURCE)
+                            .confidence(BEAM_CLAIM_CONFIDENCE),
                     )?;
                     let embedding = embedder.embed(embedding_text)?;
                     store.add_vector_chunk_with_embedding(
@@ -548,7 +546,7 @@ impl BeamMemory<'_> {
     ) -> Result<Vec<(String, String)>> {
         match self {
             Self::Direct(store) => Ok(store
-                .recall_hybrid_claims_with_alpha(question, embedder, top_k, weights)?
+                .recall_hybrid_claims(question, embedder, top_k, weights)?
                 .into_iter()
                 .map(|claim| (claim.subject, claim.object))
                 .collect()),
@@ -722,10 +720,10 @@ enum BeamEmbeddingClient {
 impl BeamEmbeddingClient {
     fn from_config(config: &BeamRunConfig) -> Result<Self> {
         match config.provider {
-            BeamProvider::Ollama => Ok(Self::Ollama(OllamaEmbeddingClient::new(
-                &config.ollama_base_url,
-                &config.embedding_model,
-            ))),
+            BeamProvider::Ollama => Ok(Self::Ollama(
+                OllamaEmbeddingClient::new(&config.ollama_base_url, &config.embedding_model)
+                    .with_timeout(aver_core::vector::embedding_timeout_from_env()),
+            )),
             BeamProvider::OpenAi => Ok(Self::OpenAi(OpenAiEmbeddingClient::new(
                 &config.openai_base_url,
                 config

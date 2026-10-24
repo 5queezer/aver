@@ -1,5 +1,6 @@
 //! T72 — v0.4 starts with a pre-write privacy detector for obvious secrets.
 
+use aver_core::ClaimWrite;
 use aver_core::{Error, PrivacyRejection, Store, privacy_filter, privacy_filter_path};
 
 fn synthetic_token(parts: &[&str]) -> String {
@@ -144,7 +145,12 @@ fn add_claim_rejects_secret_before_episodic_log_write() {
     let store = Store::open(dir.path()).unwrap();
 
     let token = synthetic_token(&["AK", "IA", "ABCDEFGHIJKLMNOP"]);
-    let result = store.add_claim("deployment", "uses_key", &token, "test_session");
+    let result = store.add_claim(ClaimWrite::new(
+        "deployment",
+        "uses_key",
+        &token,
+        "test_session",
+    ));
 
     assert!(matches!(
         result,
@@ -165,7 +171,12 @@ fn privacy_rejection_telemetry_never_stores_secret_content() {
     let store = Store::open(dir.path()).unwrap();
 
     let token = synthetic_token(&["gh", "p_", "abcdefghijklmnopqrstuvwxyz1234567890abcd"]);
-    let _ = store.add_claim("deployment", "uses_key", &token, "test_session");
+    let _ = store.add_claim(ClaimWrite::new(
+        "deployment",
+        "uses_key",
+        &token,
+        "test_session",
+    ));
 
     let db_bytes = std::fs::read(dir.path().join("db.sqlite")).unwrap();
     let db_text = String::from_utf8_lossy(&db_bytes);

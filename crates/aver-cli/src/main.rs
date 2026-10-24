@@ -1,3 +1,4 @@
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite, RecallQuery};
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 
@@ -337,10 +338,10 @@ fn main() -> anyhow::Result<()> {
             scope,
         } => {
             let claim_id = match scope.as_deref() {
-                None => store.add_claim(&subject, &predicate, &object, &source)?,
-                Some(scope) => {
-                    store.add_claim_with_scope(&subject, &predicate, &object, &source, scope)?
-                }
+                None => store.add_claim(ClaimWrite::new(&subject, &predicate, &object, &source))?,
+                Some(scope) => store.add_claim(
+                    ClaimWrite::new(&subject, &predicate, &object, &source).scope(scope),
+                )?,
             };
             println!("claim_id={claim_id}");
         }
@@ -361,7 +362,7 @@ fn main() -> anyhow::Result<()> {
                 Some(s) => s.parse()?,
             };
             let scope = scope.as_deref().unwrap_or("global");
-            for claim in store.recall_text_with_scope(&query, scope, walk)? {
+            for claim in store.recall_text(RecallQuery::new(&query).scope(scope, walk))? {
                 println!(
                     "[{}] {} {} {}",
                     claim.scope, claim.subject, claim.predicate, claim.object
@@ -378,22 +379,14 @@ fn main() -> anyhow::Result<()> {
         } => {
             let source = source.as_deref().unwrap_or("cli");
             let event_id = match scope.as_deref() {
-                None => store.record_event_from_agent(
-                    "cli",
-                    AgentKind::Human,
-                    &session_id,
-                    &kind,
-                    &payload,
-                    source,
+                None => store.record_event(
+                    EventWrite::new(&session_id, &kind, &payload, source)
+                        .agent("cli", AgentKind::Human),
                 )?,
-                Some(scope) => store.record_event_from_agent_with_scope(
-                    "cli",
-                    AgentKind::Human,
-                    &session_id,
-                    &kind,
-                    &payload,
-                    source,
-                    scope,
+                Some(scope) => store.record_event(
+                    EventWrite::new(&session_id, &kind, &payload, source)
+                        .agent("cli", AgentKind::Human)
+                        .scope(scope),
                 )?,
             };
             println!("event_id={event_id}");
@@ -430,9 +423,11 @@ fn main() -> anyhow::Result<()> {
             scope,
         } => {
             let candidate_id = match scope.as_deref() {
-                None => store.propose_candidate_claim(event_id, &subject, &predicate, &object)?,
-                Some(scope) => store.propose_candidate_claim_with_scope(
-                    event_id, &subject, &predicate, &object, scope,
+                None => store.propose_candidate_claim(CandidateWrite::new(
+                    event_id, &subject, &predicate, &object,
+                ))?,
+                Some(scope) => store.propose_candidate_claim(
+                    CandidateWrite::new(event_id, &subject, &predicate, &object).scope(scope),
                 )?,
             };
             println!("candidate_id={candidate_id}");
@@ -504,16 +499,16 @@ fn main() -> anyhow::Result<()> {
                 .collect::<Result<_, _>>()
                 .map_err(|err| anyhow::anyhow!("invalid event id: {err}"))?;
             let id = match scope.as_deref() {
-                None => {
-                    store.record_observation(&session_id, &content, relevance, &ids, &derivation)?
-                }
-                Some(scope) => store.record_observation_with_scope(
+                None => store.record_observation(ObservationWrite::new(
                     &session_id,
                     &content,
                     relevance,
                     &ids,
                     &derivation,
-                    scope,
+                ))?,
+                Some(scope) => store.record_observation(
+                    ObservationWrite::new(&session_id, &content, relevance, &ids, &derivation)
+                        .scope(scope),
                 )?,
             };
             println!("observation_id={id}");
@@ -553,13 +548,13 @@ fn main() -> anyhow::Result<()> {
                     "Catch-up observation for session {session_id}: uncovered event ids {:?}; payloads: {payloads}",
                     coverage.uncovered_event_ids
                 );
-                let observation_id = store.record_observation(
+                let observation_id = store.record_observation(ObservationWrite::new(
                     &session_id,
                     &content,
                     ObservationRelevance::Medium,
                     &coverage.uncovered_event_ids,
                     "cli-catch-up",
-                )?;
+                ))?;
                 println!("observation_id={observation_id}");
             }
         }
@@ -625,20 +620,14 @@ fn main() -> anyhow::Result<()> {
             scope,
         } => {
             let id = match scope.as_deref() {
-                None => store.add_claim_with_confidence(
-                    &subject,
-                    &predicate,
-                    &object,
-                    &source,
-                    confidence.unwrap_or(0.95),
+                None => store.add_claim(
+                    ClaimWrite::new(&subject, &predicate, &object, &source)
+                        .confidence(confidence.unwrap_or(0.95)),
                 )?,
-                Some(scope) => store.add_claim_with_confidence_and_scope(
-                    &subject,
-                    &predicate,
-                    &object,
-                    &source,
-                    confidence.unwrap_or(0.95),
-                    scope,
+                Some(scope) => store.add_claim(
+                    ClaimWrite::new(&subject, &predicate, &object, &source)
+                        .confidence(confidence.unwrap_or(0.95))
+                        .scope(scope),
                 )?,
             };
             println!("triple_id={id}");
@@ -932,14 +921,16 @@ fn ingest_extracted(
     let mut privacy = 0;
     for file in &extraction.files {
         for fact in &file.facts {
-            match store.add_claim_from_agent_with_scope(
-                EXTRACT_AGENT_ID,
-                AgentKind::DeterministicParser,
-                &fact.subject,
-                &fact.predicate,
-                &fact.object,
-                &file.path,
-                scope,
+            match store.add_claim(
+                ClaimWrite::from_agent(
+                    EXTRACT_AGENT_ID,
+                    AgentKind::DeterministicParser,
+                    &fact.subject,
+                    &fact.predicate,
+                    &fact.object,
+                    &file.path,
+                )
+                .scope(scope),
             ) {
                 Ok(_) => ingested += 1,
                 Err(aver_core::Error::Privacy(_)) => privacy += 1,

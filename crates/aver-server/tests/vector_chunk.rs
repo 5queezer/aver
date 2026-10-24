@@ -18,6 +18,8 @@ fn add_vector_chunk_persists_and_is_retrievable() {
             confidence: None,
             source: "test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
 
@@ -46,6 +48,8 @@ fn add_vector_chunk_rejects_empty_text() {
             confidence: None,
             source: "test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
 
@@ -72,6 +76,8 @@ fn add_vector_chunk_rejects_secret_text() {
             confidence: None,
             source: "test".to_string(),
             scope: None,
+            agent_id: None,
+            agent_kind: None,
         })
         .unwrap();
 

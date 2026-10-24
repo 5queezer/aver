@@ -7,7 +7,8 @@
 //! - HybridRAG: `recall_hybrid_claims` produces the same ordering with the
 //!   new path (verified by the existing hybrid_retrieval suite).
 
-use aver_core::{Store, VECTOR_INDEX_DIM, vector::MockEmbeddingClient};
+use aver_core::ClaimWrite;
+use aver_core::{Store, VECTOR_INDEX_DIM, retrieval::HybridWeights, vector::MockEmbeddingClient};
 
 fn make_embedding(seed: f32) -> Vec<f32> {
     // Synthetic VECTOR_INDEX_DIM-long vector. The first slot dominates so
@@ -23,7 +24,9 @@ fn matching_dim_embeddings_populate_vec_index() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
 
-    let claim = store.add_claim("Aver", "uses", "SQLite", "test").unwrap();
+    let claim = store
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
+        .unwrap();
     let client = MockEmbeddingClient::new(make_embedding(1.0));
     store
         .add_embedded_vector_chunk_for_claim(claim, "nomic-embed-text", &client)
@@ -37,7 +40,9 @@ fn off_dim_embeddings_skip_vec_index_but_persist_in_chunks() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
 
-    let claim = store.add_claim("Aver", "uses", "SQLite", "test").unwrap();
+    let claim = store
+        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
+        .unwrap();
     // 3-dim mock — does not match VECTOR_INDEX_DIM = 768.
     let client = MockEmbeddingClient::new(vec![1.0, 0.0, 0.0]);
     store
@@ -55,9 +60,15 @@ fn knn_query_returns_nearest_neighbour_first() {
     let store = Store::open(dir.path()).unwrap();
 
     // Three synthetic claims with embeddings spaced along the first axis.
-    let near = store.add_claim("X", "is", "Near", "test").unwrap();
-    let mid = store.add_claim("X", "is", "Mid", "test").unwrap();
-    let far = store.add_claim("X", "is", "Far", "test").unwrap();
+    let near = store
+        .add_claim(ClaimWrite::new("X", "is", "Near", "test"))
+        .unwrap();
+    let mid = store
+        .add_claim(ClaimWrite::new("X", "is", "Mid", "test"))
+        .unwrap();
+    let far = store
+        .add_claim(ClaimWrite::new("X", "is", "Far", "test"))
+        .unwrap();
     for (claim, seed) in [(near, 1.0), (mid, 0.5), (far, 0.0)] {
         let client = MockEmbeddingClient::new(make_embedding(seed));
         store
@@ -69,7 +80,7 @@ fn knn_query_returns_nearest_neighbour_first() {
     // Query closest to seed=1.0 — `near` should rank first.
     let query_client = MockEmbeddingClient::new(make_embedding(1.0));
     let results = store
-        .recall_hybrid_claims("Near", &query_client, 3)
+        .recall_hybrid_claims("Near", &query_client, 3, HybridWeights::for_query("Near"))
         .unwrap();
     assert!(!results.is_empty());
     assert_eq!(results[0].id, near, "nearest neighbour should rank first");
@@ -140,7 +151,8 @@ fn migration_backfills_existing_vector_chunks_rows() {
              ALTER TABLE claims DROP COLUMN scope;
              ALTER TABLE episodic_events DROP COLUMN scope;
              ALTER TABLE observations DROP COLUMN scope;
-             ALTER TABLE candidate_claims DROP COLUMN scope;",
+             ALTER TABLE candidate_claims DROP COLUMN scope;
+             ALTER TABLE predicate_types DROP COLUMN cardinality;",
         )
         .unwrap();
         conn.pragma_update(None, "user_version", 9i64).unwrap();

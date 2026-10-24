@@ -8,6 +8,7 @@
 //! Read-path semantics (recall walk modes) are tested in a separate file
 //! once Task #3 lands.
 
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite, RecallQuery};
 use aver_core::{ObservationRelevance, Store};
 use rusqlite::Connection;
 
@@ -20,7 +21,9 @@ fn open_store() -> (tempfile::TempDir, Store) {
 #[test]
 fn claim_default_scope_is_global() {
     let (dir, store) = open_store();
-    let claim_id = store.add_claim("subj_a", "uses", "obj_a", "test").unwrap();
+    let claim_id = store
+        .add_claim(ClaimWrite::new("subj_a", "uses", "obj_a", "test"))
+        .unwrap();
 
     let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
     let scope: String = conn
@@ -35,7 +38,12 @@ fn claim_default_scope_is_global() {
 fn episodic_event_default_scope_is_global() {
     let (dir, store) = open_store();
     let event_id = store
-        .record_event("session_x", "user_message", "hello", "test")
+        .record_event(EventWrite::new(
+            "session_x",
+            "user_message",
+            "hello",
+            "test",
+        ))
         .unwrap();
 
     let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
@@ -53,16 +61,21 @@ fn episodic_event_default_scope_is_global() {
 fn observation_default_scope_is_global() {
     let (dir, store) = open_store();
     let event_id = store
-        .record_event("session_x", "user_message", "hello", "test")
+        .record_event(EventWrite::new(
+            "session_x",
+            "user_message",
+            "hello",
+            "test",
+        ))
         .unwrap();
     let obs_id = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session_x",
             "test obs",
             ObservationRelevance::Low,
             &[event_id],
             "test",
-        )
+        ))
         .unwrap();
 
     let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
@@ -80,10 +93,15 @@ fn observation_default_scope_is_global() {
 fn candidate_claim_default_scope_is_global() {
     let (dir, store) = open_store();
     let event_id = store
-        .record_event("session_x", "user_message", "hello", "test")
+        .record_event(EventWrite::new(
+            "session_x",
+            "user_message",
+            "hello",
+            "test",
+        ))
         .unwrap();
     let candidate_id = store
-        .propose_candidate_claim(event_id, "subj", "uses", "obj")
+        .propose_candidate_claim(CandidateWrite::new(event_id, "subj", "uses", "obj"))
         .unwrap();
 
     let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
@@ -204,9 +222,9 @@ fn claim_valid_path_scopes_accepted_by_trigger() {
 fn claim_struct_carries_scope_field() {
     let (_dir, store) = open_store();
     let _claim_id = store
-        .add_claim("scoped_subj", "uses", "scoped_obj", "test")
+        .add_claim(ClaimWrite::new("scoped_subj", "uses", "scoped_obj", "test"))
         .unwrap();
-    let claims = store.recall_text("scoped_subj").unwrap();
+    let claims = store.recall_text(RecallQuery::new("scoped_subj")).unwrap();
     let claim = claims
         .iter()
         .find(|c| c.subject == "scoped_subj")
@@ -218,7 +236,7 @@ fn claim_struct_carries_scope_field() {
 fn episodic_event_struct_carries_scope_field() {
     let (_dir, store) = open_store();
     let event_id = store
-        .record_event("session_y", "user_message", "hi", "test")
+        .record_event(EventWrite::new("session_y", "user_message", "hi", "test"))
         .unwrap();
     let event = store.get_event(event_id).unwrap();
     assert_eq!(
@@ -231,16 +249,16 @@ fn episodic_event_struct_carries_scope_field() {
 fn observation_struct_carries_scope_field() {
     let (_dir, store) = open_store();
     let event_id = store
-        .record_event("session_y", "user_message", "hi", "test")
+        .record_event(EventWrite::new("session_y", "user_message", "hi", "test"))
         .unwrap();
     let obs_id = store
-        .record_observation(
+        .record_observation(ObservationWrite::new(
             "session_y",
             "test obs",
             ObservationRelevance::Low,
             &[event_id],
             "test",
-        )
+        ))
         .unwrap();
     let recall = store.recall_observation(&obs_id).unwrap();
     assert_eq!(
@@ -253,10 +271,10 @@ fn observation_struct_carries_scope_field() {
 fn candidate_claim_struct_carries_scope_field() {
     let (_dir, store) = open_store();
     let event_id = store
-        .record_event("session_y", "user_message", "hi", "test")
+        .record_event(EventWrite::new("session_y", "user_message", "hi", "test"))
         .unwrap();
     let candidate_id = store
-        .propose_candidate_claim(event_id, "subj", "uses", "obj")
+        .propose_candidate_claim(CandidateWrite::new(event_id, "subj", "uses", "obj"))
         .unwrap();
     let candidate = store.get_candidate_claim(candidate_id).unwrap();
     assert_eq!(

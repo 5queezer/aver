@@ -1,14 +1,15 @@
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite, RecallQuery};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use aver_core::candidate_decision::CandidateTriage;
 use aver_core::decision::{DecisionClient, DecisionConfig, client_from_env};
 use aver_core::retrieval::HybridWeights;
-use aver_core::vector::{EmbeddingClient, EmbeddingError, VectorIndexConfig};
+use aver_core::vector::{EmbeddingClient, VectorIndexConfig};
 use aver_core::{
     AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, Error,
-    ExtractionTriggerReason, GraphPathQuery, NewClaim, Observation, ObservationCoverage,
-    ObservationRecall, ObservationRelevance, PredicateWalk, RecallFilters, ScopeWalk, Store,
+    ExtractionTriggerReason, GraphPathQuery, Observation, ObservationCoverage, ObservationRecall,
+    ObservationRelevance, PredicateWalk, RecallFilters, ScopeWalk, Store,
 };
 use aver_extractor::LANGUAGES;
 use aver_extractor::bridge::extract_tree;
@@ -19,12 +20,6 @@ use crate::recall_log::{RecallMissFilters, RecallMissLog, RecallRequestShape};
 /// Query-embedding client for hybrid recall (ADR-0004), built at the server
 /// edge. `None` keeps recall on the keyword path.
 pub type Embedder = Box<dyn EmbeddingClient + Send + Sync>;
-
-/// How many hybrid candidates core ranks before the server applies the
-/// ADR-0021/0023 filters and truncates to `top_k`. Core's vector half asks
-/// the `vec0` index for `4 * top_k` neighbours and sqlite-vec caps `k` at
-/// 4096, so 1024 is the largest pool that stays on the indexed path.
-const HYBRID_CANDIDATE_POOL: usize = 1024;
 
 /// Reads the embedding configuration once. `AVER_EMBEDDING_URL` (an Ollama
 /// base URL) opts in; `AVER_EMBEDDING_MODEL` overrides the
@@ -46,22 +41,17 @@ pub fn embedding_from_env() -> (Option<Embedder>, String) {
 
 #[cfg(feature = "ollama")]
 fn ollama_embedder(url: Option<String>, model: &str) -> Option<Embedder> {
-    url.map(|url| Box::new(aver_core::vector::OllamaEmbeddingClient::new(url, model)) as Embedder)
+    url.map(|url| {
+        Box::new(
+            aver_core::vector::OllamaEmbeddingClient::new(url, model)
+                .with_timeout(aver_core::vector::embedding_timeout_from_env()),
+        ) as Embedder
+    })
 }
 
 #[cfg(not(feature = "ollama"))]
 fn ollama_embedder(_url: Option<String>, _model: &str) -> Option<Embedder> {
     None
-}
-
-/// Hands core the query embedding the server already computed, so one recall
-/// embeds the query once even though claims and chunks are ranked separately.
-struct PrecomputedEmbedding<'a>(&'a [f32]);
-
-impl EmbeddingClient for PrecomputedEmbedding<'_> {
-    fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
-        Ok(self.0.to_vec())
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -202,6 +192,12 @@ pub struct AddTripleParams {
     /// ADR-0021 scope filter.
     #[serde(default)]
     pub scope: Option<String>,
+    /// Agent identifier to attribute the claim to. Defaults to the authenticated OAuth client id when used through MCP.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// Agent kind for attribution. One of HUMAN, LLM, DETERMINISTIC_PARSER, EXTERNAL_TOOL; defaults to HUMAN (a stated fact with explicit confidence).
+    #[serde(default)]
+    pub agent_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -214,6 +210,15 @@ pub struct ContradictNewClaimParams {
     pub object: String,
     /// Source for the replacement claim.
     pub source: String,
+    /// Agent identifier to attribute the claim to. Defaults to the authenticated OAuth client id when used through MCP.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// Agent kind for attribution. One of HUMAN, LLM, DETERMINISTIC_PARSER, EXTERNAL_TOOL.
+    #[serde(default)]
+    pub agent_kind: Option<String>,
+    /// ADR-0021 scope of the replacement claim. Defaults to the contradicted claim's scope.
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -832,21 +837,23 @@ impl AverTools {
 
     pub fn remember_claim(&self, params: RememberClaimParams) -> anyhow::Result<ClaimView> {
         let source = params.source.as_deref().unwrap_or("mcp");
-        let agent_id = params.agent_id.as_deref().unwrap_or("mcp");
-        let agent_kind = params
-            .agent_kind
-            .as_deref()
-            .unwrap_or("EXTERNAL_TOOL")
-            .parse::<AgentKind>()?;
+        let (agent_id, agent_kind) = mcp_agent(
+            params.agent_id.as_deref(),
+            params.agent_kind.as_deref(),
+            "mcp",
+            AgentKind::ExternalTool,
+        )?;
         let scope = params.scope.as_deref().unwrap_or("global");
-        let id = self.store.add_claim_from_agent_with_scope(
-            agent_id,
-            agent_kind,
-            &params.subject,
-            &params.predicate,
-            &params.object,
-            source,
-            scope,
+        let id = self.store.add_claim(
+            ClaimWrite::from_agent(
+                agent_id,
+                agent_kind,
+                &params.subject,
+                &params.predicate,
+                &params.object,
+                source,
+            )
+            .scope(scope),
         )?;
         Ok(self.store.get_claim(id)?.into())
     }
@@ -897,14 +904,16 @@ impl AverTools {
         if !params.dry_run {
             for file in &extraction.files {
                 for fact in &file.facts {
-                    match self.store.add_claim_from_agent_with_scope(
-                        &params.agent_id,
-                        AgentKind::DeterministicParser,
-                        &fact.subject,
-                        &fact.predicate,
-                        &fact.object,
-                        &file.path,
-                        &scope,
+                    match self.store.add_claim(
+                        ClaimWrite::from_agent(
+                            &params.agent_id,
+                            AgentKind::DeterministicParser,
+                            &fact.subject,
+                            &fact.predicate,
+                            &fact.object,
+                            &file.path,
+                        )
+                        .scope(&scope),
                     ) {
                         Ok(_) => ingested += 1,
                         Err(Error::Privacy(_)) => privacy += 1,
@@ -997,7 +1006,7 @@ impl AverTools {
                 Some((claims, chunks)) => (claims, chunks, "hybrid", Some(weights.alpha)),
                 None => (
                     self.store
-                        .recall_text_with_filters(&params.query, filters)?,
+                        .recall_text(RecallQuery::new(&params.query).filters(filters))?,
                     Vec::new(),
                     "keyword",
                     None,
@@ -1035,13 +1044,12 @@ impl AverTools {
     }
 
     /// ADR-0004 hybrid half of [`AverTools::recall`]: claims ranked by core's
-    /// `recall_hybrid_claims_with_alpha`, then filtered (core's hybrid recall
-    /// takes no ADR-0021/0023 filters) and truncated to `top_k`, plus the
+    /// `recall_hybrid_claims_with_filters` (scope, agent, predicate,
+    /// min_confidence and status filters applied in core), plus the
     /// vector-chunk texts of those claims ranked by similarity to the query.
     ///
     /// `Ok(None)` means "use the keyword path": no embedding client, no
-    /// embedded chunks, a status filter other than ACTIVE (core's hybrid
-    /// recall returns ACTIVE claims only), or the embedding call failed.
+    /// embedded chunks, or the embedding call failed.
     fn recall_hybrid(
         &self,
         query: &str,
@@ -1052,9 +1060,7 @@ impl AverTools {
         let Some(embedder) = self.embedder.as_deref() else {
             return Ok(None);
         };
-        if filters.status != Some(ClaimStatus::Active)
-            || self.store.vector_chunk_embedding_status()?.0 == 0
-        {
+        if self.store.vector_chunk_embedding_status()?.0 == 0 {
             return Ok(None);
         }
         let query_embedding = match embedder.embed(query) {
@@ -1064,20 +1070,13 @@ impl AverTools {
                 return Ok(None);
             }
         };
-        let mut claims = Vec::new();
-        for claim in self.store.recall_hybrid_claims_with_alpha(
+        let claims = self.store.recall_hybrid_claims_with_filters(
             query,
-            &PrecomputedEmbedding(&query_embedding),
-            HYBRID_CANDIDATE_POOL,
+            &query_embedding,
+            top_k,
             weights,
-        )? {
-            if self.claim_matches_filters(&claim, filters)? {
-                claims.push(claim);
-                if claims.len() == top_k {
-                    break;
-                }
-            }
-        }
+            filters,
+        )?;
         let mut chunks = Vec::new();
         for claim in &claims {
             for chunk in self.store.list_vector_chunks_for_claim(claim.id)? {
@@ -1095,39 +1094,6 @@ impl AverTools {
             claims,
             chunks.into_iter().map(|(_, _, text)| text).collect(),
         )))
-    }
-
-    /// Server-side mirror of the `recall_text_with_filters` WHERE clause for
-    /// hybrid results. Status is not checked: hybrid recall only runs for the
-    /// ACTIVE filter and core returns ACTIVE claims only.
-    fn claim_matches_filters(
-        &self,
-        claim: &Claim,
-        filters: &RecallFilters,
-    ) -> anyhow::Result<bool> {
-        if !scope_matches(&claim.scope, &filters.scope, filters.scope_walk)
-            || filters
-                .agent_id
-                .as_ref()
-                .is_some_and(|id| *id != claim.agent_id)
-            || filters
-                .agent_kind
-                .is_some_and(|kind| kind != claim.agent_kind)
-            || filters
-                .min_confidence
-                .is_some_and(|min| claim.confidence < min)
-        {
-            return Ok(false);
-        }
-        Ok(match filters.predicate.as_deref() {
-            None => true,
-            Some(predicate) if claim.predicate == predicate => true,
-            Some(predicate) => {
-                filters.predicate_walk == PredicateWalk::Descendants
-                    && !predicate.trim().is_empty()
-                    && self.store.predicate_implies(&claim.predicate, predicate)?
-            }
-        })
     }
 
     pub fn expand(&self, params: ExpandParams) -> anyhow::Result<GraphView> {
@@ -1226,14 +1192,23 @@ impl AverTools {
     }
 
     pub fn add_triple(&self, params: AddTripleParams) -> anyhow::Result<AddTripleView> {
-        let scope = params.scope.as_deref().unwrap_or("global");
-        let id = self.store.add_claim_with_confidence_and_scope(
-            &params.subject,
-            &params.predicate,
-            &params.object,
-            &params.source,
-            params.confidence.unwrap_or(0.95),
-            scope,
+        let (agent_id, agent_kind) = mcp_agent(
+            params.agent_id.as_deref(),
+            params.agent_kind.as_deref(),
+            "local",
+            AgentKind::Human,
+        )?;
+        let id = self.store.add_claim(
+            ClaimWrite::from_agent(
+                agent_id,
+                agent_kind,
+                &params.subject,
+                &params.predicate,
+                &params.object,
+                &params.source,
+            )
+            .confidence(params.confidence.unwrap_or(0.95))
+            .scope(params.scope.as_deref().unwrap_or("global")),
         )?;
         Ok(AddTripleView {
             triple_id: id,
@@ -1242,12 +1217,34 @@ impl AverTools {
     }
 
     pub fn contradict(&self, params: ContradictParams) -> anyhow::Result<ContradictionView> {
-        let new_claim = params.new_claim.as_ref().map(|claim| NewClaim {
-            subject: claim.subject.as_str(),
-            predicate: claim.predicate.as_str(),
-            object: claim.object.as_str(),
-            source: claim.source.as_str(),
-        });
+        let new_claim = match params.new_claim.as_ref() {
+            None => None,
+            Some(claim) => {
+                let (agent_id, agent_kind) = mcp_agent(
+                    claim.agent_id.as_deref(),
+                    claim.agent_kind.as_deref(),
+                    "local",
+                    AgentKind::Human,
+                )?;
+                // The replacement inherits the contradicted claim's scope
+                // unless the caller says otherwise.
+                let scope = match claim.scope.as_deref() {
+                    Some(scope) => scope.to_string(),
+                    None => self.store.get_claim(params.triple_id)?.scope,
+                };
+                Some(
+                    ClaimWrite::from_agent(
+                        agent_id,
+                        agent_kind,
+                        &claim.subject,
+                        &claim.predicate,
+                        &claim.object,
+                        &claim.source,
+                    )
+                    .scope(scope),
+                )
+            }
+        };
         Ok(self
             .store
             .contradict(params.triple_id, &params.reason, new_claim)?
@@ -1277,14 +1274,10 @@ impl AverTools {
             .unwrap_or("EXTERNAL_TOOL")
             .parse::<AgentKind>()?;
         let scope = params.scope.as_deref().unwrap_or("global");
-        let id = self.store.record_event_from_agent_with_scope(
-            agent_id,
-            agent_kind,
-            &params.session_id,
-            &params.kind,
-            &params.payload,
-            source,
-            scope,
+        let id = self.store.record_event(
+            EventWrite::new(&params.session_id, &params.kind, &params.payload, source)
+                .agent(agent_id, agent_kind)
+                .scope(scope),
         )?;
         Ok(self.store.get_event(id)?.into())
     }
@@ -1330,12 +1323,14 @@ impl AverTools {
         params: ProposeCandidateClaimParams,
     ) -> anyhow::Result<CandidateClaimView> {
         let scope = params.scope.as_deref().unwrap_or("global");
-        let id = self.store.propose_candidate_claim_with_scope(
-            params.event_id,
-            &params.subject,
-            &params.predicate,
-            &params.object,
-            scope,
+        let id = self.store.propose_candidate_claim(
+            CandidateWrite::new(
+                params.event_id,
+                &params.subject,
+                &params.predicate,
+                &params.object,
+            )
+            .scope(scope),
         )?;
         Ok(self.store.get_candidate_claim(id)?.into())
     }
@@ -1402,13 +1397,15 @@ impl AverTools {
         params: RecordObservationParams,
     ) -> anyhow::Result<ObservationView> {
         let scope = params.scope.as_deref().unwrap_or("global");
-        let id = self.store.record_observation_with_scope(
-            &params.session_id,
-            &params.content,
-            params.relevance.into(),
-            &params.source_event_ids,
-            &params.derivation,
-            scope,
+        let id = self.store.record_observation(
+            ObservationWrite::new(
+                &params.session_id,
+                &params.content,
+                params.relevance.into(),
+                &params.source_event_ids,
+                &params.derivation,
+            )
+            .scope(scope),
         )?;
         Ok(self.store.get_observation(&id)?.into())
     }
@@ -1488,25 +1485,27 @@ impl AverTools {
     }
 }
 
-/// ADR-0021 scope walk over one claim's scope; the same rule as core's
-/// `scope_filter_sql`, applied to rows core's hybrid recall returns unfiltered.
-fn scope_matches(claim_scope: &str, scope: &str, walk: ScopeWalk) -> bool {
-    let is_strict_prefix = |prefix: &str, path: &str| {
-        path.strip_prefix(prefix)
-            .is_some_and(|rest| rest.starts_with('/'))
-    };
-    match walk {
-        ScopeWalk::Any => true,
-        ScopeWalk::Exact => claim_scope == scope,
-        ScopeWalk::Descendants => claim_scope == scope || is_strict_prefix(scope, claim_scope),
-        ScopeWalk::Ancestors => {
-            claim_scope == "global" || claim_scope == scope || is_strict_prefix(claim_scope, scope)
-        }
-    }
-}
-
 /// Resolve `ScopeWalk` from optional MCP request strings.
 ///
+/// Agent attribution for an MCP write: the caller's `agent_id` (the
+/// authenticated client id when the call came through MCP) and `agent_kind`,
+/// falling back to the tool's defaults: `remember_claim` is an EXTERNAL_TOOL
+/// write; `add_triple` and a `contradict` replacement keep the USER_ASSERTED
+/// semantics of a stated fact (explicit confidence, ontology auto-extension,
+/// ADR-0018).
+fn mcp_agent<'a>(
+    agent_id: Option<&'a str>,
+    agent_kind: Option<&str>,
+    default_agent_id: &'a str,
+    default_agent_kind: AgentKind,
+) -> anyhow::Result<(&'a str, AgentKind)> {
+    let agent_kind = match agent_kind {
+        Some(kind) => kind.parse::<AgentKind>()?,
+        None => default_agent_kind,
+    };
+    Ok((agent_id.unwrap_or(default_agent_id), agent_kind))
+}
+
 /// Layer-1 default: when `scope_walk` is omitted, use `Any` if `scope` is also
 /// omitted (preserves today's behavior verbatim) and `Ancestors` if a scope
 /// was supplied (the user clearly wants scoped reads). Layer 2 will refine
@@ -1574,27 +1573,5 @@ fn validate_top_k(top_k: usize) -> anyhow::Result<usize> {
         Ok(top_k)
     } else {
         anyhow::bail!("invalid top_k: must be between 1 and 100")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scope_matches_follows_adr_0021_walks() {
-        assert!(scope_matches("proj/a", "proj/a", ScopeWalk::Exact));
-        assert!(!scope_matches("proj/a/x", "proj/a", ScopeWalk::Exact));
-        assert!(scope_matches("proj/a/x", "proj/a", ScopeWalk::Descendants));
-        assert!(!scope_matches("proj/ab", "proj/a", ScopeWalk::Descendants));
-        assert!(scope_matches("global", "proj/a/x", ScopeWalk::Ancestors));
-        assert!(scope_matches("proj", "proj/a/x", ScopeWalk::Ancestors));
-        assert!(!scope_matches(
-            "proj/a/x/y",
-            "proj/a/x",
-            ScopeWalk::Ancestors
-        ));
-        assert!(!scope_matches("pro", "proj/a", ScopeWalk::Ancestors));
-        assert!(scope_matches("anything", "proj/a", ScopeWalk::Any));
     }
 }
