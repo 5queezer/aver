@@ -16,6 +16,11 @@ categories.workspace   = true
 name = "aver"
 path = "src/main.rs"
 
+[features]
+default = ["ollama"]
+# ADR-0024: enables the Ollama decision client so `AVER_DECISION_MODEL` works in standalone builds.
+ollama = ["aver-core/ollama"]
+
 [dependencies]
 aver-core      = { path = "../aver-core", default-features = false }
 clap.workspace   = true
