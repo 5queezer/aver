@@ -6,6 +6,7 @@ pub mod extractor;
 mod privacy;
 mod recall;
 pub mod retrieval;
+pub mod scope_decision;
 mod seed;
 mod types;
 mod validation;
