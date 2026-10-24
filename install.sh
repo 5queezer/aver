@@ -156,8 +156,11 @@ resolve_base_url() {
 download() {
   url="$1"
   out="$2"
+  # https only, except plain http to loopback (local release dry run, see doc/release-procedure.md)
+  proto='=https'
+  case "$url" in http://127.0.0.1[:/]*|http://localhost[:/]*) proto='=http,https' ;; esac
   if command -v curl >/dev/null 2>&1; then
-    curl --fail --location --proto '=https' --tlsv1.2 --output "$out" "$url"
+    curl --fail --location --proto "$proto" --tlsv1.2 --output "$out" "$url"
   elif command -v wget >/dev/null 2>&1; then
     wget -O "$out" "$url"
   else
