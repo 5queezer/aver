@@ -9,7 +9,7 @@
 //! skipped and counted: core rejects an unknown predicate on an `EXTRACTED`
 //! write.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use aver_core::{ExtractorFact, Provenance};
@@ -86,8 +86,9 @@ pub struct TreeExtraction {
     pub files: Vec<FileFacts>,
     /// Facts the extractor produced, before conversion.
     pub extracted: usize,
-    /// Facts dropped because the same converted fact already came from the
-    /// same file.
+    /// Facts dropped because the same converted triple was already produced
+    /// earlier in this run (same file or an earlier one), so one run never
+    /// writes a triple twice. The claim keeps the first file as its source.
     pub duplicates: usize,
     /// Unsupported facts, counted by extractor predicate.
     pub skipped: BTreeMap<String, usize>,
@@ -126,6 +127,7 @@ pub fn extract_tree(root: &Path, lang: Option<&str>) -> Result<TreeExtraction, E
     }
 
     let mut out = TreeExtraction::default();
+    let mut seen = HashSet::new();
     for file in paths {
         let path = file.to_string_lossy();
         let path = path.strip_prefix("./").unwrap_or(&path).to_string();
@@ -149,8 +151,18 @@ pub fn extract_tree(root: &Path, lang: Option<&str>) -> Result<TreeExtraction, E
         let mut facts = Vec::new();
         for fact in &extracted {
             match to_core_fact(&path, fact) {
-                Some(converted) if facts.contains(&converted) => out.duplicates += 1,
-                Some(converted) => facts.push(converted),
+                Some(converted) => {
+                    let key = (
+                        converted.subject.clone(),
+                        converted.predicate.clone(),
+                        converted.object.clone(),
+                    );
+                    if seen.insert(key) {
+                        facts.push(converted);
+                    } else {
+                        out.duplicates += 1;
+                    }
+                }
                 None => *out.skipped.entry(fact.predicate.clone()).or_default() += 1,
             }
         }
@@ -371,6 +383,8 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.join("src/a.rs"), "fn a() {}\nfn b() { a(); a(); }\n").unwrap();
+        // Same `b calls a` triple from a second file.
+        std::fs::write(root.join("src/c.rs"), "fn b() { a(); }\n").unwrap();
         std::fs::write(root.join(".hidden/c.rs"), "fn c() {}\n").unwrap();
         std::fs::write(root.join("target/d.rs"), "fn d() {}\n").unwrap();
         std::fs::write(root.join("notes.txt"), "not code").unwrap();
@@ -381,10 +395,13 @@ mod tests {
             .iter()
             .map(|file| Path::new(&file.path).file_name().unwrap().to_owned())
             .collect();
-        assert_eq!(names, ["a.rs", "b.py"]);
-        assert_eq!(all.files_scanned(), 2);
+        assert_eq!(names, ["a.rs", "b.py", "c.rs"]);
+        assert_eq!(all.files_scanned(), 3);
         assert_eq!(all.skipped.get("extends"), Some(&1));
-        assert_eq!(all.duplicates, 1, "a() called twice is one claim");
+        assert_eq!(
+            all.duplicates, 2,
+            "`b calls a` is written once per run, within and across files"
+        );
         assert_eq!(
             all.extracted,
             all.fact_count() + all.duplicates + all.skipped.values().sum::<usize>()
@@ -392,7 +409,7 @@ mod tests {
         assert_eq!(all.facts_by_predicate().get("calls"), Some(&1));
 
         let rust_only = extract_tree(root, Some("rust")).unwrap();
-        assert_eq!(rust_only.files.len(), 1);
+        assert_eq!(rust_only.files.len(), 2);
         assert!(rust_only.skipped.is_empty());
     }
 }
