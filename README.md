@@ -296,10 +296,12 @@ aver/
 ├── doc/
 │   ├── adr/             # Architecture decision records
 │   └── how-it-works.md  # Current implementation walkthrough
-├── migrations/          # Embedded SQLite migrations
+├── migrations/          # Embedded SQLite migrations (0001-0008 + 0009 baseline)
 ├── install.sh           # Source/release installer
 └── justfile             # Development automation
 ```
+
+`crates/aver-core/migrations-legacy/` holds the pre-baseline chain (0009-0119), applied only when upgrading stores created before the baseline.
 
 ## Development
 
