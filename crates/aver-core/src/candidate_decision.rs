@@ -40,6 +40,30 @@ pub enum CandidateTriage {
     Hold,
 }
 
+// Field order is deliberate: the model is order-sensitive (verified 2026-10-24).
+#[derive(Serialize)]
+struct TriageState<'a> {
+    candidate: TriageCandidate<'a>,
+    scope: &'a str,
+    source_events: [TriageEvent<'a>; 1],
+}
+
+// Field order is deliberate: the model is order-sensitive (verified 2026-10-24).
+#[derive(Serialize)]
+struct TriageCandidate<'a> {
+    subject: &'a str,
+    predicate: &'a str,
+    object: &'a str,
+}
+
+// Field order is deliberate: the model is order-sensitive (verified 2026-10-24).
+#[derive(Serialize)]
+struct TriageEvent<'a> {
+    id: i64,
+    kind: &'a str,
+    payload: &'a str,
+}
+
 /// ADR-0024 `decision` field on promote/reject candidate log lines:
 /// `{"model": "...", "choice": "promote" | "reject"}`.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -114,20 +138,20 @@ impl Store {
         }
         // Source payloads passed the privacy gate at record time.
         let event = self.get_event(candidate.event_id)?;
-        let state = serde_json::json!({
-            "candidate": {
-                "subject": candidate.subject,
-                "predicate": candidate.predicate,
-                "object": candidate.object,
+        let state = serde_json::to_string(&TriageState {
+            candidate: TriageCandidate {
+                subject: &candidate.subject,
+                predicate: &candidate.predicate,
+                object: &candidate.object,
             },
-            "scope": candidate.scope,
-            "source_events": [{
-                "id": event.id,
-                "kind": event.kind,
-                "payload": excerpt(&event.payload, STATE_MAX_BYTES),
+            scope: &candidate.scope,
+            source_events: [TriageEvent {
+                id: event.id,
+                kind: &event.kind,
+                payload: excerpt(&event.payload, STATE_MAX_BYTES),
             }],
         })
-        .to_string();
+        .expect("triage state serializes");
         let choice = client.decide(
             &Decision::new(&state, TRIAGE_QUESTION, &TRIAGE_OPTIONS)
                 .with_descriptions(&TRIAGE_DESCRIPTIONS),

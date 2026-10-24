@@ -86,10 +86,12 @@ while the short option key stays what `Choice.index` refers to. Live calls
 against `tev1:4b` on 2026-10-24 showed bare keys flip answers (predicate
 `needs`: `none` 0.70 with keys, `depends_on` 0.99 with descriptions). A
 model choice may influence a write only when its confidence is at least the
-floor `AVER_DECISION_MIN_CONFIDENCE` (default 0.5, range 0.0..=1.0); below
+floor `AVER_DECISION_MIN_CONFIDENCE` (default 0.6, range 0.0..=1.0); below
 it the seam takes its deterministic fallback (triage holds, predicates use
 fuzzy suggestions, scope keeps the caller default, the trigger keeps the
 deterministic decision). A client that reports no confidence meets the floor.
+Live `promote` choices on junk or unsupported candidates scored 0.40-0.55 and
+on genuine ones 0.78-0.93, hence a default floor of 0.6.
 
 - Options are sent in caller order, and order changes the model's confidence
   (`promote, reject, hold` 0.399 vs `hold, promote, reject` 0.551 on `tev1:4b`),
@@ -130,7 +132,7 @@ The decision model is opt-in. `decision::client_from_env()` returns a client
 only when `AVER_DECISION_MODEL` is set and non-blank (and `aver-core` is built
 with the `ollama` feature, which `aver-server` and `aver-cli` enable by
 default); `AVER_DECISION_URL` overrides the Ollama base URL and
-`AVER_DECISION_MIN_CONFIDENCE` sets the confidence floor (default 0.5).
+`AVER_DECISION_MIN_CONFIDENCE` sets the confidence floor (default 0.6).
 Without a client every surface below keeps its deterministic behaviour, except
 `triage_candidate_claim` / `aver triage`, which fail with "decision model not
 configured (set AVER_DECISION_MODEL)".

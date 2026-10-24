@@ -228,7 +228,7 @@ impl DecisionClient for MockDecisionClient {
 }
 
 /// Default for [`DecisionConfig::min_confidence`].
-pub const DEFAULT_MIN_CONFIDENCE: f64 = 0.5;
+pub const DEFAULT_MIN_CONFIDENCE: f64 = 0.6;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecisionConfig {
@@ -262,7 +262,7 @@ impl DecisionConfig {
     /// Reads `AVER_DECISION_URL`, `AVER_DECISION_MODEL` and
     /// `AVER_DECISION_MIN_CONFIDENCE`; unset or blank values keep the
     /// default. A floor that is not a number within `0.0..=1.0` is ignored
-    /// and the default floor (0.5) applies.
+    /// and the default floor (0.6) applies.
     pub fn from_env() -> Self {
         let var = |name: &str| {
             std::env::var(name)
@@ -487,7 +487,7 @@ mod tests {
         let config = DecisionConfig::default();
         assert_eq!(config.base_url, "http://localhost:11434");
         assert_eq!(config.model, "tev1:4b");
-        assert_eq!(config.min_confidence, 0.5);
+        assert_eq!(config.min_confidence, 0.6);
     }
 
     #[test]
