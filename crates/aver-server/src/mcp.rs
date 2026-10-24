@@ -285,10 +285,10 @@ impl AverMcpService {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         require_scope(&ctx, "propose_candidate_claim")?;
-        let tools = self.lock_tools()?;
         if params.scope.is_none() {
-            params.scope = Some(tools.candidate_scope(&params, &request_scope(&ctx).scope));
+            params.scope = Some(request_scope(&ctx).scope);
         }
+        let tools = self.lock_tools()?;
         let result = tools.propose_candidate_claim(params);
         json_tool_result(&tools, result, "propose_candidate_claim")
     }

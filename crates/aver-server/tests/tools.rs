@@ -889,36 +889,6 @@ fn triage_candidate_claim_without_decision_model_is_a_clear_error() {
 }
 
 #[test]
-fn candidate_scope_uses_decision_model_suggestion_only_when_configured() {
-    let dir = tempfile::tempdir().unwrap();
-    let tools = tools_with_decisions(dir.path(), vec![1]);
-    let (event_id, _) = stage_candidate(&tools);
-    let mut params = ProposeCandidateClaimParams {
-        event_id,
-        subject: "Aver".to_string(),
-        predicate: "uses".to_string(),
-        object: "sqlite".to_string(),
-        scope: None,
-    };
-
-    // Options are [resolved, "global"]; the mock picks index 1.
-    let scope = tools.candidate_scope(&params, "proj/aver");
-    assert_eq!(scope, "global");
-    params.scope = Some(scope);
-    assert_eq!(
-        tools.propose_candidate_claim(params.clone()).unwrap().scope,
-        "global"
-    );
-
-    let unconfigured_dir = tempfile::tempdir().unwrap();
-    let unconfigured = AverTools::open_with_decision_client(unconfigured_dir.path(), None).unwrap();
-    assert_eq!(
-        unconfigured.candidate_scope(&params, "proj/aver"),
-        "proj/aver"
-    );
-}
-
-#[test]
 fn should_extract_memories_consults_decision_model_and_reports_reasons() {
     let dir = tempfile::tempdir().unwrap();
     let tools = tools_with_decisions(dir.path(), vec![0]);
@@ -947,46 +917,4 @@ fn should_extract_memories_consults_decision_model_and_reports_reasons() {
         serde_json::to_value(&view).unwrap(),
         serde_json::json!({ "should_extract": false })
     );
-}
-
-#[test]
-fn unknown_predicate_error_leads_with_decision_model_suggestion() {
-    // Discover the option list the model sees, then script a pick that
-    // differs from the fuzzy `prefers` suggestion.
-    let probe_dir = tempfile::tempdir().unwrap();
-    let probe = MockDecisionClient::with_indices(vec![]);
-    Store::open(probe_dir.path())
-        .unwrap()
-        .normalize_predicate("deprioritizes", None, &probe, 0.5)
-        .unwrap();
-    let options = probe.received()[0].options.clone();
-    let (index, pick) = options
-        .iter()
-        .enumerate()
-        .find(|(_, option)| *option != "prefers" && *option != "none")
-        .map(|(index, option)| (index, option.clone()))
-        .unwrap();
-
-    let dir = tempfile::tempdir().unwrap();
-    let tools = tools_with_decisions(dir.path(), vec![index]);
-    let err = tools
-        .remember_claim(RememberClaimParams {
-            subject: "Aver autoresearch".to_string(),
-            predicate: "deprioritizes".to_string(),
-            object: "unsafe migration triggers".to_string(),
-            source: Some("mcp-test".to_string()),
-            agent_id: Some("llm_agent".to_string()),
-            agent_kind: Some("LLM".to_string()),
-            scope: None,
-        })
-        .expect_err("unknown predicate");
-
-    let msg = tools.describe_error(&err);
-    assert!(
-        msg.starts_with(&format!(
-            "unknown predicate: deprioritizes (not in predicate_types or predicate_alias). decision model suggests `{pick}`"
-        )),
-        "{msg}"
-    );
-    assert!(msg.contains("did you mean `prefers`?"), "{msg}");
 }

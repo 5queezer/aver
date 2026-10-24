@@ -143,11 +143,11 @@ Affected surfaces:
   (candidate triage).
 - MCP `should_extract_memories` and CLI `aver should-extract-memories`
   (extraction trigger; the MCP result adds `reasons`).
-- MCP `propose_candidate_claim` without an explicit `scope`: the model picks
-  between the resolved request scope and `global`; skipped when the resolved
-  scope already is `global`. The suggestion is not logged.
-- MCP unknown-predicate errors: the model's predicate pick is added to the
-  message. The write is never rewritten.
+
+`Store::suggest_scope` and `Store::normalize_predicate` exist in `aver-core`
+but are not wired to the MCP surface yet: the propose log line cannot carry
+the decision attribution, and error paths must not call the model under the
+tools mutex.
 
 ### Where it is not used
 

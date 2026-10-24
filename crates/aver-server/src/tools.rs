@@ -563,40 +563,16 @@ impl AverTools {
 
     pub fn describe_error(&self, err: &anyhow::Error) -> String {
         if let Some(Error::UnknownPredicate { name }) = err.downcast_ref::<Error>() {
-            let mut message = self
-                .store
+            self.store
                 .describe_unknown_predicate(name)
                 .unwrap_or_else(|vocab_err| {
                     format!(
                         "unknown predicate: {name} (not in predicate_types or predicate_alias). failed to load available predicates: {vocab_err}"
                     )
-                });
-            // ADR-0024: surface the decision model's pick ahead of the fuzzy
-            // suggestion; the write itself is never rewritten.
-            if let Some(client) = self.decision.as_deref()
-                && let Ok(Some(suggestion)) =
-                    self.store
-                        .normalize_predicate(name, None, client, self.decision_min_confidence)
-                && !message.contains(&format!("did you mean `{}`", suggestion.accepted))
-            {
-                let hint = match suggestion.canonical.as_deref() {
-                    Some(canonical) if canonical != suggestion.accepted => format!(
-                        " decision model suggests `{}` (alias for `{canonical}`).",
-                        suggestion.accepted
-                    ),
-                    _ => format!(" decision model suggests `{}`.", suggestion.accepted),
-                };
-                let head = format!(
-                    "unknown predicate: {name} (not in predicate_types or predicate_alias)."
-                );
-                message = match message.strip_prefix(&head) {
-                    Some(rest) => format!("{head}{hint}{rest}"),
-                    None => format!("{message}{hint}"),
-                };
-            }
-            return message;
+                })
+        } else {
+            err.to_string()
         }
-        err.to_string()
     }
 
     pub fn remember_claim(&self, params: RememberClaimParams) -> anyhow::Result<ClaimView> {
@@ -833,38 +809,6 @@ impl AverTools {
                     .collect(),
             ),
         })
-    }
-
-    /// ADR-0024 scope for a `propose_candidate_claim` call that sent no
-    /// explicit scope. Returns `resolved_scope` unless a decision model is
-    /// configured, `resolved_scope` is not `global`, and the model picks
-    /// `global` instead. The suggestion is not logged.
-    pub fn candidate_scope(
-        &self,
-        params: &ProposeCandidateClaimParams,
-        resolved_scope: &str,
-    ) -> String {
-        let Some(client) = self.decision.as_deref() else {
-            return resolved_scope.to_string();
-        };
-        if resolved_scope == "global" {
-            return resolved_scope.to_string();
-        }
-        let Ok(event) = self.store.get_event(params.event_id) else {
-            return resolved_scope.to_string();
-        };
-        match self.store.suggest_scope(
-            &params.subject,
-            &params.predicate,
-            &params.object,
-            &event.payload,
-            &[resolved_scope, "global"],
-            client,
-            self.decision_min_confidence,
-        ) {
-            Ok(Some(scope)) => scope,
-            _ => resolved_scope.to_string(),
-        }
     }
 
     pub fn propose_candidate_claim(
