@@ -31,7 +31,7 @@ clippy:
 
 # Run the full local gate
 check: fmt-check clippy test
-    ./autoresearch.checks.sh
+    ./checks.sh
 
 # Install aver from this checkout into ~/.cargo/bin
 install:
@@ -49,6 +49,39 @@ release:
 # Build the release MCP/OAuth server binary
 release-server:
     cargo build --release --locked -p aver-server
+
+# Probe the running aver-server on /healthz (up to 10 tries, 1s apart)
+health:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    url="http://127.0.0.1:${AVER_PORT:-3317}/healthz"
+    for _ in $(seq 1 10); do
+        if body="$(curl -fsS --max-time 2 "$url" 2>/dev/null)"; then
+            echo "$body"
+            exit 0
+        fi
+        sleep 1
+    done
+    echo "aver-server health probe failed" >&2
+    exit 1
+
+# Build, install to ~/.local/bin, restart the user service, and probe it
+deploy-server:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release --locked -p aver-server
+    install -Dm755 target/release/aver-server "$HOME/.local/bin/aver-server"
+    systemctl --user restart aver-mcp
+    just health
+
+# Install and enable the aver-mcp systemd user unit (once per machine)
+install-service:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    install -Dm644 contrib/systemd/aver-mcp.service "$HOME/.config/systemd/user/aver-mcp.service"
+    systemctl --user daemon-reload
+    systemctl --user enable aver-mcp
+    echo "aver-mcp unit installed and enabled; run 'just deploy-server' to build, install and start it."
 
 # Create a local release tarball and checksum under target/dist
 dist: release

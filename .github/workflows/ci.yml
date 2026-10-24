@@ -36,4 +36,4 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Project policy checks
-        run: ./autoresearch.checks.sh
+        run: ./checks.sh

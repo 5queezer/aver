@@ -59,7 +59,15 @@ Prerequisites:
 just install
 ```
 
-When run from the Aver git repository, `install.sh` detects the checkout and installs from source. This installs the `aver` CLI to `~/.cargo/bin` by default. For local MCP/OAuth service deployments that execute `target/release/aver-server`, run `just release-server` to build and strip the server binary before restarting the service.
+When run from the Aver git repository, `install.sh` detects the checkout and installs from source. This installs the `aver` CLI to `~/.cargo/bin` by default.
+
+To run `aver-server` as a systemd user service (unit in [`contrib/systemd/aver-mcp.service`](contrib/systemd/aver-mcp.service), binary at `~/.local/bin/aver-server`):
+
+```bash
+just install-service   # once: install + enable the aver-mcp user unit
+just deploy-server     # after every change: release build, install, restart, probe
+just health            # probe GET /healthz on the running server
+```
 
 ### Store and recall a claim
 
@@ -189,6 +197,7 @@ Useful endpoints:
 - `GET /oauth/authorize` (browser consent screen; loopback by default, optional trusted-header for non-loopback)
 - `POST /oauth/authorize/decision` (consent-screen form submission)
 - `POST /oauth/token` for authorization-code + PKCE token exchange and refresh-token grants
+- `GET /healthz` (unauthenticated liveness probe)
 - `GET /api/health` with `Authorization: Bearer <token>`
 - `/mcp` with `Authorization: Bearer <token>`
 
@@ -303,10 +312,12 @@ aver/
 ├── doc/
 │   ├── adr/             # Architecture decision records
 │   └── how-it-works.md  # Current implementation walkthrough
-├── migrations/          # Embedded SQLite migrations
+├── migrations/          # Embedded SQLite migrations (0001-0008 + 0009 baseline)
 ├── install.sh           # Source/release installer
 └── justfile             # Development automation
 ```
+
+`crates/aver-core/migrations-legacy/` holds the pre-baseline chain (0009-0119), applied only when upgrading stores created before the baseline.
 
 ## Development
 
@@ -317,7 +328,7 @@ just build       # cargo build --workspace --locked
 just test        # cargo test --workspace --locked
 just fmt         # cargo fmt --all
 just clippy      # cargo clippy --workspace --no-deps -- -D warnings
-just check       # format check + clippy + tests + autoresearch checks
+just check       # format check + clippy + tests + policy checks
 just release     # release build for aver-cli
 just dist        # local release tarball and SHA256SUMS under target/dist
 ```
@@ -359,7 +370,6 @@ Partial or planned:
 
 - [`doc/how-it-works.md`](doc/how-it-works.md) — current runtime flow and ADR mapping.
 - [`doc/adr/`](doc/adr/) — architecture decisions.
-- [`autoresearch.md`](autoresearch.md) — active experimental protocol and guardrails.
 
 ## License
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# autoresearch.checks.sh — pre-keep gates. Any failure ⇒ checks_failed.
+# checks.sh — project policy gates run by `just check` and CI.
 
 set -uo pipefail
 cd "$(dirname "$0")"
