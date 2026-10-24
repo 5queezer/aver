@@ -561,30 +561,53 @@ impl AverTools {
         })
     }
 
+    /// Agent-facing text for a tool error. Core validation errors are the
+    /// single enforcement point for input rules; where core's `Display`
+    /// does not name the MCP parameter or the rule, it is rephrased here.
     pub fn describe_error(&self, err: &anyhow::Error) -> String {
-        if let Some(Error::UnknownPredicate { name }) = err.downcast_ref::<Error>() {
-            self.store
+        let Some(core_err) = err.downcast_ref::<Error>() else {
+            return err.to_string();
+        };
+        match core_err {
+            Error::UnknownPredicate { name } => self
+                .store
                 .describe_unknown_predicate(name)
                 .unwrap_or_else(|vocab_err| {
                     format!(
                         "unknown predicate: {name} (not in predicate_types or predicate_alias). failed to load available predicates: {vocab_err}"
                     )
-                })
-        } else {
-            err.to_string()
+                }),
+            Error::InvalidClaimField { field }
+            | Error::InvalidEventField { field }
+            | Error::InvalidObservationField { field } => {
+                format!("invalid {field}: must not be empty")
+            }
+            Error::InvalidConfidence { value } => {
+                format!("invalid confidence: {value}; must be between 0 and 1")
+            }
+            Error::InvalidEventThreshold => {
+                "invalid event_threshold: must be greater than zero".to_string()
+            }
+            Error::InvalidContradictionReason | Error::InvalidRejectionReason => {
+                "invalid reason: must not be empty".to_string()
+            }
+            Error::InvalidVectorChunkText => "invalid text: must not be empty".to_string(),
+            Error::InvalidGraphEntity => "invalid entity: must not be empty".to_string(),
+            Error::InvalidGraphHops => "invalid hops: must be greater than zero".to_string(),
+            Error::InvalidPredicateFilter => {
+                "invalid predicates: entries must not be empty".to_string()
+            }
+            Error::InvalidRecallQuery => {
+                "invalid query: must contain at least one searchable term".to_string()
+            }
+            Error::InvalidAgentId { value } => format!(
+                "invalid agent_id: {value:?}; must be non-empty and match [A-Za-z0-9_-]"
+            ),
+            other => other.to_string(),
         }
     }
 
     pub fn remember_claim(&self, params: RememberClaimParams) -> anyhow::Result<ClaimView> {
-        if params.subject.trim().is_empty() {
-            anyhow::bail!("invalid subject: must not be empty");
-        }
-        if params.predicate.trim().is_empty() {
-            anyhow::bail!("invalid predicate: must not be empty");
-        }
-        if params.object.trim().is_empty() {
-            anyhow::bail!("invalid object: must not be empty");
-        }
         let source = params.source.as_deref().unwrap_or("mcp");
         let agent_id = params.agent_id.as_deref().unwrap_or("mcp");
         let agent_kind = params
@@ -689,20 +712,6 @@ impl AverTools {
     }
 
     pub fn add_triple(&self, params: AddTripleParams) -> anyhow::Result<AddTripleView> {
-        if params.subject.trim().is_empty() {
-            anyhow::bail!("invalid subject: must not be empty");
-        }
-        if params.predicate.trim().is_empty() {
-            anyhow::bail!("invalid predicate: must not be empty");
-        }
-        if params.object.trim().is_empty() {
-            anyhow::bail!("invalid object: must not be empty");
-        }
-        if let Some(confidence) = params.confidence
-            && !(0.0..=1.0).contains(&confidence)
-        {
-            anyhow::bail!("invalid confidence: must be between 0 and 1");
-        }
         let scope = params.scope.as_deref().unwrap_or("global");
         let id = self.store.add_claim_with_confidence_and_scope(
             &params.subject,
@@ -746,12 +755,6 @@ impl AverTools {
     }
 
     pub fn record_event(&self, params: RecordEventParams) -> anyhow::Result<EventView> {
-        if params.session_id.trim().is_empty() {
-            anyhow::bail!("invalid session_id: must not be empty");
-        }
-        if params.kind.trim().is_empty() {
-            anyhow::bail!("invalid kind: must not be empty");
-        }
         let source = params.source.as_deref().unwrap_or("mcp");
         let agent_id = params.agent_id.as_deref().unwrap_or("mcp");
         let agent_kind = params
@@ -776,9 +779,6 @@ impl AverTools {
         &self,
         params: ShouldExtractMemoriesParams,
     ) -> anyhow::Result<ShouldExtractMemoriesView> {
-        if params.event_threshold == 0 {
-            anyhow::bail!("invalid event_threshold: must be at least 1");
-        }
         let Some(client) = self.decision.as_deref() else {
             return Ok(ShouldExtractMemoriesView {
                 should_extract: self
@@ -927,9 +927,6 @@ impl AverTools {
     }
 
     pub fn retire_claim(&self, params: RetireClaimParams) -> anyhow::Result<RetireClaimView> {
-        if params.reason.trim().is_empty() {
-            anyhow::bail!("invalid reason: must not be empty");
-        }
         self.store.retire_claim(params.claim_id, &params.reason)?;
         Ok(RetireClaimView {
             claim_id: params.claim_id,
@@ -941,9 +938,6 @@ impl AverTools {
         &self,
         params: AddVectorChunkParams,
     ) -> anyhow::Result<VectorChunkView> {
-        if params.text.trim().is_empty() {
-            anyhow::bail!("invalid text: must not be empty");
-        }
         let chunk_id =
             self.store
                 .add_vector_chunk(params.claim_id, &params.text, DEFAULT_EMBEDDING_MODEL)?;
@@ -988,14 +982,18 @@ fn trigger_reason_name(reason: ExtractionTriggerReason) -> &'static str {
     }
 }
 
+/// Server-side traversal cap. Core rejects `hops == 0`
+/// (`Error::InvalidGraphHops`) but has no upper bound.
 fn validate_hops(hops: usize) -> anyhow::Result<usize> {
-    if (1..=8).contains(&hops) {
+    if hops <= 8 {
         Ok(hops)
     } else {
-        anyhow::bail!("invalid hops: must be between 1 and 8")
+        anyhow::bail!("invalid hops: must be at most 8")
     }
 }
 
+/// Core's `recall_text_with_filters` takes no `top_k`; the server truncates
+/// its result, so this bound has no core counterpart on this path.
 fn validate_top_k(top_k: usize) -> anyhow::Result<usize> {
     if (1..=100).contains(&top_k) {
         Ok(top_k)

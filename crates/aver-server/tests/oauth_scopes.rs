@@ -439,6 +439,33 @@ async fn read_and_write_scopes_allow_both_tools() {
 }
 
 #[tokio::test]
+async fn blank_subject_through_mcp_names_the_parameter() {
+    // The server no longer re-checks blank fields; core's
+    // `Error::InvalidClaimField` is the only enforcement point and the MCP
+    // error text must still tell the agent which parameter broke which rule.
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let _ = AuthDb::open(&auth_db_path).unwrap();
+    let client_id = register_client(&auth_db_path);
+    let app = build_router(base_config(&dir, &auth_db_path)).unwrap();
+    let (token, _) = approve_and_mint_tokens(&app, &client_id, Some("claims:write")).await;
+
+    let resp = call_mcp_tool(
+        &app,
+        &token,
+        "remember_claim",
+        serde_json::json!({"subject": "   ", "predicate": "relates_to", "object": "bob"}),
+    )
+    .await;
+    let err = resp.get("error").expect("blank subject must be rejected");
+    assert_eq!(
+        err["message"].as_str().unwrap(),
+        "remember_claim failed: invalid subject: must not be empty",
+        "{err}",
+    );
+}
+
+#[tokio::test]
 async fn approve_with_no_scope_param_grants_no_access() {
     let dir = tempfile::tempdir().unwrap();
     let auth_db_path = dir.path().join("auth.db");
