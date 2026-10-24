@@ -439,6 +439,84 @@ async fn read_and_write_scopes_allow_both_tools() {
 }
 
 #[tokio::test]
+async fn mcp_writes_stamp_agent_id_from_authenticated_client() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let _ = AuthDb::open(&auth_db_path).unwrap();
+    let client_id = register_client(&auth_db_path);
+    let app = build_router(base_config(&dir, &auth_db_path)).unwrap();
+    let (token, _) =
+        approve_and_mint_tokens(&app, &client_id, Some("claims:write events:write")).await;
+
+    let tool_json = |resp: &serde_json::Value| -> serde_json::Value {
+        let text = resp["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("tool call failed: {resp}"));
+        serde_json::from_str(text).unwrap()
+    };
+
+    let claim = tool_json(
+        &call_mcp_tool(
+            &app,
+            &token,
+            "remember_claim",
+            serde_json::json!({"subject": "alice", "predicate": "relates_to", "object": "bob"}),
+        )
+        .await,
+    );
+    assert_eq!(claim["agent_id"], client_id.as_str(), "{claim}");
+
+    let event = tool_json(
+        &call_mcp_tool(
+            &app,
+            &token,
+            "record_event",
+            serde_json::json!({"session_id": "s1", "kind": "note", "payload": "hello"}),
+        )
+        .await,
+    );
+    assert_eq!(event["agent_id"], client_id.as_str(), "{event}");
+
+    // An explicit agent_id parameter still wins over the client default.
+    let claim = tool_json(
+        &call_mcp_tool(
+            &app,
+            &token,
+            "remember_claim",
+            serde_json::json!({
+                "subject": "carol",
+                "predicate": "relates_to",
+                "object": "dave",
+                "agent_id": "explicit-agent",
+            }),
+        )
+        .await,
+    );
+    assert_eq!(claim["agent_id"], "explicit-agent", "{claim}");
+
+    // A token minted without a client keeps the explicit "mcp" fallback.
+    let clientless = "clientless-token";
+    AuthDb::open(&auth_db_path)
+        .unwrap()
+        .store_access_token_hash(
+            &aver_server::auth::hash_token(clientless),
+            "local",
+            &["claims:write".to_string()],
+        )
+        .unwrap();
+    let claim = tool_json(
+        &call_mcp_tool(
+            &app,
+            clientless,
+            "remember_claim",
+            serde_json::json!({"subject": "erin", "predicate": "relates_to", "object": "frank"}),
+        )
+        .await,
+    );
+    assert_eq!(claim["agent_id"], "mcp", "{claim}");
+}
+
+#[tokio::test]
 async fn blank_subject_through_mcp_names_the_parameter() {
     // The server no longer re-checks blank fields; core's
     // `Error::InvalidClaimField` is the only enforcement point and the MCP

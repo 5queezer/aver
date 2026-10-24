@@ -38,6 +38,12 @@ use crate::{
 #[derive(Debug, Clone, Default)]
 pub struct GrantedScopes(pub Vec<crate::scopes::Scope>);
 
+/// OAuth `client_id` the bearer token was issued to. Inserted by
+/// [`validate_bearer_token`] only when the token row carries one; the MCP
+/// service stamps it as the default `agent_id` on writes.
+#[derive(Debug, Clone)]
+pub struct AuthenticatedClient(pub String);
+
 #[derive(Clone)]
 struct HttpState {
     config: ServerConfig,
@@ -211,20 +217,25 @@ async fn validate_bearer_token(
     let Some(token) = token else {
         return unauthorized_bearer();
     };
-    let granted_raw = {
+    let grant = {
         let Ok(db) = state.auth_db.lock() else {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         };
-        match db.validate_access_token(&hash_token(token)) {
-            Ok(Some((_, scopes_raw))) => scopes_raw,
+        match db.access_token_grant(&hash_token(token)) {
+            Ok(Some(grant)) => grant,
             Ok(None) => return unauthorized_bearer(),
             Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     };
     // Parse leniently: an unknown token in the persisted column is treated
     // as "no implicit access" — valid scopes still apply.
-    let granted = parse_scope_list_lossy(&granted_raw);
+    let granted = parse_scope_list_lossy(&grant.granted_scopes);
     request.extensions_mut().insert(GrantedScopes(granted));
+    if let Some(client_id) = grant.client_id {
+        request
+            .extensions_mut()
+            .insert(AuthenticatedClient(client_id));
+    }
     next.run(request).await.into_response()
 }
 

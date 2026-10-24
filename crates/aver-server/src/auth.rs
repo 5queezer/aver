@@ -21,6 +21,16 @@ pub struct RegisteredClient {
     pub redirect_uris: Vec<String>,
 }
 
+/// A live access token's row in `access_tokens`, as returned by
+/// [`AuthDb::access_token_grant`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessTokenGrant {
+    pub user_id: String,
+    pub client_id: Option<String>,
+    /// Space-separated scope list as persisted.
+    pub granted_scopes: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenPair {
     pub access_token: String,
@@ -673,15 +683,28 @@ impl AuthDb {
         &self,
         token_hash: &str,
     ) -> anyhow::Result<Option<(String, String)>> {
+        Ok(self
+            .access_token_grant(token_hash)?
+            .map(|grant| (grant.user_id, grant.granted_scopes)))
+    }
+
+    /// Like [`AuthDb::validate_access_token`], plus the OAuth `client_id` the
+    /// token was issued to (`None` for tokens minted without a client, e.g.
+    /// by [`AuthDb::store_access_token_hash`] or before the column existed).
+    pub fn access_token_grant(&self, token_hash: &str) -> anyhow::Result<Option<AccessTokenGrant>> {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let mut stmt = self.conn.prepare(
-            "SELECT user_id, granted_scopes
+            "SELECT user_id, client_id, granted_scopes
                FROM access_tokens
               WHERE token_hash = ?1 AND revoked_at IS NULL AND expires_at > ?2",
         )?;
         let mut rows = stmt.query(params![token_hash, now])?;
         Ok(match rows.next()? {
-            Some(row) => Some((row.get(0)?, row.get(1)?)),
+            Some(row) => Some(AccessTokenGrant {
+                user_id: row.get(0)?,
+                client_id: row.get(1)?,
+                granted_scopes: row.get(2)?,
+            }),
             None => None,
         })
     }

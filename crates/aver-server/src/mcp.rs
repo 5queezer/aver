@@ -10,7 +10,7 @@ use rmcp::{
 };
 use serde::Deserialize;
 
-use crate::http::GrantedScopes;
+use crate::http::{AuthenticatedClient, GrantedScopes};
 use crate::scope_resolution::ResolvedScope;
 use crate::scopes::{Scope, ToolScope};
 use crate::tools::{
@@ -54,6 +54,8 @@ pub struct RememberClaimParams {
     pub object: String,
     #[serde(default)]
     pub source: Option<String>,
+    /// Agent identifier to attribute the claim to. Defaults to the
+    /// authenticated OAuth client id.
     #[serde(default)]
     pub agent_id: Option<String>,
     #[serde(default)]
@@ -96,6 +98,22 @@ fn request_scope(ctx: &RequestContext<RoleServer>) -> ResolvedScope {
             scope: "global".to_string(),
             default_walk: aver_core::ScopeWalk::Any,
         })
+}
+
+/// `agent_id` stamped on MCP writes when no authenticated client is known.
+const UNAUTHENTICATED_AGENT_ID: &str = "mcp";
+
+/// Default `agent_id` for writes: the OAuth `client_id` the bearer token was
+/// issued to (stable, non-secret, `aver-<uuid>` for registered clients). An
+/// explicit `agent_id` tool parameter still takes precedence. Falls back to
+/// [`UNAUTHENTICATED_AGENT_ID`] only when the token carries no client (tokens
+/// minted outside the OAuth code flow) or no HTTP middleware ran.
+fn request_agent_id(ctx: &RequestContext<RoleServer>) -> String {
+    ctx.extensions
+        .get::<http::request::Parts>()
+        .and_then(|parts| parts.extensions.get::<AuthenticatedClient>())
+        .map(|client| client.0.clone())
+        .unwrap_or_else(|| UNAUTHENTICATED_AGENT_ID.to_string())
 }
 
 pub struct AverMcpService {
@@ -178,7 +196,7 @@ impl AverMcpService {
             predicate: params.predicate,
             object: params.object,
             source: params.source,
-            agent_id: params.agent_id,
+            agent_id: params.agent_id.or_else(|| Some(request_agent_id(&ctx))),
             agent_kind: params.agent_kind,
             scope: params.scope.or_else(|| Some(request_scope(&ctx).scope)),
         });
@@ -267,6 +285,9 @@ impl AverMcpService {
         require_scope(&ctx, Self::RECORD_EVENT)?;
         if params.scope.is_none() {
             params.scope = Some(request_scope(&ctx).scope);
+        }
+        if params.agent_id.is_none() {
+            params.agent_id = Some(request_agent_id(&ctx));
         }
         let tools = self.lock_tools()?;
         let result = tools.record_event(params);

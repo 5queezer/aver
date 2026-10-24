@@ -26,7 +26,7 @@ pub struct RememberClaimParams {
     /// Source provenance for the claim; include where the fact came from so future agents can audit it.
     #[serde(default)]
     pub source: Option<String>,
-    /// Agent identifier to attribute the claim to.
+    /// Agent identifier to attribute the claim to. Defaults to the authenticated OAuth client id when used through MCP.
     #[serde(default)]
     pub agent_id: Option<String>,
     /// Agent kind for attribution. One of HUMAN, LLM, DETERMINISTIC_PARSER, EXTERNAL_TOOL.
@@ -155,7 +155,7 @@ pub struct RecordEventParams {
     /// Optional event source.
     #[serde(default)]
     pub source: Option<String>,
-    /// Agent identifier to attribute the event to.
+    /// Agent identifier to attribute the event to. Defaults to the authenticated OAuth client id when used through MCP.
     #[serde(default)]
     pub agent_id: Option<String>,
     /// Agent kind for attribution.
