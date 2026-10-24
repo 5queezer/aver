@@ -240,8 +240,6 @@ Scope is a first-class memory dimension. Write tools such as `remember_claim`, `
 
 CLI-only continuity and maintenance surfaces (`catch-up`, `compaction-summary`) are implemented in `aver-cli`; MCP exposes `record_observation`, `assemble_compaction_summary`, and the observation audit tools above, while claim-maintenance tasks stay available through the four advanced tools when agents explicitly need them.
 
-Adapter boundaries are explicit in `aver-server` via the `adapters` module (`Pi`, `ClaudeCode`, `CodexOpenAi`, `OpenCode`, `Mcp`, `JsonlCliHarness`) so host runtimes can be added without leaking host-specific logic into `aver-core`.
-
 ## Evaluation
 
 Run deterministic workspace tests:
@@ -309,7 +307,7 @@ aver/
 │   ├── aver-extractor/  # Tree-sitter (13 languages) and prose fact extraction
 │   ├── aver-server/     # MCP/OAuth HTTP server
 │   ├── aver-eval/       # Fixture and BEAM100K evaluation runners
-│   └── aver-scope-shim/ # ADR-0022 per-workspace scope shim (X-Aver-Scope proxy)
+│   └── aver-scope-shim/ # DEPRECATED (ADR-0025): X-Aver-Scope proxy; set the header in MCP client config
 ├── doc/
 │   ├── adr/             # Architecture decision records
 │   └── how-it-works.md  # Current implementation walkthrough
@@ -362,8 +360,6 @@ Implemented today:
 Partial or planned:
 
 - production vector-index operations beyond the current bundled `sqlite-vec`/`vec0` local ANN path and JSON fallback metadata,
-- Pi adapter runtime integration: `PiHook` trait and `PiAdapter` struct translate Pi session hooks into episodic events, with coverage-aware compaction (ADR-0016).
-- Claude Code, Codex/OpenAI, OpenCode, and JSONL/CLI adapter implementations follow the same pattern.
 - production shared-graph backend adapter beyond the current local weighted community detection,
 - broader production packaging, signed releases, and release automation beyond the current installer/`just dist` workflow.
 
