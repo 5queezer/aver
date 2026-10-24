@@ -59,7 +59,15 @@ Prerequisites:
 just install
 ```
 
-When run from the Aver git repository, `install.sh` detects the checkout and installs from source. This installs the `aver` CLI to `~/.cargo/bin` by default. For local MCP/OAuth service deployments that execute `target/release/aver-server`, run `just release-server` to build and strip the server binary before restarting the service.
+When run from the Aver git repository, `install.sh` detects the checkout and installs from source. This installs the `aver` CLI to `~/.cargo/bin` by default.
+
+To run `aver-server` as a systemd user service (unit in [`contrib/systemd/aver-mcp.service`](contrib/systemd/aver-mcp.service), binary at `~/.local/bin/aver-server`):
+
+```bash
+just install-service   # once: install + enable the aver-mcp user unit
+just deploy-server     # after every change: release build, install, restart, probe
+just health            # probe GET /healthz on the running server
+```
 
 ### Store and recall a claim
 
@@ -185,6 +193,7 @@ Useful endpoints:
 - `GET /oauth/authorize` (browser consent screen; loopback by default, optional trusted-header for non-loopback)
 - `POST /oauth/authorize/decision` (consent-screen form submission)
 - `POST /oauth/token` for authorization-code + PKCE token exchange and refresh-token grants
+- `GET /healthz` (unauthenticated liveness probe)
 - `GET /api/health` with `Authorization: Bearer <token>`
 - `/mcp` with `Authorization: Bearer <token>`
 
