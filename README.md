@@ -187,7 +187,7 @@ Default configuration:
 | `AVER_TRUSTED_AUTH_HEADER` | *(unset)* | Optional reverse-proxy header name (for example `X-Forwarded-User`) that enables non-loopback OAuth authorization using Profile C trusted-header auth. |
 | `AVER_DECISION_MODEL` | *(unset)* | Ollama decision model (for example `tev1:4b`); setting it enables the ADR-0024 decision-model features. |
 | `AVER_DECISION_URL` | `http://localhost:11434` | Ollama base URL for the decision model. |
-| `AVER_DECISION_MIN_CONFIDENCE` | `0.5` | Confidence floor for decision-model choices; below it the deterministic behaviour applies (triage holds, suggestions fall back). |
+| `AVER_DECISION_MIN_CONFIDENCE` | `0.6` | Confidence floor for decision-model choices; below it the deterministic behaviour applies (triage holds, suggestions fall back). |
 
 
 Useful endpoints:

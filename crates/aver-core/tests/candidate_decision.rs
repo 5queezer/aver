@@ -79,6 +79,9 @@ fn triage_promote_sets_inferred_and_logs_decision() {
             .state
             .contains("the service depends on postgres")
     );
+    let state = &received[0].state;
+    let at = |key: &str| state.find(key).unwrap();
+    assert!(at("\"subject\"") < at("\"predicate\"") && at("\"predicate\"") < at("\"object\""));
 }
 
 #[test]
