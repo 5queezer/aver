@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
+use aver_core::candidate_decision::CandidateTriage;
+use aver_core::decision::client_from_env;
 use aver_core::{
-    AgentKind, ObservationRelevance, ReplayMode, ScopeWalk, Store, replay_with_mode, vacuum,
+    AgentKind, ExtractionTriggerReason, ObservationRelevance, ReplayMode, ScopeWalk, Store,
+    replay_with_mode, vacuum,
 };
 use clap::{Parser, Subcommand};
 
@@ -85,6 +88,13 @@ enum Command {
 
     /// Promote a candidate claim to durable memory.
     Promote {
+        #[arg(long)]
+        candidate_id: i64,
+    },
+
+    /// Let the ADR-0024 decision model promote, reject, or hold a candidate
+    /// claim (requires AVER_DECISION_MODEL).
+    Triage {
         #[arg(long)]
         candidate_id: i64,
     },
@@ -331,7 +341,21 @@ fn main() -> anyhow::Result<()> {
             session_id,
             event_threshold,
         } => {
-            let result = store.should_extract_memories(&session_id, event_threshold)?;
+            let result = match client_from_env() {
+                None => store.should_extract_memories(&session_id, event_threshold)?,
+                // Same rule as `Store::should_extract_memories`: a coverage
+                // gap alone does not justify extraction.
+                Some(client) => store
+                    .extraction_decision_with_client(
+                        &session_id,
+                        event_threshold,
+                        None,
+                        client.as_ref(),
+                    )?
+                    .reasons
+                    .iter()
+                    .any(|reason| *reason != ExtractionTriggerReason::UncoveredCoverageGap),
+            };
             println!("should_extract={result}");
         }
 
@@ -369,6 +393,25 @@ fn main() -> anyhow::Result<()> {
         Command::Promote { candidate_id } => {
             let claim_id = store.promote_candidate_claim(candidate_id)?;
             println!("claim_id={claim_id}");
+        }
+
+        Command::Triage { candidate_id } => {
+            let client = client_from_env().ok_or_else(|| {
+                anyhow::anyhow!("decision model not configured (set AVER_DECISION_MODEL)")
+            })?;
+            match store.triage_candidate_claim(candidate_id, client.as_ref())? {
+                CandidateTriage::Promote => {
+                    let claim_id = store
+                        .get_candidate_claim(candidate_id)?
+                        .promoted_claim_id
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("promoted candidate {candidate_id} has no claim id")
+                        })?;
+                    println!("triage=promote claim_id={claim_id}");
+                }
+                CandidateTriage::Reject => println!("triage=reject"),
+                CandidateTriage::Hold => println!("triage=hold"),
+            }
         }
 
         Command::Reject {

@@ -106,6 +106,27 @@ HybridRAG intent classification (ADR-0004) is deferred until the MCP recall
 path stops discarding `alpha` (design review 2026-10-17, "Trace of one
 recall call"). Classifying intent for a weight nobody reads changes nothing.
 
+### Activation
+
+The decision model is opt-in. `decision::client_from_env()` returns a client
+only when `AVER_DECISION_MODEL` is set and non-blank (and `aver-core` is built
+with the `ollama` feature); `AVER_DECISION_URL` overrides the Ollama base URL.
+Without a client every surface below keeps its deterministic behaviour, except
+`triage_candidate_claim` / `aver triage`, which fail with "decision model not
+configured (set AVER_DECISION_MODEL)".
+
+Affected surfaces:
+
+- MCP `triage_candidate_claim` and CLI `aver triage --candidate-id N`
+  (candidate triage).
+- MCP `should_extract_memories` and CLI `aver should-extract-memories`
+  (extraction trigger; the MCP result adds `reasons`).
+- MCP `propose_candidate_claim` without an explicit `scope`: the model picks
+  between the resolved request scope and `global`; skipped when the resolved
+  scope already is `global`. The suggestion is not logged.
+- MCP unknown-predicate errors: the model's predicate pick is added to the
+  message. The write is never rewritten.
+
 ### Where it is not used
 
 - **Prose extraction.** Producing triples requires generation. The chat

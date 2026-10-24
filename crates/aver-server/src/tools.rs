@@ -1,9 +1,11 @@
 use std::path::Path;
 
+use aver_core::candidate_decision::CandidateTriage;
+use aver_core::decision::{DecisionClient, client_from_env};
 use aver_core::{
     AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, Error,
-    NewClaim, Observation, ObservationCoverage, ObservationRecall, ObservationRelevance,
-    PredicateWalk, RecallFilters, ScopeWalk, Store,
+    ExtractionTriggerReason, NewClaim, Observation, ObservationCoverage, ObservationRecall,
+    ObservationRelevance, PredicateWalk, RecallFilters, ScopeWalk, Store,
 };
 use serde::{Deserialize, Serialize};
 
@@ -195,6 +197,12 @@ pub struct ListCandidateClaimsParams {
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct PromoteCandidateClaimParams {
     /// Candidate claim identifier.
+    pub candidate_id: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct TriageCandidateClaimParams {
+    /// PENDING candidate claim identifier to triage.
     pub candidate_id: i64,
 }
 
@@ -399,6 +407,18 @@ pub struct ConsolidateView {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ShouldExtractMemoriesView {
     pub should_extract: bool,
+    /// ADR-0024 trigger reasons; present only when a decision model is configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasons: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct TriageCandidateClaimView {
+    pub candidate_id: i64,
+    /// One of "promote", "reject", "hold".
+    pub triage: String,
+    /// Durable claim id when the candidate was promoted.
+    pub claim_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -511,18 +531,30 @@ impl From<ContradictionRecord> for ContradictionView {
 
 pub struct AverTools {
     store: Store,
+    /// ADR-0024 decision model; `None` unless `AVER_DECISION_MODEL` opts in.
+    decision: Option<Box<dyn DecisionClient + Send + Sync>>,
 }
 
 impl AverTools {
     pub fn open(memory_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
+        Self::open_with_decision_client(memory_dir, client_from_env())
+    }
+
+    /// Like [`AverTools::open`] with an explicit decision client (tests inject
+    /// a mock here instead of setting `AVER_DECISION_MODEL`).
+    pub fn open_with_decision_client(
+        memory_dir: impl AsRef<Path>,
+        decision: Option<Box<dyn DecisionClient + Send + Sync>>,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             store: Store::open(memory_dir)?,
+            decision,
         })
     }
 
     pub fn describe_error(&self, err: &anyhow::Error) -> String {
         if let Some(Error::UnknownPredicate { name }) = err.downcast_ref::<Error>() {
-            return self
+            let mut message = self
                 .store
                 .describe_unknown_predicate(name)
                 .unwrap_or_else(|vocab_err| {
@@ -530,6 +562,28 @@ impl AverTools {
                         "unknown predicate: {name} (not in predicate_types or predicate_alias). failed to load available predicates: {vocab_err}"
                     )
                 });
+            // ADR-0024: surface the decision model's pick ahead of the fuzzy
+            // suggestion; the write itself is never rewritten.
+            if let Some(client) = self.decision.as_deref()
+                && let Ok(Some(suggestion)) = self.store.normalize_predicate(name, client)
+                && !message.contains(&format!("did you mean `{}`", suggestion.accepted))
+            {
+                let hint = match suggestion.canonical.as_deref() {
+                    Some(canonical) if canonical != suggestion.accepted => format!(
+                        " decision model suggests `{}` (alias for `{canonical}`).",
+                        suggestion.accepted
+                    ),
+                    _ => format!(" decision model suggests `{}`.", suggestion.accepted),
+                };
+                let head = format!(
+                    "unknown predicate: {name} (not in predicate_types or predicate_alias)."
+                );
+                message = match message.strip_prefix(&head) {
+                    Some(rest) => format!("{head}{hint}{rest}"),
+                    None => format!("{message}{hint}"),
+                };
+            }
+            return message;
         }
         err.to_string()
     }
@@ -745,11 +799,66 @@ impl AverTools {
         if params.event_threshold == 0 {
             anyhow::bail!("invalid event_threshold: must be at least 1");
         }
+        let Some(client) = self.decision.as_deref() else {
+            return Ok(ShouldExtractMemoriesView {
+                should_extract: self
+                    .store
+                    .should_extract_memories(&params.session_id, params.event_threshold)?,
+                reasons: None,
+            });
+        };
+        let decision = self.store.extraction_decision_with_client(
+            &params.session_id,
+            params.event_threshold,
+            None,
+            client,
+        )?;
+        // Same rule as `Store::should_extract_memories`: a coverage gap alone
+        // does not justify extraction.
         Ok(ShouldExtractMemoriesView {
-            should_extract: self
-                .store
-                .should_extract_memories(&params.session_id, params.event_threshold)?,
+            should_extract: decision
+                .reasons
+                .iter()
+                .any(|reason| *reason != ExtractionTriggerReason::UncoveredCoverageGap),
+            reasons: Some(
+                decision
+                    .reasons
+                    .iter()
+                    .map(|reason| trigger_reason_name(*reason).to_string())
+                    .collect(),
+            ),
         })
+    }
+
+    /// ADR-0024 scope for a `propose_candidate_claim` call that sent no
+    /// explicit scope. Returns `resolved_scope` unless a decision model is
+    /// configured, `resolved_scope` is not `global`, and the model picks
+    /// `global` instead. The suggestion is not logged.
+    pub fn candidate_scope(
+        &self,
+        params: &ProposeCandidateClaimParams,
+        resolved_scope: &str,
+    ) -> String {
+        let Some(client) = self.decision.as_deref() else {
+            return resolved_scope.to_string();
+        };
+        if resolved_scope == "global" {
+            return resolved_scope.to_string();
+        }
+        let Ok(event) = self.store.get_event(params.event_id) else {
+            return resolved_scope.to_string();
+        };
+        match self.store.suggest_scope(
+            &params.subject,
+            &params.predicate,
+            &params.object,
+            &event.payload,
+            &[resolved_scope, "global"],
+            client,
+        ) {
+            Ok(Some(scope)) => scope,
+            _ => resolved_scope.to_string(),
+        }
     }
 
     pub fn propose_candidate_claim(
@@ -785,6 +894,33 @@ impl AverTools {
     ) -> anyhow::Result<ClaimView> {
         let claim_id = self.store.promote_candidate_claim(params.candidate_id)?;
         Ok(self.store.get_claim(claim_id)?.into())
+    }
+
+    pub fn triage_candidate_claim(
+        &self,
+        params: TriageCandidateClaimParams,
+    ) -> anyhow::Result<TriageCandidateClaimView> {
+        let client = self.decision.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("decision model not configured (set AVER_DECISION_MODEL)")
+        })?;
+        let (triage, claim_id) = match self
+            .store
+            .triage_candidate_claim(params.candidate_id, client)?
+        {
+            CandidateTriage::Promote => (
+                "promote",
+                self.store
+                    .get_candidate_claim(params.candidate_id)?
+                    .promoted_claim_id,
+            ),
+            CandidateTriage::Reject => ("reject", None),
+            CandidateTriage::Hold => ("hold", None),
+        };
+        Ok(TriageCandidateClaimView {
+            candidate_id: params.candidate_id,
+            triage: triage.to_string(),
+            claim_id,
+        })
     }
 
     pub fn reject_candidate_claim(
@@ -884,6 +1020,20 @@ fn parse_scope_walk(walk: Option<&str>, scope: &Option<String>) -> anyhow::Resul
         } else {
             ScopeWalk::Any
         }),
+    }
+}
+
+fn trigger_reason_name(reason: ExtractionTriggerReason) -> &'static str {
+    match reason {
+        ExtractionTriggerReason::ExplicitRemember => "explicit_remember",
+        ExtractionTriggerReason::EventCountThreshold => "event_count_threshold",
+        ExtractionTriggerReason::ObservationTokenThreshold => "observation_token_threshold",
+        ExtractionTriggerReason::UncoveredCoverageGap => "uncovered_coverage_gap",
+        ExtractionTriggerReason::SessionEnd => "session_end",
+        ExtractionTriggerReason::Correction => "correction",
+        ExtractionTriggerReason::CommitCompleted => "commit_completed",
+        ExtractionTriggerReason::IdleCompaction => "idle_compaction",
+        ExtractionTriggerReason::DecisionModel => "decision_model",
     }
 }
 
