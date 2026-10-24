@@ -20,7 +20,10 @@ ollama = ["dep:ureq"]
 rusqlite.workspace    = true
 sqlite-vec.workspace  = true
 serde.workspace       = true
-serde_json.workspace  = true
+# `float_roundtrip`: the log is the source of truth (ADR-0005/0025), so a
+# confidence or embedding component must parse back to the exact bits that
+# were written; serde_json's default float parsing is best-effort.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 ureq = { workspace = true, optional = true }
 thiserror.workspace   = true
 time.workspace        = true

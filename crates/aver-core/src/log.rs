@@ -643,7 +643,7 @@ mod tail_tests {
 
 #[cfg(test)]
 mod record_tests {
-    use super::LogRecord;
+    use super::{ConfidenceChange, LogRecord};
 
     /// One literal line per kind, in the exact shape the live writer emits
     /// today (copied from real logs where available). Parsing must succeed
@@ -744,6 +744,66 @@ mod record_tests {
         )
         .unwrap();
         assert_eq!(record.kind(), "retire_claim");
+    }
+
+    /// The log is the source of truth, so floats must come back bit-exact:
+    /// a decayed confidence like 1.6740341892093765e-44 or an embedding
+    /// component must not drift by an ulp through JSON.
+    #[test]
+    fn floats_round_trip_bit_exact() {
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let embedding: Vec<f32> = (0..2048)
+            .map(|_| f32::from_bits((next() >> 32) as u32))
+            .filter(|f| f.is_finite())
+            .collect();
+        let changes: Vec<ConfidenceChange> = (0..2048)
+            .map(|i| ConfidenceChange {
+                claim_id: i,
+                confidence: f64::from_bits(next()),
+            })
+            .filter(|c| c.confidence.is_finite())
+            .chain([ConfidenceChange {
+                claim_id: -1,
+                confidence: 1.6740341892093765e-44,
+            }])
+            .collect();
+        let records = [
+            LogRecord::EmbedVectorChunk {
+                ts: 1,
+                chunk_id: 1,
+                embedding,
+            },
+            LogRecord::DecayConfidence { ts: 1, changes },
+        ];
+        for record in records {
+            let line = serde_json::to_string(&record).unwrap();
+            let parsed: LogRecord = serde_json::from_str(&line).unwrap();
+            match (&record, &parsed) {
+                (
+                    LogRecord::EmbedVectorChunk { embedding: a, .. },
+                    LogRecord::EmbedVectorChunk { embedding: b, .. },
+                ) => assert!(
+                    a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits()),
+                    "f32 drift"
+                ),
+                (
+                    LogRecord::DecayConfidence { changes: a, .. },
+                    LogRecord::DecayConfidence { changes: b, .. },
+                ) => assert!(
+                    a.iter()
+                        .zip(b)
+                        .all(|(x, y)| x.confidence.to_bits() == y.confidence.to_bits()),
+                    "f64 drift"
+                ),
+                _ => unreachable!(),
+            }
+        }
     }
 
     #[test]
