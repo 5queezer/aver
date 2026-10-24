@@ -213,15 +213,28 @@ impl Store {
 
     pub fn list_events_for_session(&self, session_id: &str) -> Result<Vec<EpisodicEvent>, Error> {
         validate_event_field("session_id", session_id)?;
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id FROM episodic_events WHERE session_id = ?1 ORDER BY id")?;
-        let rows = stmt.query_map([session_id], |row| row.get::<_, i64>(0))?;
-        let mut events = Vec::new();
-        for row in rows {
-            events.push(self.get_event(row?)?);
-        }
-        Ok(events)
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, kind, payload, source, agent_id, agent_kind, ts, scope
+               FROM episodic_events WHERE session_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map([session_id], |row| {
+            let agent_kind: String = row.get(6)?;
+            let agent_kind = agent_kind.parse().map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(6, Type::Text, Box::new(err))
+            })?;
+            Ok(EpisodicEvent {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                kind: row.get(2)?,
+                payload: row.get(3)?,
+                source: row.get(4)?,
+                agent_id: row.get(5)?,
+                agent_kind,
+                ts: row.get(7)?,
+                scope: row.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     pub fn record_observation(
@@ -646,16 +659,15 @@ impl Store {
         }
 
         let mut reasons = Vec::new();
-        for (kind, reason) in [
-            (
-                "explicit_remember",
-                ExtractionTriggerReason::ExplicitRemember,
-            ),
-            ("session_end", ExtractionTriggerReason::SessionEnd),
-            ("correction", ExtractionTriggerReason::Correction),
-            ("commit_completed", ExtractionTriggerReason::CommitCompleted),
-            ("idle_compaction", ExtractionTriggerReason::IdleCompaction),
+        // The event `kind` that fires each reason is the reason's own name.
+        for reason in [
+            ExtractionTriggerReason::ExplicitRemember,
+            ExtractionTriggerReason::SessionEnd,
+            ExtractionTriggerReason::Correction,
+            ExtractionTriggerReason::CommitCompleted,
+            ExtractionTriggerReason::IdleCompaction,
         ] {
+            let kind = reason.as_str();
             if self
                 .conn
                 .query_row(
