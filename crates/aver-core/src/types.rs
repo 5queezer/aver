@@ -220,6 +220,42 @@ pub struct GraphPathQuery {
     pub max_hops: usize,
     pub predicates: Option<Vec<String>>,
     pub mode: GraphPathMode,
+    /// ADR-0021 scope the traversal is evaluated from. Claims are admitted
+    /// per `walk`; hyperedges carry no scope column and are treated as
+    /// `"global"` rows (see `Store::graph_path`).
+    pub scope: String,
+    /// ADR-0021 scope walk. `ScopeWalk::Any` ignores `scope` and reproduces
+    /// the unscoped traversal.
+    pub walk: ScopeWalk,
+}
+
+impl Default for GraphPathQuery {
+    /// Unscoped directed query with no confidence floor and 8 hops; `source`
+    /// and `target` are empty and must be set by the caller.
+    fn default() -> Self {
+        Self {
+            source: String::new(),
+            target: String::new(),
+            min_confidence: 0.0,
+            allowed_provenance: None,
+            max_hops: 8,
+            predicates: None,
+            mode: GraphPathMode::Directed,
+            scope: "global".to_string(),
+            walk: ScopeWalk::Any,
+        }
+    }
+}
+
+impl GraphPathQuery {
+    /// Query from `source` to `target` with the `Default` settings.
+    pub fn new(source: impl Into<String>, target: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+            target: target.into(),
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -231,6 +267,11 @@ pub struct GraphPathStep {
     pub provenance: Provenance,
     pub relationship_kind: RelationshipKind,
     pub source_refs: Vec<String>,
+    /// Id of the claim behind this step; `None` for hyperedge steps.
+    pub claim_id: Option<i64>,
+    /// ADR-0021 scope of the row behind this step. Hyperedges have no scope
+    /// column and report `"global"`.
+    pub scope: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

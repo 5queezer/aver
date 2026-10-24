@@ -19,6 +19,18 @@ struct EdgeCandidate {
     step: GraphPathStep,
 }
 
+/// ADR-0021: hyperedges carry no `scope` column, so the graph layer treats
+/// every hyperedge as a `"global"` row. A hyperedge is admitted exactly when
+/// the scope filter would admit a claim scoped `"global"`: always for `Any`
+/// and `Ancestors` (global is the implicit root of every path), and only for
+/// the `"global"` scope itself under `Exact` and `Descendants`.
+fn hyperedges_in_scope(scope: &str, walk: ScopeWalk) -> bool {
+    match walk {
+        ScopeWalk::Any | ScopeWalk::Ancestors => true,
+        ScopeWalk::Exact | ScopeWalk::Descendants => scope == "global",
+    }
+}
+
 pub trait GraphStorageAdapter {
     fn mode(&self) -> StorageMode;
     fn detect_communities(&self) -> Result<Vec<Community>, Error>;
@@ -105,10 +117,18 @@ impl Store {
     /// active hyperedges. Directed mode preserves claim direction; explicit
     /// bidirectional mode may traverse claims in reverse. Among shortest paths,
     /// the path with the highest minimum edge confidence is returned.
+    ///
+    /// ADR-0021: claims are admitted by `query.scope` per `query.walk` using
+    /// the same rule as `expand_with_scope`. Hyperedges have no scope column
+    /// and are treated as `"global"` rows (see `hyperedges_in_scope`), so they
+    /// are reachable from any scope under `Ancestors`/`Any` and only from
+    /// `"global"` under `Exact`/`Descendants`. `scope = "global"` with
+    /// `ScopeWalk::Any` reproduces the unscoped traversal.
     pub fn graph_path(&self, query: GraphPathQuery) -> Result<Option<GraphPath>, Error> {
         if query.source.trim().is_empty() || query.target.trim().is_empty() {
             return Err(Error::InvalidGraphEntity);
         }
+        validate_scope(&query.scope)?;
         if !(0.0..=1.0).contains(&query.min_confidence) {
             return Err(Error::InvalidConfidence {
                 value: query.min_confidence,
@@ -227,15 +247,24 @@ impl Store {
             |predicate: &str| predicate_filter.is_none_or(|allowed| allowed.contains(predicate));
         let mut candidates = Vec::new();
 
-        let mut claim_stmt = self.conn.prepare(
+        let (scope_clause, scope_params) = scope_filter_sql(&query.scope, query.walk);
+        let sql = format!(
             "SELECT id
                FROM claims
               WHERE status = 'ACTIVE'
                 AND confidence >= ?1
-              ORDER BY id",
-        )?;
+                AND {scope_clause}
+              ORDER BY id"
+        );
+        let mut claim_stmt = self.conn.prepare(&sql)?;
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&query.min_confidence];
+        for s in &scope_params {
+            params.push(s);
+        }
         let claim_ids = claim_stmt
-            .query_map([query.min_confidence], |row| row.get::<_, i64>(0))?
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                row.get::<_, i64>(0)
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(claim_stmt);
         for id in claim_ids {
@@ -251,6 +280,8 @@ impl Store {
                 provenance: claim.provenance,
                 relationship_kind: RelationshipKind::Claim,
                 source_refs: claim.source_refs.clone(),
+                claim_id: Some(claim.id),
+                scope: claim.scope.clone(),
             };
             candidates.push(EdgeCandidate {
                 traverse_from: claim.subject.clone(),
@@ -270,6 +301,9 @@ impl Store {
             }
         }
 
+        if !hyperedges_in_scope(&query.scope, query.walk) {
+            return Ok(candidates);
+        }
         for hyperedge in self.list_active_hyperedges()? {
             if hyperedge.confidence < query.min_confidence
                 || !provenance_allowed(hyperedge.provenance)
@@ -295,6 +329,8 @@ impl Store {
                             provenance: hyperedge.provenance,
                             relationship_kind: RelationshipKind::Hyperedge,
                             source_refs: hyperedge.source_refs.clone(),
+                            claim_id: None,
+                            scope: "global".to_string(),
                         },
                     });
                 }
@@ -412,7 +448,22 @@ impl Store {
         ids.into_iter().map(|id| self.get_claim(id)).collect()
     }
 
+    /// Weighted connected-component detection over every active claim and
+    /// hyperedge; the unscoped case of `detect_communities_with_scope`.
     pub fn detect_communities(&self) -> Result<Vec<Community>, Error> {
+        self.detect_communities_with_scope("global", ScopeWalk::Any)
+    }
+
+    /// ADR-0021: `detect_communities` restricted to claims admitted by `scope`
+    /// per `walk`. Hyperedges have no scope column and are treated as
+    /// `"global"` rows (see `hyperedges_in_scope`). Same algorithm, ordering
+    /// and scoring as the unscoped case; only the input edge set changes.
+    pub fn detect_communities_with_scope(
+        &self,
+        scope: &str,
+        walk: ScopeWalk,
+    ) -> Result<Vec<Community>, Error> {
+        validate_scope(scope)?;
         #[derive(Debug, Clone)]
         struct WeightedEdge {
             left: String,
@@ -451,14 +502,19 @@ impl Store {
         let mut weights: BTreeMap<(String, String), f64> = BTreeMap::new();
         let mut nodes = HashSet::new();
 
-        let mut stmt = self.conn.prepare(
+        let (scope_clause, scope_params) = scope_filter_sql(scope, walk);
+        let sql = format!(
             "SELECT id
                FROM claims
               WHERE status = 'ACTIVE'
-              ORDER BY id",
-        )?;
+                AND {scope_clause}
+              ORDER BY id"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
         let claims = stmt
-            .query_map([], |row| row.get::<_, i64>(0))?
+            .query_map(rusqlite::params_from_iter(scope_params.iter()), |row| {
+                row.get::<_, i64>(0)
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?
             .into_iter()
             .map(|id| self.get_claim(id))
@@ -474,7 +530,12 @@ impl Store {
             );
         }
 
-        for hyperedge in self.list_active_hyperedges()? {
+        let hyperedges = if hyperedges_in_scope(scope, walk) {
+            self.list_active_hyperedges()?
+        } else {
+            Vec::new()
+        };
+        for hyperedge in hyperedges {
             for participant in &hyperedge.participants {
                 nodes.insert(participant.entity.clone());
             }
