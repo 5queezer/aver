@@ -86,6 +86,8 @@ curl -fsS http://127.0.0.1:3317/healthz
 
 Or let the installer verify checksums for you: `./install.sh --repo 5queezer/aver --version $V --server` installs `aver` to `~/.cargo/bin` and `aver-server` to `~/.local/bin` (`--server-dir` to change).
 
+Maintainers: see [doc/release-procedure.md](doc/release-procedure.md) for the release dry run, tagging and rollback.
+
 ### Store and recall a claim
 
 ```bash
