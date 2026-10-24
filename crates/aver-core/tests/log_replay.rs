@@ -430,7 +430,7 @@ fn concurrent_writers_allocate_unique_claim_ids() {
         handle.join().unwrap();
     }
 
-    // 50 claims with unique writer-minted ids (ADR-0025) — no allocation
+    // 50 claims with unique writer-minted ids (ADR-0026) — no allocation
     // race, no assumption about density or a starting value.
     let rows = claims_rows(dir.path());
     assert_eq!(rows.len(), 50);
@@ -554,7 +554,7 @@ fn vector_chunks_are_rebuilt_by_replay() {
         (claim_id, chunk_id, plain_chunk_id)
     };
 
-    // ADR-0025: vector chunks are logged, so replay rebuilds `vector_chunks`
+    // ADR-0026: vector chunks are logged, so replay rebuilds `vector_chunks`
     // and the `vec0` index instead of leaving them for a re-embed pass.
     delete_db(dir.path());
     let report = replay(dir.path(), false).expect("replay should succeed");

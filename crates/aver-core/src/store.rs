@@ -109,7 +109,7 @@ pub struct Store {
     pub(crate) log_path: PathBuf,
     pub(crate) event_log_path: PathBuf,
     pub(crate) observation_log_path: PathBuf,
-    /// Writer-minted id generator shared by every logged table (ADR-0025).
+    /// Writer-minted id generator shared by every logged table (ADR-0026).
     pub(crate) ids: IdGen,
 }
 
@@ -189,7 +189,7 @@ impl Store {
         // crash. Every log series rotates, not just the claims log, so
         // events.jsonl and observations.jsonl stay bounded too.
         finalize_pending_rotations(&memory_dir)?;
-        // ADR-0025: seed the id generator from the log tails before rotation
+        // ADR-0026: seed the id generator from the log tails before rotation
         // empties the active files. The projection is never consulted.
         let ids = IdGen::seeded(max_id_in_log_tails(&memory_dir)?);
         for series in ROTATED_LOG_SERIES {

@@ -20,7 +20,7 @@ impl Store {
     /// Insert vector chunk metadata for a claim without an embedding (to be
     /// backfilled by [`Store::backfill_vector_embeddings`]). `vector_chunks`
     /// is the durable join point between claims and embeddings; the chunk is
-    /// logged (ADR-0025) so replay rebuilds it.
+    /// logged (ADR-0026) so replay rebuilds it.
     pub fn add_vector_chunk(
         &self,
         claim_id: i64,
@@ -57,7 +57,7 @@ impl Store {
         self.insert_vector_chunk(claim_id, text, embedding_model, Some(embedding.to_vec()))
     }
 
-    /// Log-first chunk write (ADR-0005/0025): mint the id, append the record
+    /// Log-first chunk write (ADR-0005/0026): mint the id, append the record
     /// to the claims log (chunks reference claims, which replay first), then
     /// apply inside one write transaction.
     fn insert_vector_chunk(
@@ -190,7 +190,7 @@ impl Store {
 
     /// Backfill stored embeddings for any vector_chunks that have no embedding yet,
     /// using the provided EmbeddingClient. Each backfilled embedding is logged
-    /// as an `embed_vector_chunk` record (ADR-0025) so replay rebuilds the
+    /// as an `embed_vector_chunk` record (ADR-0026) so replay rebuilds the
     /// same `vector_chunks` and `vector_index` rows. Returns how many were
     /// backfilled.
     pub fn backfill_vector_embeddings(

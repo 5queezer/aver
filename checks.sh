@@ -36,7 +36,7 @@ fi
 echo "=== log-first invariant heuristic ==="
 # The claim write path must append to the JSONL audit log before the
 # projection write (ADR-0005), and `apply.rs` is the only file that may hold
-# the projection INSERT (ADR-0025). `claims.rs` owns the write path and must
+# the projection INSERT (ADR-0026). `claims.rs` owns the write path and must
 # contain both markers; a missing file or marker means the path moved, so
 # fail instead of silently passing. Every other aver-core source file that
 # contains both markers must also keep the append first.

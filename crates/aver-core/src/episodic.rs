@@ -544,7 +544,7 @@ impl Store {
         if !coverage.uncovered_event_ids.is_empty() {
             // Group uncovered events that are adjacent in session order into
             // `first-last` ranges. Ids are writer-minted and sparse
-            // (ADR-0025), so adjacency is by position, not by `id + 1`.
+            // (ADR-0026), so adjacency is by position, not by `id + 1`.
             let uncovered: HashSet<i64> = coverage.uncovered_event_ids.iter().copied().collect();
             let format_range = |start: i64, end: i64| {
                 if start == end {

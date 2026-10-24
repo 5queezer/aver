@@ -1,4 +1,4 @@
-//! Writer-minted ids (ADR-0025).
+//! Writer-minted ids (ADR-0026).
 //!
 //! Every logged row id (claims, hyperedges, episodic events, candidate
 //! claims, contradictions, vector chunks) comes from one store-wide

@@ -47,7 +47,7 @@ impl From<candidate_decision::DecisionLogField<'_>> for Decision {
     }
 }
 
-/// Every record the append-only log can carry (ADR-0005, ADR-0025). The
+/// Every record the append-only log can carry (ADR-0005, ADR-0026). The
 /// JSON shape of each variant is frozen: `kind` is the serde tag, field
 /// names and order are the on-disk format, and every log written so far
 /// still parses. Fields added after a kind first shipped carry a serde
@@ -181,7 +181,7 @@ pub(crate) enum LogRecord {
         source_refs: Vec<String>,
         promote: bool,
     },
-    /// ADR-0017/0025 vector chunk. Logged so replay rebuilds `vector_chunks`
+    /// ADR-0017/0026 vector chunk. Logged so replay rebuilds `vector_chunks`
     /// and the `vec0` index instead of leaving them empty.
     AddVectorChunk {
         ts: i64,
@@ -242,7 +242,7 @@ impl LogRecord {
         }
     }
 
-    /// The newest writer-minted id this record carries (ADR-0025), used to
+    /// The newest writer-minted id this record carries (ADR-0026), used to
     /// seed the generator from a log tail. Records that only reference
     /// older ids return `None`.
     pub(crate) fn newest_minted_id(&self) -> Option<i64> {
@@ -322,7 +322,7 @@ pub(crate) fn last_line(path: &Path) -> std::io::Result<Option<String>> {
 }
 
 /// Largest writer-minted id in the last line of each active log series
-/// (ADR-0025). Seeds the id generator so ids stay monotonic across process
+/// (ADR-0026). Seeds the id generator so ids stay monotonic across process
 /// restarts even if the clock moved backwards; the projection is never
 /// consulted. Unparseable tails are ignored (the clock still orders ids).
 pub(crate) fn max_id_in_log_tails(memory_dir: &Path) -> Result<i64, Error> {

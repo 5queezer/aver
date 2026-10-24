@@ -1,4 +1,4 @@
-//! The one projection writer (ADR-0025): [`apply`] is the only code in the
+//! The one projection writer (ADR-0026): [`apply`] is the only code in the
 //! crate that mutates the SQLite tables holding logged state — claims,
 //! hyperedges (+participants), episodic_events, observations,
 //! observation_prune_markers, candidate_claims, contradictions,

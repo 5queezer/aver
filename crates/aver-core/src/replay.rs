@@ -51,7 +51,7 @@ pub enum ReplayMode {
 /// Replay logs in the deterministic order specified by ADR-0019 §4:
 /// rotated `log.{N}.jsonl.gz` (numeric ascending) → `log.jsonl` →
 /// `events.jsonl` → `observations.jsonl`. The per-agent mirror
-/// (`agents/<id>/log.jsonl`) is gone (ADR-0025); existing `agents/`
+/// (`agents/<id>/log.jsonl`) is gone (ADR-0026); existing `agents/`
 /// directories are ignored. Replay treats a record whose id already exists
 /// with identical content as idempotent and only errors on genuine
 /// id-with-different-content collisions.

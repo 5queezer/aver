@@ -261,7 +261,7 @@ impl Store {
             .map(|_| ())
     }
 
-    /// The one claim write path (ADR-0025): validate → privacy gate → mint
+    /// The one claim write path (ADR-0026): validate → privacy gate → mint
     /// the id → build the record → append it to the log → `apply` it to the
     /// projection, all inside one write transaction.
     fn insert_claim(&self, write: ClaimWrite<'_>) -> Result<i64, Error> {
@@ -349,7 +349,7 @@ impl Store {
         self.privacy_filter_recording(reason)?;
         self.ensure_claim_exists(claim_id)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        // The contradiction id is writer-minted (ADR-0025) so the log record
+        // The contradiction id is writer-minted (ADR-0026) so the log record
         // pins the same id the projection uses (ADR-0005).
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {
@@ -472,7 +472,7 @@ impl Store {
             None
         };
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        // The contradiction id is writer-minted (ADR-0025) so the log record
+        // The contradiction id is writer-minted (ADR-0026) so the log record
         // pins the same id the projection uses (ADR-0005).
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<i64, Error> {

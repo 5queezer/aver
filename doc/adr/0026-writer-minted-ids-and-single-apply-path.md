@@ -1,4 +1,4 @@
-# 25. Writer-minted ids and a single apply path
+# 26. Writer-minted ids and a single apply path
 
 Date: 2026-10-24
 

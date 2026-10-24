@@ -1,4 +1,4 @@
-//! Phase 1 exit criteria (ADR-0025): a store rebuilt by `replay` from its
+//! Phase 1 exit criteria (ADR-0026): a store rebuilt by `replay` from its
 //! JSONL alone is row-identical to the original, and two stores merge by
 //! concatenating their logs.
 

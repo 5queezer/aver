@@ -607,7 +607,7 @@ fn add_claim_from_agent_logs_agent_attribution_in_the_single_log() {
         )
         .unwrap();
 
-    // ADR-0025: one log. Agent attribution lives on the record itself; no
+    // ADR-0026: one log. Agent attribution lives on the record itself; no
     // per-agent mirror is written.
     let log = std::fs::read_to_string(dir.path().join("log.jsonl")).unwrap();
     let entry: serde_json::Value = serde_json::from_str(log.lines().next().unwrap()).unwrap();

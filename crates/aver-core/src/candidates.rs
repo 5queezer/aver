@@ -99,7 +99,7 @@ impl Store {
             self.privacy_filter_path_recording(possible_path)?;
         }
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        // The candidate id is writer-minted (ADR-0025) so the append-only log
+        // The candidate id is writer-minted (ADR-0026) so the append-only log
         // can pin it (ADR-0005). Candidate records go to the episodic
         // log: they FK-reference episodic_events, which replay in the same
         // phase (ADR-0019 §4 input order replays events.jsonl after
