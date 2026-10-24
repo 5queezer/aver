@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
+use anyhow::Context;
 use askama::Template;
 use axum::extract::{ConnectInfo, Form, Query, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
@@ -38,6 +39,7 @@ use sha2::Sha256;
 use url::Url;
 
 use crate::auth::{AuthDb, Session, User, UserKind};
+use crate::oauth::constant_time_eq;
 use crate::origin::validate_browser_origin;
 use crate::scopes::{SUPPORTED, ScopeParseError, parse_scope_list};
 
@@ -59,7 +61,9 @@ type HmacSha256 = Hmac<Sha256>;
 ///
 /// - Loopback requests authenticate as the fixed local user.
 /// - Non-loopback requests may authenticate from the configured trusted header.
-/// - Returns `None` when authentication is not possible.
+/// - Returns `Ok(None)` when authentication is not possible.
+/// - Returns `Err` when the auth database fails — surfacing the failure to
+///   the caller (HTML 500) instead of silently degrading to a 403.
 ///
 /// `headers` is read for Profile C trusted-header auth (e.g.
 /// `X-Forwarded-User`).
@@ -68,7 +72,7 @@ pub fn authenticate_loopback(
     headers: &HeaderMap,
     auth_db: &AuthDb,
     trusted_auth_header: Option<&str>,
-) -> Option<User> {
+) -> anyhow::Result<Option<User>> {
     authenticate_request(remote_addr, headers, auth_db, trusted_auth_header)
 }
 
@@ -77,7 +81,7 @@ pub fn authenticate_request(
     headers: &HeaderMap,
     auth_db: &AuthDb,
     trusted_auth_header: Option<&str>,
-) -> Option<User> {
+) -> anyhow::Result<Option<User>> {
     if remote_addr.ip().is_loopback() {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let user = User {
@@ -86,25 +90,31 @@ pub fn authenticate_request(
             external_id: None,
             created_at: now,
         };
-        if let Err(err) = auth_db.upsert_user(&user) {
-            tracing_unavailable_warn(&format!("upsert local user failed: {err}"));
-            return None;
-        }
-        return auth_db.get_user(LOCAL_USER_ID).ok().flatten();
+        auth_db
+            .upsert_user(&user)
+            .context("upsert local user failed")?;
+        return auth_db
+            .get_user(LOCAL_USER_ID)
+            .context("load local user failed");
     }
 
-    let header_name = trusted_auth_header?.trim();
-    let header_name = match HeaderName::from_bytes(header_name.as_bytes()) {
-        Ok(v) => v,
-        Err(_) => return None,
+    let Some(header_name) = trusted_auth_header else {
+        return Ok(None);
     };
-    let raw = headers.get(header_name)?.to_str().ok()?.trim();
+    let header_name = match HeaderName::from_bytes(header_name.trim().as_bytes()) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let raw = match headers.get(header_name).and_then(|v| v.to_str().ok()) {
+        Some(raw) => raw.trim(),
+        None => return Ok(None),
+    };
     if raw.is_empty() {
-        return None;
+        return Ok(None);
     }
     let user_id = raw.split(',').next().unwrap_or("").trim();
     if user_id.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
@@ -114,17 +124,13 @@ pub fn authenticate_request(
         external_id: None,
         created_at: now,
     };
-    if let Err(err) = auth_db.upsert_user(&user) {
-        tracing_unavailable_warn(&format!("upsert header-auth user failed: {err}"));
-        return None;
-    }
-    auth_db.get_user(&user.id).ok().flatten()
+    auth_db
+        .upsert_user(&user)
+        .context("upsert header-auth user failed")?;
+    auth_db
+        .get_user(&user.id)
+        .context("load header-auth user failed")
 }
-
-/// Logging stub: aver-server does not yet pull in `tracing`. Keeps the call
-/// site honest about the failure without panicking; in practice the upsert
-/// path is exercised in tests so silent failure is acceptable.
-fn tracing_unavailable_warn(_msg: &str) {}
 
 /// Reads the session cookie from `headers` and returns the bound user if the
 /// session is still valid.
@@ -194,7 +200,8 @@ pub fn compute_csrf_token(
 
 /// Constant-time-ish equality. `hmac::Mac::verify` cannot be used directly
 /// because we already encoded the token; comparing equal-length base64 is
-/// fine for this surface and avoids re-deriving the raw bytes.
+/// fine for this surface and avoids re-deriving the raw bytes. Uses the
+/// shared helper from [`crate::oauth`].
 pub fn verify_csrf_token(
     server_secret: &[u8],
     session_id: &str,
@@ -204,17 +211,6 @@ pub fn verify_csrf_token(
 ) -> bool {
     let expected = compute_csrf_token(server_secret, session_id, client_id, code_challenge);
     constant_time_eq(expected.as_bytes(), presented.as_bytes())
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
 }
 
 /// True iff the consent record covers every requested scope (treating an
@@ -268,11 +264,15 @@ struct ErrorTemplate<'a> {
     detail: &'a str,
 }
 
-fn html_error(status: StatusCode, title: &str, detail: &str) -> Response {
+fn html_message(status: StatusCode, title: &str, detail: &str) -> Response {
     let body = ErrorTemplate { title, detail }
         .render()
-        .expect("error template should render");
+        .expect("message template should render");
     html_response(status, body, None)
+}
+
+fn html_error(status: StatusCode, title: &str, detail: &str) -> Response {
+    html_message(status, title, detail)
 }
 
 #[derive(Debug, Deserialize)]
@@ -479,12 +479,20 @@ pub async fn handle_loopback_get_authorize(
         auth_db,
         deps.trusted_auth_header.as_deref(),
     ) {
-        Some(u) => u,
-        None => {
+        Ok(Some(u)) => u,
+        Ok(None) => {
             return html_error(
                 StatusCode::FORBIDDEN,
                 "Authorization unavailable",
                 "Authentication is unavailable for this request.",
+            );
+        }
+        Err(err) => {
+            eprintln!("failed to authenticate OAuth browser user: {err:#}");
+            return html_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Server error",
+                "Authentication failed.",
             );
         }
     };
@@ -535,8 +543,13 @@ pub async fn handle_loopback_get_authorize(
     let scopes = parse_scope(query.scope.as_deref());
 
     // Skip the screen if a live consent already covers the requested scopes.
+    // An empty grant never skips: `consent_covers` treats an empty request
+    // as satisfied, so a zero-scope consent row would otherwise skip forever,
+    // minting tokens that fail every per-tool scope check with no way back
+    // to this screen to grant real access.
     if let Ok(Some(consent)) = auth_db.get_consent(&user.id, &query.client_id)
         && consent.revoked_at.is_none()
+        && !consent.granted_scopes.is_empty()
         && consent_covers(&consent.granted_scopes, &scopes)
     {
         let _ = auth_db.touch_consent_last_used(&user.id, &query.client_id);
@@ -710,12 +723,20 @@ pub async fn handle_authorize_decision(
         auth_db,
         deps.trusted_auth_header.as_deref(),
     ) {
-        Some(u) => u,
-        None => {
+        Ok(Some(u)) => u,
+        Ok(None) => {
             return html_error(
                 StatusCode::FORBIDDEN,
                 "Authorization unavailable",
                 "Authentication is unavailable for this request.",
+            );
+        }
+        Err(err) => {
+            eprintln!("failed to authenticate OAuth browser user: {err:#}");
+            return html_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Server error",
+                "Authentication failed.",
             );
         }
     };
@@ -850,6 +871,137 @@ pub async fn handle_authorize_decision(
             "Form value 'decision' must be 'approve' or 'deny'.",
         ),
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RevokeConsentForm {
+    pub client_id: String,
+}
+
+/// `POST /oauth/consent/revoke`: revoke the session user's consent for one
+/// client and invalidate that client's live access/refresh tokens (the DB
+/// layer revokes both, see [`AuthDb::revoke_consent`]). This is the recovery
+/// hatch for a consent the user no longer wants — including a zero-scope
+/// grant recorded before empty grants stopped skipping the consent screen —
+/// after which the next `/oauth/authorize` visit re-renders the screen.
+pub async fn handle_revoke_consent(
+    State(deps): State<Arc<ConsentDeps>>,
+    ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Form(form): Form<RevokeConsentForm>,
+) -> Response {
+    let auth_db_guard = match deps.auth_db.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            return html_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Server error",
+                "Auth database lock poisoned.",
+            );
+        }
+    };
+    let auth_db: &AuthDb = &auth_db_guard;
+
+    let user = match authenticate_loopback(
+        remote_addr,
+        &headers,
+        auth_db,
+        deps.trusted_auth_header.as_deref(),
+    ) {
+        Ok(Some(u)) => u,
+        Ok(None) => {
+            return html_error(
+                StatusCode::FORBIDDEN,
+                "Authorization unavailable",
+                "Authentication is unavailable for this request.",
+            );
+        }
+        Err(err) => {
+            eprintln!("failed to authenticate OAuth browser user: {err:#}");
+            return html_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Server error",
+                "Authentication failed.",
+            );
+        }
+    };
+
+    let allowed = match parse_allowed_origins(&deps.base_url) {
+        Ok(v) => v,
+        Err(_) => {
+            return html_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Server misconfiguration",
+                "AVER_BASE_URL is not a valid URL.",
+            );
+        }
+    };
+    if let Err(err) = validate_browser_origin(&headers, &allowed) {
+        return html_error(
+            StatusCode::FORBIDDEN,
+            "Cross-site POST rejected",
+            &err.to_string(),
+        );
+    }
+
+    // Revoking is a state-changing browser action: require the session
+    // cookie (SameSite=Lax) to bind the request to the consenting user.
+    let (_session, session_user) = match current_session(&headers, auth_db) {
+        Some(v) => v,
+        None => {
+            return html_error(
+                StatusCode::BAD_REQUEST,
+                "Missing session",
+                "No valid Aver session cookie was presented.",
+            );
+        }
+    };
+    if session_user.id != user.id {
+        return html_error(
+            StatusCode::FORBIDDEN,
+            "Wrong user",
+            "Session does not match authenticated user.",
+        );
+    }
+
+    if form.client_id.trim().is_empty() {
+        return html_error(
+            StatusCode::BAD_REQUEST,
+            "Missing client_id",
+            "Form value 'client_id' is required.",
+        );
+    }
+    match auth_db.get_client(&form.client_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return html_error(
+                StatusCode::BAD_REQUEST,
+                "Unknown client",
+                "No OAuth client is registered with that client_id.",
+            );
+        }
+        Err(_) => {
+            return html_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Server error",
+                "Failed to look up the OAuth client.",
+            );
+        }
+    }
+
+    if let Err(err) = auth_db.revoke_consent(&user.id, &form.client_id) {
+        return html_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Server error",
+            &format!("Failed to revoke consent: {err}"),
+        );
+    }
+
+    html_message(
+        StatusCode::OK,
+        "Consent revoked",
+        "The client's consent and its live tokens were revoked. Restart the client's OAuth flow (or revisit /oauth/authorize) to grant access again.",
+    )
 }
 
 #[cfg(test)]

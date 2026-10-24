@@ -80,6 +80,34 @@ fn empty_string_header_is_treated_as_unset() {
     assert_eq!(resolved.scope, "proj/env");
 }
 
+#[test]
+fn rejects_empty_path_segments() {
+    for bad in ["///", "a//b", "/a", "a/", "//"] {
+        let err = resolve_scope(Some(bad), None, None, None)
+            .expect_err(&format!("scope {bad:?} with empty segment must reject"));
+        let chain = format!("{err:?}");
+        assert!(
+            chain.contains("empty path segment") || chain.contains("blank"),
+            "{bad:?}: {chain}"
+        );
+    }
+}
+
+#[test]
+fn rejects_overlong_scope() {
+    let too_long = "a".repeat(257);
+    let err = resolve_scope(Some(&too_long), None, None, None)
+        .expect_err("scope over 256 bytes must reject");
+    let chain = format!("{err:?}");
+    assert!(chain.contains("256"), "{chain}");
+
+    let at_max = "a".repeat(256);
+    assert!(
+        resolve_scope(Some(&at_max), None, None, None).is_ok(),
+        "256-byte scope is the accepted boundary"
+    );
+}
+
 fn _assert_resolved_is_clone_send_sync<T: Clone + Send + Sync>() {}
 fn _exercise() {
     _assert_resolved_is_clone_send_sync::<ResolvedScope>();

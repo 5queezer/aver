@@ -166,7 +166,6 @@ fn recall_with_scope_filters_by_walk() {
     let view = tools
         .recall(RecallParams {
             query: "uses".to_string(),
-            alpha: None,
             hops: None,
             top_k: Some(10),
             scope: Some("proj/aver".to_string()),

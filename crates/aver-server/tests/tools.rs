@@ -28,7 +28,6 @@ fn remember_claim_tool_writes_claim_and_recall_returns_it() {
     let recalled = tools
         .recall(RecallParams {
             query: "MCP_tools".to_string(),
-            alpha: None,
             hops: None,
             top_k: Some(5),
             scope: None,
@@ -139,7 +138,6 @@ fn adr0008_five_tool_surface_covers_claim_graph_lifecycle() {
     let recalled = tools
         .recall(RecallParams {
             query: "Stripe".to_string(),
-            alpha: None,
             hops: Some(2),
             top_k: Some(5),
             scope: None,
@@ -310,31 +308,6 @@ fn observation_projection_tools_expose_recall_and_compaction_summary() {
 }
 
 #[test]
-fn recall_tool_rejects_alpha_outside_unit_interval() {
-    let dir = tempfile::tempdir().unwrap();
-    let tools = AverTools::open(dir.path()).unwrap();
-
-    let err = tools
-        .recall(RecallParams {
-            query: "Stripe".to_string(),
-            alpha: Some(1.5),
-            hops: None,
-            top_k: Some(5),
-            scope: None,
-            scope_walk: None,
-            agent_id: None,
-            agent_kind: None,
-            predicate: None,
-            predicate_walk: None,
-            min_confidence: None,
-            status: None,
-        })
-        .expect_err("invalid alpha should be rejected");
-
-    assert!(err.to_string().contains("alpha"));
-}
-
-#[test]
 fn add_triple_rejects_confidence_outside_unit_interval() {
     let dir = tempfile::tempdir().unwrap();
     let tools = AverTools::open(dir.path()).unwrap();
@@ -372,7 +345,6 @@ fn add_triple_persists_valid_confidence_override() {
     let recalled = tools
         .recall(RecallParams {
             query: "PaymentGateway".to_string(),
-            alpha: None,
             hops: None,
             top_k: Some(5),
             scope: None,
@@ -420,7 +392,6 @@ fn recall_tool_rejects_zero_hops() {
     let err = tools
         .recall(RecallParams {
             query: "PaymentGateway".to_string(),
-            alpha: None,
             hops: Some(0),
             top_k: Some(5),
             scope: None,
@@ -445,7 +416,6 @@ fn recall_tool_rejects_zero_top_k() {
     let err = tools
         .recall(RecallParams {
             query: "PaymentGateway".to_string(),
-            alpha: None,
             hops: None,
             top_k: Some(0),
             scope: None,
@@ -481,7 +451,6 @@ fn recall_tool_returns_graph_context_for_entity_query() {
     let recalled = tools
         .recall(RecallParams {
             query: "PaymentGateway".to_string(),
-            alpha: None,
             hops: Some(1),
             top_k: Some(5),
             scope: None,
@@ -525,7 +494,6 @@ fn recall_tool_expands_graph_from_recalled_claim_subject_when_query_is_phrase() 
     let recalled = tools
         .recall(RecallParams {
             query: "what depends on PaymentGateway".to_string(),
-            alpha: None,
             hops: Some(1),
             top_k: Some(5),
             scope: None,
@@ -569,7 +537,6 @@ fn recall_tool_reports_confidence_floor_for_returned_triples() {
     let recalled = tools
         .recall(RecallParams {
             query: "PaymentGateway".to_string(),
-            alpha: None,
             hops: Some(1),
             top_k: Some(5),
             scope: None,
@@ -616,7 +583,6 @@ fn recall_tool_confidence_floor_includes_subgraph_edges() {
     let recalled = tools
         .recall(RecallParams {
             query: "status current".to_string(),
-            alpha: None,
             hops: Some(1),
             top_k: Some(1),
             scope: None,

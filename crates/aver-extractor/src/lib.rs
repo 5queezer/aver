@@ -3,9 +3,10 @@
 pub mod lang;
 pub mod prose;
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use tree_sitter::{Language, Node, Parser};
 
@@ -24,6 +25,9 @@ pub use lang::swift::*;
 pub use lang::typescript::*;
 pub use prose::parse_prose_facts;
 
+const DEFAULT_PLUGIN_TIMEOUT: Duration = Duration::from_secs(30);
+const PLUGIN_POLL_INTERVAL: Duration = Duration::from_millis(5);
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct ExtractedFact {
     pub subject: String,
@@ -31,7 +35,7 @@ pub struct ExtractedFact {
     pub object: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PluginRequest {
     pub id: u64,
     pub method: String,
@@ -40,7 +44,15 @@ pub struct PluginRequest {
 
 #[derive(Debug, serde::Deserialize)]
 struct JsonRpcPluginResponse {
-    result: ProseExtractionResult,
+    id: Option<u64>,
+    result: Option<ProseExtractionResult>,
+    error: Option<JsonRpcPluginError>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct JsonRpcPluginError {
+    code: i64,
+    message: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -52,6 +64,7 @@ struct ProseExtractionResult {
 pub struct JsonRpcPluginRunner {
     program: String,
     args: Vec<String>,
+    timeout: Duration,
 }
 
 impl JsonRpcPluginRunner {
@@ -59,6 +72,7 @@ impl JsonRpcPluginRunner {
         Self {
             program: program.into(),
             args: Vec::new(),
+            timeout: DEFAULT_PLUGIN_TIMEOUT,
         }
     }
 
@@ -67,33 +81,80 @@ impl JsonRpcPluginRunner {
         self
     }
 
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// Sends one newline-delimited JSON-RPC request and waits for a single
+    /// JSON-RPC response on stdout. The request stream is closed after the
+    /// write so plugins may read stdin to EOF.
     pub fn extract(&self, request: PluginRequest) -> Result<Vec<ExtractedFact>, Error> {
-        let mut child = Command::new(&self.program)
-            .args(&self.args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()?;
+        let request_id = request.id;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "id": request.id,
             "method": request.method,
             "params": { "text": request.text },
         });
-        {
-            let stdin = child.stdin.as_mut().ok_or(Error::PluginMissingStdin)?;
-            writeln!(stdin, "{request}")?;
+
+        let mut child = Command::new(&self.program)
+            .args(&self.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+
+        let mut stdin = child.stdin.take().ok_or(Error::PluginMissingStdin)?;
+        writeln!(stdin, "{request}")?;
+        drop(stdin);
+
+        let mut stdout = child.stdout.take().ok_or(Error::PluginMissingStdout)?;
+        let reader = std::thread::spawn(move || {
+            let mut buffer = Vec::new();
+            stdout.read_to_end(&mut buffer).map(|_| buffer)
+        });
+
+        let deadline = Instant::now() + self.timeout;
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(Error::PluginTimeout(self.timeout));
+            }
+            std::thread::sleep(PLUGIN_POLL_INTERVAL);
+        };
+
+        let stdout = reader
+            .join()
+            .map_err(|_| Error::Io(std::io::Error::other("plugin stdout reader panicked")))??;
+
+        if !status.success() {
+            return Err(Error::PluginFailed(status.code()));
         }
-        let output = child.wait_with_output()?;
-        if !output.status.success() {
-            return Err(Error::PluginFailed(output.status.code()));
+
+        let response: JsonRpcPluginResponse = serde_json::from_slice(&stdout)?;
+        if let Some(error) = response.error {
+            return Err(Error::PluginError {
+                code: error.code,
+                message: error.message,
+            });
         }
-        let response: JsonRpcPluginResponse = serde_json::from_slice(&output.stdout)?;
-        validate_facts(&response.result.facts)?;
-        Ok(response.result.facts)
+        if response.id != Some(request_id) {
+            return Err(Error::PluginIdMismatch {
+                expected: request_id,
+                actual: response.id,
+            });
+        }
+        let result = response.result.ok_or(Error::PluginMissingResult)?;
+        validate_facts(&result.facts)?;
+        Ok(result.facts)
     }
 }
 
-fn validate_facts(facts: &[ExtractedFact]) -> Result<(), Error> {
+pub(crate) fn validate_facts(facts: &[ExtractedFact]) -> Result<(), Error> {
     for fact in facts {
         if fact.subject.trim().is_empty() {
             return Err(Error::InvalidFact("subject"));
@@ -142,6 +203,15 @@ pub(crate) fn parse_with_language(
     parser.parse(source, None).ok_or(Error::ParseFailed)
 }
 
+/// Returns the first direct child with the given kind, without descending into
+/// nested nodes. Use this to anchor clause lookups (base lists, heritage
+/// clauses) so a nested type's clause is never attributed to an outer type.
+pub(crate) fn named_child_of_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .find(|child| child.kind() == kind)
+}
+
 pub(crate) fn collect_named_nodes(
     node: Node<'_>,
     source: &[u8],
@@ -169,6 +239,42 @@ pub(crate) fn collect_names_from_kinds(
     let mut names = Vec::new();
     collect_named_nodes(node, source, kinds, &mut names)?;
     Ok(names)
+}
+
+/// Collects names like [`collect_names_from_kinds`] but only for nodes that
+/// also have the given child field — e.g. requiring a `body` field so C/C++
+/// forward declarations and usages (`struct Foo *p;`) are not reported as
+/// definitions.
+pub(crate) fn collect_names_from_kinds_requiring_field(
+    node: Node<'_>,
+    source: &[u8],
+    kinds: &[&str],
+    required_field: &str,
+) -> Result<Vec<String>, Error> {
+    let mut names = Vec::new();
+    collect_named_nodes_requiring_field(node, source, kinds, required_field, &mut names)?;
+    Ok(names)
+}
+
+fn collect_named_nodes_requiring_field(
+    node: Node<'_>,
+    source: &[u8],
+    kinds: &[&str],
+    required_field: &str,
+    names: &mut Vec<String>,
+) -> Result<(), Error> {
+    if kinds.contains(&node.kind())
+        && node.child_by_field_name(required_field).is_some()
+        && let Some(name) = node.child_by_field_name("name")
+    {
+        names.push(name.utf8_text(source)?.to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_named_nodes_requiring_field(child, source, kinds, required_field, names)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn definition_facts(path: &str, kind: &str, names: Vec<String>) -> Vec<ExtractedFact> {
@@ -406,6 +512,16 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("plugin stdin unavailable")]
     PluginMissingStdin,
+    #[error("plugin stdout unavailable")]
+    PluginMissingStdout,
     #[error("plugin exited unsuccessfully: {0:?}")]
     PluginFailed(Option<i32>),
+    #[error("plugin timed out after {0:?}")]
+    PluginTimeout(Duration),
+    #[error("plugin returned JSON-RPC error {code}: {message}")]
+    PluginError { code: i64, message: String },
+    #[error("plugin response id {actual:?} does not match request id {expected}")]
+    PluginIdMismatch { expected: u64, actual: Option<u64> },
+    #[error("plugin response contains neither result nor error")]
+    PluginMissingResult,
 }

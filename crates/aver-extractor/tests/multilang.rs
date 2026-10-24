@@ -1852,3 +1852,322 @@ fn extract_facts_for_path_dispatches_common_language_extensions() {
             .is_empty()
     );
 }
+
+// Regression tests: C/C++ usages and forward declarations are not definitions.
+
+#[test]
+fn extract_c_facts_do_not_treat_struct_and_enum_usages_as_definitions() {
+    let source = "struct Foo *p;\nenum F x;\nstruct Bar { int x; };\nenum E { A };";
+
+    assert_eq!(extract_c_structs(source).unwrap(), vec!["Bar".to_string()]);
+    assert_eq!(extract_c_enums(source).unwrap(), vec!["E".to_string()]);
+    let facts = extract_c_facts("memory.c", source).unwrap();
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "memory.c".to_string(),
+        predicate: "defines".to_string(),
+        object: "Struct:Foo".to_string(),
+    }));
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "memory.c".to_string(),
+        predicate: "defines".to_string(),
+        object: "Enum:F".to_string(),
+    }));
+}
+
+#[test]
+fn extract_cpp_facts_do_not_treat_forward_declarations_as_definitions() {
+    let source = "class Foo;\nclass Bar : public Foo {};";
+
+    assert_eq!(
+        extract_cpp_classes(source).unwrap(),
+        vec!["Bar".to_string()]
+    );
+    let facts = extract_cpp_facts("store.hpp", source).unwrap();
+    assert!(!facts.contains(&ExtractedFact {
+        subject: "store.hpp".to_string(),
+        predicate: "defines".to_string(),
+        object: "Class:Foo".to_string(),
+    }));
+    // A forward declaration still identifies the base type's kind.
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Bar".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:Foo".to_string(),
+    }));
+}
+
+// Regression tests: interface/protocol-only base lists are not `extends Class:*`.
+
+#[test]
+fn extract_csharp_facts_do_not_extend_interface_only_base_list() {
+    let facts = extract_csharp_facts(
+        "Store.cs",
+        "interface IRecallable {} class Store : IRecallable {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:IRecallable".to_string(),
+    }));
+    assert!(
+        !facts.contains(&ExtractedFact {
+            subject: "Class:Store".to_string(),
+            predicate: "extends".to_string(),
+            object: "Class:IRecallable".to_string(),
+        }),
+        "an interface-only base list must not produce extends Class:*"
+    );
+}
+
+#[test]
+fn extract_csharp_facts_skip_interfaces_when_finding_base_class() {
+    let facts = extract_csharp_facts(
+        "Store.cs",
+        "interface IRecallable {} class Store : IRecallable, BaseStore {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:BaseStore".to_string(),
+    }));
+}
+
+#[test]
+fn extract_swift_facts_do_not_extend_protocol_only_inheritance() {
+    let facts = extract_swift_facts(
+        "Store.swift",
+        "protocol Recallable {}\nclass Store: Recallable {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Protocol:Recallable".to_string(),
+    }));
+    assert!(
+        !facts.contains(&ExtractedFact {
+            subject: "Class:Store".to_string(),
+            predicate: "extends".to_string(),
+            object: "Class:Recallable".to_string(),
+        }),
+        "a protocol-only inheritance clause must not produce extends Class:*"
+    );
+}
+
+#[test]
+fn extract_swift_facts_skip_protocols_when_finding_superclass() {
+    let facts = extract_swift_facts(
+        "Store.swift",
+        "protocol Recallable {}\nclass Store: Recallable, BaseStore {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:BaseStore".to_string(),
+    }));
+}
+
+// Regression tests: Kotlin classification inspects declaration nodes, not text.
+
+#[test]
+fn extract_kotlin_classes_find_modified_and_annotated_classes() {
+    assert_eq!(
+        extract_kotlin_classes("data class Store(val id: String)").unwrap(),
+        vec!["Store".to_string()]
+    );
+    assert_eq!(
+        extract_kotlin_classes("sealed class Shape").unwrap(),
+        vec!["Shape".to_string()]
+    );
+    assert_eq!(
+        extract_kotlin_classes("@JvmInline data class Point(val x: Int)").unwrap(),
+        vec!["Point".to_string()]
+    );
+}
+
+#[test]
+fn extract_kotlin_facts_do_not_misclassify_interface_mentioning_class_in_comment() {
+    let facts = extract_kotlin_facts(
+        "Repo.kt",
+        "interface BaseRepo\ninterface Repo : BaseRepo {\n // a class implements this\n}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Interface:Repo".to_string(),
+        predicate: "extends".to_string(),
+        object: "Interface:BaseRepo".to_string(),
+    }));
+    assert!(
+        !facts.iter().any(|fact| fact.subject == "Class:Repo"),
+        "a comment mentioning \"class\" must not reclassify an interface"
+    );
+}
+
+#[test]
+fn extract_kotlin_facts_do_not_extend_interface_only_delegation() {
+    let facts = extract_kotlin_facts(
+        "Store.kt",
+        "interface Recallable\ndata class Store(val id: String) : Recallable",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Store".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Recallable".to_string(),
+    }));
+    assert!(
+        !facts.contains(&ExtractedFact {
+            subject: "Class:Store".to_string(),
+            predicate: "extends".to_string(),
+            object: "Class:Recallable".to_string(),
+        }),
+        "an interface-only delegation list must not produce extends Class:*"
+    );
+}
+
+#[test]
+fn extract_kotlin_facts_emit_enum_implements_interface_triple() {
+    let facts = extract_kotlin_facts(
+        "Kind.kt",
+        "interface Recallable\nenum class Kind : Recallable { A }",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Enum:Kind".to_string(),
+        predicate: "implements".to_string(),
+        object: "Interface:Recallable".to_string(),
+    }));
+}
+
+// Regression tests: C++ extends objects use the declared base kind.
+
+#[test]
+fn extract_cpp_facts_emit_struct_extends_declared_class_kind() {
+    let facts = extract_cpp_facts("store.hpp", "class Bar {};\nstruct Foo : Bar {};").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Struct:Foo".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:Bar".to_string(),
+    }));
+    assert!(
+        !facts.contains(&ExtractedFact {
+            subject: "Struct:Foo".to_string(),
+            predicate: "extends".to_string(),
+            object: "Struct:Bar".to_string(),
+        }),
+        "the base kind comes from the base's declaration, not the subject's kind"
+    );
+}
+
+// Regression tests: heritage/base clauses anchor on the type's own clause.
+
+#[test]
+fn extract_javascript_facts_do_not_capture_nested_class_heritage() {
+    let facts = extract_javascript_facts(
+        "store.js",
+        "class Outer { m() { class Inner extends Foo {} } }",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Inner".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:Foo".to_string(),
+    }));
+    assert!(
+        !facts.contains(&ExtractedFact {
+            subject: "Class:Outer".to_string(),
+            predicate: "extends".to_string(),
+            object: "Class:Foo".to_string(),
+        }),
+        "an outer class without heritage must not capture a nested class's clause"
+    );
+}
+
+#[test]
+fn extract_cpp_facts_do_not_capture_nested_class_base_clause() {
+    let facts =
+        extract_cpp_facts("store.hpp", "class Outer { class Inner : public Foo {}; };").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Class:Inner".to_string(),
+        predicate: "extends".to_string(),
+        object: "Class:Foo".to_string(),
+    }));
+    assert!(
+        !facts.contains(&ExtractedFact {
+            subject: "Class:Outer".to_string(),
+            predicate: "extends".to_string(),
+            object: "Class:Foo".to_string(),
+        }),
+        "an outer class without a base clause must not capture a nested class's clause"
+    );
+}
+
+#[test]
+fn extract_php_facts_do_not_capture_anonymous_class_clauses() {
+    let extends_facts = extract_php_facts(
+        "Store.php",
+        "<?php class Store { function m() { return new class extends Anon {}; } }",
+    )
+    .unwrap();
+    assert!(
+        !extends_facts.contains(&ExtractedFact {
+            subject: "Class:Store".to_string(),
+            predicate: "extends".to_string(),
+            object: "Class:Anon".to_string(),
+        }),
+        "an anonymous class's base clause must not be attributed to the outer class"
+    );
+
+    let implements_facts = extract_php_facts(
+        "Store.php",
+        "<?php class Store { function m() { return new class implements IFace {}; } }",
+    )
+    .unwrap();
+    assert!(
+        !implements_facts.contains(&ExtractedFact {
+            subject: "Class:Store".to_string(),
+            predicate: "implements".to_string(),
+            object: "Interface:IFace".to_string(),
+        }),
+        "an anonymous class's interface clause must not be attributed to the outer class"
+    );
+}
+
+// Regression tests: Swift actors keep one identity across defines/implements.
+
+#[test]
+fn extract_swift_facts_emit_actor_implements_protocol_triple() {
+    let facts = extract_swift_facts(
+        "Memory.swift",
+        "protocol Recallable {}\nactor MemoryStore: Recallable {}",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Memory.swift".to_string(),
+        predicate: "defines".to_string(),
+        object: "Actor:MemoryStore".to_string(),
+    }));
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Actor:MemoryStore".to_string(),
+        predicate: "implements".to_string(),
+        object: "Protocol:Recallable".to_string(),
+    }));
+    assert!(
+        !facts.iter().any(|fact| fact.subject == "Class:MemoryStore"),
+        "an actor must not also exist as a Class identity"
+    );
+}

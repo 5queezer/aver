@@ -122,6 +122,41 @@ async fn loopback_get_authorize_renders_consent_screen() {
 }
 
 #[tokio::test]
+async fn browser_auth_database_failures_return_generic_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let _ = AuthDb::open(&auth_db_path).unwrap();
+    let redirect = "http://127.0.0.1:3917/callback";
+    let client_id = register_client(&auth_db_path, redirect);
+    let app = build_router(base_config(&dir, &auth_db_path)).unwrap();
+    rusqlite::Connection::open(&auth_db_path)
+        .unwrap()
+        .execute("DROP TABLE users", [])
+        .unwrap();
+    let challenge = pkce_s256_challenge("verifier-abc-1234567890");
+    let uri = format!(
+        "/oauth/authorize?response_type=code&client_id={client_id}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={challenge}&code_challenge_method=S256"
+    );
+    let mut request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(loopback_addr()));
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = std::str::from_utf8(&body).unwrap();
+    assert!(html.contains("Authentication failed."));
+    assert!(
+        !html.contains("no such table"),
+        "database detail leaked: {html}"
+    );
+    assert!(!html.contains("users"), "schema detail leaked: {html}");
+}
+
+#[tokio::test]
 async fn loopback_get_authorize_unknown_client_yields_html_error() {
     let dir = tempfile::tempdir().unwrap();
     let auth_db_path = dir.path().join("auth.db");
@@ -181,6 +216,8 @@ async fn loopback_get_authorize_redirect_uri_mismatch_yields_html_error() {
 }
 
 /// Drives the full consent flow: GET → POST approve → second GET (skip).
+/// The approval grants `claims:read` — an empty grant deliberately does NOT
+/// skip the screen anymore (see the stuck-loop regression test below).
 #[tokio::test]
 async fn approve_decision_records_consent_redirects_with_code_and_skips_screen() {
     let dir = tempfile::tempdir().unwrap();
@@ -194,7 +231,7 @@ async fn approve_decision_records_consent_redirects_with_code_and_skips_screen()
 
     // GET to receive cookie + csrf token.
     let uri = format!(
-        "/oauth/authorize?response_type=code&client_id={cid}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={ch}&code_challenge_method=S256&state=stateA",
+        "/oauth/authorize?response_type=code&client_id={cid}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={ch}&code_challenge_method=S256&state=stateA&scope=claims%3Aread",
         cid = client_id,
         ch = challenge,
     );
@@ -209,9 +246,9 @@ async fn approve_decision_records_consent_redirects_with_code_and_skips_screen()
         .unwrap();
     let csrf = extract_csrf_token(std::str::from_utf8(&body).unwrap());
 
-    // POST decision=approve.
+    // POST decision=approve with the claims:read checkbox checked.
     let form = format!(
-        "client_id={cid}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={ch}&code_challenge_method=S256&state=stateA&csrf_token={csrf}&decision=approve",
+        "client_id={cid}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={ch}&code_challenge_method=S256&state=stateA&csrf_token={csrf}&decision=approve&scope_selection_present=1&grant_claims_read=claims%3Aread",
         cid = client_id,
         ch = challenge,
         csrf = csrf,
@@ -475,6 +512,263 @@ async fn non_loopback_get_authorize_with_trusted_header_is_allowed() {
     let response = app.oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert!(extract_session_cookie(response.headers()).is_some());
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(std::str::from_utf8(&body).unwrap().contains("csrf_token"));
+}
+
+#[tokio::test]
+async fn empty_scope_approval_does_not_trap_user_in_skip_loop() {
+    // Regression test for the consent empty-grant trap: approving with zero
+    // scopes records an empty grant, and the skip-screen path must NOT treat
+    // it as covering — otherwise the user never reaches the consent screen
+    // again and can never grant real access.
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let _ = AuthDb::open(&auth_db_path).unwrap();
+    let redirect = "http://127.0.0.1:3917/callback";
+    let client_id = register_client(&auth_db_path, redirect);
+    let config = base_config(&dir, &auth_db_path);
+    let app = build_router(config).unwrap();
+    let challenge = pkce_s256_challenge("verifier-abc-1234567890");
+
+    // 1) First GET renders the consent screen.
+    let uri = format!(
+        "/oauth/authorize?response_type=code&client_id={cid}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={ch}&code_challenge_method=S256",
+        cid = client_id,
+        ch = challenge,
+    );
+    let mut req = Request::builder().uri(&uri).body(Body::empty()).unwrap();
+    req.extensions_mut().insert(ConnectInfo(loopback_addr()));
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let session_cookie = extract_session_cookie(response.headers()).unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let csrf = extract_csrf_token(std::str::from_utf8(&body).unwrap());
+
+    // 2) Approve with every checkbox UNCHECKED (zero scopes granted).
+    let form = format!(
+        "client_id={cid}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={ch}&code_challenge_method=S256&csrf_token={csrf}&decision=approve&scope_selection_present=1",
+        cid = client_id,
+        ch = challenge,
+        csrf = csrf,
+    );
+    let mut req = Request::builder()
+        .method(Method::POST)
+        .uri("/oauth/authorize/decision")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, format!("aver_session={session_cookie}"))
+        .body(Body::from(form))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(loopback_addr()));
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert!(
+        response.status().is_redirection(),
+        "approval still redirects with a code: {}",
+        response.status(),
+    );
+    {
+        let db = AuthDb::open(&auth_db_path).unwrap();
+        let consent = db.get_consent("local", &client_id).unwrap().unwrap();
+        assert!(
+            consent.granted_scopes.is_empty(),
+            "zero-scope approval records an empty grant"
+        );
+    }
+
+    // 3) Second GET: the empty grant must NOT skip the consent screen.
+    let mut req = Request::builder()
+        .uri(&uri)
+        .header(header::COOKIE, format!("aver_session={session_cookie}"))
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(loopback_addr()));
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "empty grant must not skip the consent screen (stuck loop regression)",
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let csrf = extract_csrf_token(std::str::from_utf8(&body).unwrap());
+
+    // 4) Approve again, this time with claims:read checked.
+    let form = format!(
+        "client_id={cid}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={ch}&code_challenge_method=S256&csrf_token={csrf}&decision=approve&scope_selection_present=1&grant_claims_read=claims%3Aread",
+        cid = client_id,
+        ch = challenge,
+        csrf = csrf,
+    );
+    let mut req = Request::builder()
+        .method(Method::POST)
+        .uri("/oauth/authorize/decision")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, format!("aver_session={session_cookie}"))
+        .body(Body::from(form))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(loopback_addr()));
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert!(response.status().is_redirection());
+
+    // 5) Third GET requesting claims:read: consent now covers → skip.
+    let uri_scoped = format!("{uri}&scope=claims%3Aread");
+    let mut req = Request::builder()
+        .uri(&uri_scoped)
+        .header(header::COOKIE, format!("aver_session={session_cookie}"))
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(loopback_addr()));
+    let response = app.oneshot(req).await.unwrap();
+    assert!(
+        response.status().is_redirection(),
+        "non-empty covering consent skips the screen: {}",
+        response.status(),
+    );
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(location.starts_with("http://127.0.0.1:3917/callback?code="));
+}
+
+#[tokio::test]
+async fn revoke_route_revokes_consent_and_tokens_and_allows_reconsent() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let _ = AuthDb::open(&auth_db_path).unwrap();
+    let redirect = "http://127.0.0.1:3917/callback";
+    let client_id = register_client(&auth_db_path, redirect);
+    let config = base_config(&dir, &auth_db_path);
+    let app = build_router(config).unwrap();
+    let challenge = pkce_s256_challenge("verifier-abc-1234567890");
+
+    // Consent to claims:read and mint tokens.
+    let uri = format!(
+        "/oauth/authorize?response_type=code&client_id={cid}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={ch}&code_challenge_method=S256&scope=claims%3Aread",
+        cid = client_id,
+        ch = challenge,
+    );
+    let mut req = Request::builder().uri(&uri).body(Body::empty()).unwrap();
+    req.extensions_mut().insert(ConnectInfo(loopback_addr()));
+    let response = app.clone().oneshot(req).await.unwrap();
+    let session_cookie = extract_session_cookie(response.headers()).unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let csrf = extract_csrf_token(std::str::from_utf8(&body).unwrap());
+    let form = format!(
+        "client_id={cid}&redirect_uri=http%3A%2F%2F127.0.0.1%3A3917%2Fcallback&code_challenge={ch}&code_challenge_method=S256&csrf_token={csrf}&decision=approve&scope_selection_present=1&grant_claims_read=claims%3Aread",
+        cid = client_id,
+        ch = challenge,
+        csrf = csrf,
+    );
+    let mut req = Request::builder()
+        .method(Method::POST)
+        .uri("/oauth/authorize/decision")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, format!("aver_session={session_cookie}"))
+        .body(Body::from(form))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(loopback_addr()));
+    let response = app.clone().oneshot(req).await.unwrap();
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let code = location
+        .split("code=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap()
+        .to_string();
+    let token_form = format!(
+        "grant_type=authorization_code&code={code}&client_id={cid}&code_verifier=verifier-abc-1234567890&redirect_uri={redirect}",
+        cid = client_id,
+    );
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/oauth/token")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(token_form))
+        .unwrap();
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let access_token = json["access_token"].as_str().unwrap().to_string();
+    let refresh_token = json["refresh_token"].as_str().unwrap().to_string();
+
+    // Revoke without a session cookie is rejected.
+    let mut req = Request::builder()
+        .method(Method::POST)
+        .uri("/oauth/consent/revoke")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(format!("client_id={client_id}")))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(loopback_addr()));
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Revoke with the browser session succeeds.
+    let mut req = Request::builder()
+        .method(Method::POST)
+        .uri("/oauth/consent/revoke")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, format!("aver_session={session_cookie}"))
+        .body(Body::from(format!("client_id={client_id}")))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(loopback_addr()));
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(
+        std::str::from_utf8(&body)
+            .unwrap()
+            .contains("Consent revoked")
+    );
+
+    // Consent row is revoked and the client's tokens are dead.
+    let db = AuthDb::open(&auth_db_path).unwrap();
+    let consent = db.get_consent("local", &client_id).unwrap().unwrap();
+    assert!(consent.revoked_at.is_some(), "consent row must be revoked");
+    assert!(
+        db.validate_access_token(&aver_server::auth::hash_token(&access_token))
+            .unwrap()
+            .is_none(),
+        "revocation invalidates the access token",
+    );
+    assert!(
+        db.refresh_access_token(&refresh_token).is_err(),
+        "revocation invalidates the refresh token",
+    );
+    drop(db);
+
+    // The consent screen is reachable again (no skip) for re-consent.
+    let mut req = Request::builder()
+        .uri(&uri)
+        .header(header::COOKIE, format!("aver_session={session_cookie}"))
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(loopback_addr()));
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();

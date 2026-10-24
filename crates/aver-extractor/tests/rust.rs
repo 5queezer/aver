@@ -585,3 +585,206 @@ fn extract_rust_facts_emits_type_implements_trait_triple() {
         object: "Trait:EmbeddingClient".to_string(),
     }));
 }
+
+// Regression tests: one canonical, qualified identity per entity (no
+// unqualified duplicate layer merged in the claim graph).
+
+#[test]
+fn extract_rust_facts_does_not_emit_unqualified_function_for_mod_nested_fn() {
+    let facts =
+        extract_rust_facts("src/lib.rs", "mod a { fn f() {} }\nmod b { fn f() {} }").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Module:a".to_string(),
+        predicate: "defines".to_string(),
+        object: "Function:a::f".to_string(),
+    }));
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Module:b".to_string(),
+        predicate: "defines".to_string(),
+        object: "Function:b::f".to_string(),
+    }));
+    assert!(
+        !facts
+            .iter()
+            .any(|fact| fact.object == "Function:f" && fact.predicate == "defines"),
+        "same-named functions in two modules must not merge into one Function:f identity"
+    );
+}
+
+#[test]
+fn extract_rust_facts_does_not_emit_method_as_free_function() {
+    let facts = extract_rust_facts("src/lib.rs", "impl Store { fn bar(&self) {} }").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Type:Store".to_string(),
+        predicate: "defines".to_string(),
+        object: "Function:Store::bar".to_string(),
+    }));
+    assert!(
+        !facts.contains(&ExtractedFact {
+            subject: "src/lib.rs".to_string(),
+            predicate: "defines".to_string(),
+            object: "Function:bar".to_string(),
+        }),
+        "a method must not collide with a free function of the same name"
+    );
+}
+
+#[test]
+fn extract_rust_facts_does_not_emit_unqualified_call_edges() {
+    let facts = extract_rust_facts("src/lib.rs", "mod m { fn f() { g(); } fn g() {} }").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Function:m::f".to_string(),
+        predicate: "calls".to_string(),
+        object: "Function:m::g".to_string(),
+    }));
+    assert!(
+        !facts.contains(&ExtractedFact {
+            subject: "Function:f".to_string(),
+            predicate: "calls".to_string(),
+            object: "Function:g".to_string(),
+        }),
+        "call edges must use the canonical qualified identities only"
+    );
+}
+
+#[test]
+fn extract_rust_facts_does_not_treat_impl_methods_as_module_functions() {
+    let facts = extract_rust_facts(
+        "src/lib.rs",
+        "mod storage { impl Store { fn add_claim(&self) {} } }",
+    )
+    .unwrap();
+
+    assert!(
+        !facts.contains(&ExtractedFact {
+            subject: "Module:storage".to_string(),
+            predicate: "defines".to_string(),
+            object: "Function:storage::add_claim".to_string(),
+        }),
+        "impl methods are type-qualified, not module functions"
+    );
+}
+
+// Regression tests: impl headers are read from tree-sitter trait/type fields,
+// not by splitting the header text.
+
+#[test]
+fn extract_rust_facts_emits_implements_for_generic_impl_with_where_clause() {
+    let facts = extract_rust_facts(
+        "src/lib.rs",
+        "impl<T> Trait<T> for Type<T> where T: Clone { fn f(&self) {} }",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Type:Type".to_string(),
+        predicate: "implements".to_string(),
+        object: "Trait:Trait".to_string(),
+    }));
+}
+
+#[test]
+fn extract_rust_facts_emits_implements_for_unsafe_impl() {
+    let facts = extract_rust_facts("src/lib.rs", "unsafe impl Send for Foo {}").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Type:Foo".to_string(),
+        predicate: "implements".to_string(),
+        object: "Trait:Send".to_string(),
+    }));
+}
+
+#[test]
+fn extract_rust_facts_does_not_emit_implements_for_inherent_impl() {
+    let facts = extract_rust_facts("src/lib.rs", "impl Store { fn f(&self) {} }").unwrap();
+
+    assert!(
+        !facts.iter().any(|fact| fact.predicate == "implements"),
+        "an inherent impl has no trait to implement"
+    );
+}
+
+// Regression tests: test detection beyond the literal `#[test]` attribute.
+
+#[test]
+fn extract_rust_tests_finds_framework_test_attributes() {
+    let tests = extract_rust_tests(
+        "#[tokio::test]\nasync fn async_works() {}\n#[rstest]\nfn rstest_works() {}\n#[test_case(1)]\nfn case_works() {}",
+    )
+    .unwrap();
+
+    assert_eq!(
+        tests,
+        vec![
+            "async_works".to_string(),
+            "rstest_works".to_string(),
+            "case_works".to_string()
+        ]
+    );
+}
+
+#[test]
+fn extract_rust_tests_tolerates_extra_attributes_and_comments() {
+    let tests =
+        extract_rust_tests("#[test]\n#[allow(dead_code)]\n// a comment\nfn still_a_test() {}")
+            .unwrap();
+
+    assert_eq!(tests, vec!["still_a_test".to_string()]);
+}
+
+#[test]
+fn extract_rust_tests_does_not_flag_cfg_test_attribute() {
+    let tests = extract_rust_tests("#[cfg(test)]\nmod tests { fn helper() {} }").unwrap();
+
+    assert!(tests.is_empty());
+}
+
+// Regression tests: module test mappings come from the module's own items.
+
+#[test]
+fn extract_rust_facts_does_not_attribute_nested_module_tests_to_outer_module() {
+    let facts = extract_rust_facts(
+        "src/lib.rs",
+        "mod outer { mod inner { fn f() {} #[test] fn f_works() {} } }",
+    )
+    .unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Function:outer::inner::f_works".to_string(),
+        predicate: "tests".to_string(),
+        object: "Function:outer::inner::f".to_string(),
+    }));
+    assert!(
+        !facts
+            .iter()
+            .any(|fact| fact.subject == "Function:outer::f_works"),
+        "nested module tests must not be re-emitted with the outer module path"
+    );
+}
+
+// Regression tests: module imports reuse the use-declaration expansion.
+
+#[test]
+fn extract_rust_facts_expands_grouped_module_imports() {
+    let facts = extract_rust_facts("src/lib.rs", "mod m { pub use a::{b, c}; }").unwrap();
+
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Module:m".to_string(),
+        predicate: "imports".to_string(),
+        object: "Module:a::b".to_string(),
+    }));
+    assert!(facts.contains(&ExtractedFact {
+        subject: "Module:m".to_string(),
+        predicate: "imports".to_string(),
+        object: "Module:a::c".to_string(),
+    }));
+    assert!(
+        !facts
+            .iter()
+            .any(|fact| fact.object.contains("pub use") || fact.object.contains('{')),
+        "module imports must be expanded, not the raw declaration text"
+    );
+}

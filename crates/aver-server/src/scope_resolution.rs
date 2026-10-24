@@ -36,11 +36,19 @@ impl ResolvedScope {
     }
 }
 
+/// Maximum accepted scope length in bytes. Unbounded scopes bloat the
+/// `scope` column and the `X-Aver-Scope` header budget.
+const MAX_SCOPE_LEN: usize = 256;
+
 /// Validate a scope candidate without going through sqlite. Mirrors the
-/// `[A-Za-z0-9_/-]` charset enforced by migration 0085.
+/// `[A-Za-z0-9_/-]` charset enforced by migration 0085, additionally
+/// rejecting empty path segments (`///`, `a//b`) and over-long values.
 fn validate(scope: &str, source: &'static str) -> anyhow::Result<()> {
     if scope.trim().is_empty() {
         anyhow::bail!("{source}: scope must not be blank");
+    }
+    if scope.len() > MAX_SCOPE_LEN {
+        anyhow::bail!("{source}: scope exceeds {MAX_SCOPE_LEN} bytes");
     }
     let ok = scope
         .bytes()
@@ -49,6 +57,9 @@ fn validate(scope: &str, source: &'static str) -> anyhow::Result<()> {
         anyhow::bail!(
             "{source}: scope {scope:?} contains invalid characters; allowed [A-Za-z0-9_/-]"
         );
+    }
+    if scope.split('/').any(|segment| segment.is_empty()) {
+        anyhow::bail!("{source}: scope {scope:?} contains an empty path segment");
     }
     Ok(())
 }

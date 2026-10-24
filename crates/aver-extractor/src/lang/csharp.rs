@@ -4,7 +4,7 @@ use tree_sitter::Node;
 
 use crate::{
     Error, ExtractedFact, collect_names_from_kinds, definition_facts,
-    first_named_descendant_of_kind, parse_with_language,
+    first_named_descendant_of_kind, named_child_of_kind, parse_with_language,
 };
 
 pub fn extract_csharp_functions(source: &str) -> Result<Vec<String>, Error> {
@@ -64,61 +64,55 @@ pub fn extract_csharp_namespaces(source: &str) -> Result<Vec<String>, Error> {
 }
 
 pub fn extract_csharp_facts(path: &str, source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let mut facts = definition_facts(path, "Function", extract_csharp_functions(source)?);
+    let tree = parse_with_language(source, tree_sitter_c_sharp::language())?;
+    let root = tree.root_node();
+    let source = source.as_bytes();
+
+    let mut facts = definition_facts(
+        path,
+        "Function",
+        collect_names_from_kinds(
+            root,
+            source,
+            &["method_declaration", "local_function_statement"],
+        )?,
+    );
     facts.extend(definition_facts(
         path,
         "Class",
-        extract_csharp_classes(source)?,
+        collect_names_from_kinds(root, source, &["class_declaration"])?,
     ));
-    facts.extend(definition_facts(
-        path,
-        "Interface",
-        extract_csharp_interfaces(source)?,
-    ));
+    let interfaces = collect_names_from_kinds(root, source, &["interface_declaration"])?;
+    facts.extend(definition_facts(path, "Interface", interfaces.clone()));
     facts.extend(definition_facts(
         path,
         "Struct",
-        extract_csharp_structs(source)?,
+        collect_names_from_kinds(root, source, &["struct_declaration"])?,
     ));
     facts.extend(definition_facts(
         path,
         "Enum",
-        extract_csharp_enums(source)?,
+        collect_names_from_kinds(root, source, &["enum_declaration"])?,
     ));
     facts.extend(definition_facts(
         path,
         "Delegate",
-        extract_csharp_delegates(source)?,
+        collect_names_from_kinds(root, source, &["delegate_declaration"])?,
     ));
     facts.extend(definition_facts(
         path,
         "Record",
-        extract_csharp_records(source)?,
+        collect_names_from_kinds(root, source, &["record_declaration"])?,
     ));
     facts.extend(definition_facts(
         path,
         "Namespace",
-        extract_csharp_namespaces(source)?,
+        collect_names_from_kinds(root, source, &["namespace_declaration"])?,
     ));
-    facts.extend(extract_csharp_extends_facts(source)?);
-    facts.extend(extract_csharp_implements_facts(source)?);
-    Ok(facts)
-}
 
-fn extract_csharp_implements_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let interfaces = extract_csharp_interfaces(source)?
-        .into_iter()
-        .collect::<HashSet<_>>();
-    let tree = parse_with_language(source, tree_sitter_c_sharp::language())?;
-    let mut facts = Vec::new();
-    collect_csharp_implements_facts(tree.root_node(), source.as_bytes(), &interfaces, &mut facts)?;
-    Ok(facts)
-}
-
-fn extract_csharp_extends_facts(source: &str) -> Result<Vec<ExtractedFact>, Error> {
-    let tree = parse_with_language(source, tree_sitter_c_sharp::language())?;
-    let mut facts = Vec::new();
-    collect_csharp_extends_facts(tree.root_node(), source.as_bytes(), &mut facts)?;
+    let interfaces = interfaces.into_iter().collect::<HashSet<_>>();
+    collect_csharp_implements_facts(root, source, &interfaces, &mut facts)?;
+    collect_csharp_extends_facts(root, source, &interfaces, &mut facts)?;
     Ok(facts)
 }
 
@@ -136,7 +130,7 @@ fn collect_csharp_implements_facts(
     };
     if let Some(type_kind) = type_kind
         && let Some(type_name) = node.child_by_field_name("name")
-        && let Some(base_list) = first_named_descendant_of_kind(node, "base_list")
+        && let Some(base_list) = named_child_of_kind(node, "base_list")
     {
         let mut base_names = Vec::new();
         collect_csharp_base_type_names(base_list, source, &mut base_names)?;
@@ -189,6 +183,7 @@ fn collect_csharp_base_type_names(
 fn collect_csharp_extends_facts(
     node: Node<'_>,
     source: &[u8],
+    interfaces: &HashSet<String>,
     facts: &mut Vec<ExtractedFact>,
 ) -> Result<(), Error> {
     let type_kind = match node.kind() {
@@ -199,29 +194,34 @@ fn collect_csharp_extends_facts(
     };
     if let Some(type_kind) = type_kind
         && let Some(type_name) = node.child_by_field_name("name")
-        && let Some(base_list) = first_named_descendant_of_kind(node, "base_list")
+        && let Some(base_list) = named_child_of_kind(node, "base_list")
     {
         let subject = format!("{}:{}", type_kind, type_name.utf8_text(source)?);
+        let mut base_names = Vec::new();
+        collect_csharp_base_type_names(base_list, source, &mut base_names)?;
         if type_kind == "Interface" {
-            let mut base_names = Vec::new();
-            collect_csharp_base_type_names(base_list, source, &mut base_names)?;
             facts.extend(base_names.into_iter().map(|base_name| ExtractedFact {
                 subject: subject.clone(),
                 predicate: "extends".to_string(),
                 object: format!("Interface:{base_name}"),
             }));
-        } else if let Some(base_name) = first_named_descendant_of_kind(base_list, "identifier") {
+        } else if let Some(base_name) = base_names
+            .into_iter()
+            .find(|base_name| !interfaces.contains(base_name))
+        {
+            // The base class is the first base-list entry that is not a
+            // file-locally declared interface.
             facts.push(ExtractedFact {
                 subject,
                 predicate: "extends".to_string(),
-                object: format!("{}:{}", type_kind, base_name.utf8_text(source)?),
+                object: format!("{}:{}", type_kind, base_name),
             });
         }
     }
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        collect_csharp_extends_facts(child, source, facts)?;
+        collect_csharp_extends_facts(child, source, interfaces, facts)?;
     }
     Ok(())
 }
