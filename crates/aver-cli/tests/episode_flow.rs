@@ -4,6 +4,8 @@ use std::process::Command;
 fn aver(memory_dir: &std::path::Path) -> Command {
     let mut cmd = Command::cargo_bin("aver").unwrap();
     cmd.arg("--memory-dir").arg(memory_dir);
+    // Keep tests offline even if the developer opted into ADR-0024.
+    cmd.env_remove("AVER_DECISION_MODEL");
     cmd
 }
 
@@ -185,5 +187,22 @@ fn reject_candidate_sets_status() {
         String::from_utf8(list_output.stdout)
             .unwrap()
             .contains("REJECTED")
+    );
+}
+
+#[test]
+fn triage_without_decision_model_fails_with_configuration_hint() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let output = aver(dir.path())
+        .args(["triage", "--candidate-id", "1"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("decision model not configured (set AVER_DECISION_MODEL)"),
+        "{stderr}"
     );
 }

@@ -143,6 +143,7 @@ Current CLI commands:
 | `propose` | Propose a candidate claim from an event. |
 | `list-candidates` | List candidate claims with optional session/status filters. |
 | `promote` | Promote a candidate claim into durable memory. |
+| `triage` | Let the opt-in ADR-0024 decision model promote, reject, or hold a candidate claim. |
 | `reject` | Reject a candidate claim with a reason. |
 | `record-observation` | Record a session observation from source events. |
 | `recall-observation` | Recall an observation with its supporting event payloads and audit status. |
@@ -176,6 +177,8 @@ Default configuration:
 | `AVER_AUTH_DB_PATH` | `<AVER_MEMORY_DIR>/auth.db` | SQLite auth database path. |
 | `AVER_CORS_ORIGINS` | *(allow any origin)* | Optional comma-separated allowed origins for protected MCP CORS responses. |
 | `AVER_TRUSTED_AUTH_HEADER` | *(unset)* | Optional reverse-proxy header name (for example `X-Forwarded-User`) that enables non-loopback OAuth authorization using Profile C trusted-header auth. |
+| `AVER_DECISION_MODEL` | *(unset)* | Ollama decision model (for example `tev1:4b`); setting it enables the ADR-0024 decision-model features. |
+| `AVER_DECISION_URL` | `http://localhost:11434` | Ollama base URL for the decision model. |
 
 
 Useful endpoints:
@@ -209,13 +212,16 @@ For Visual Studio Code, drop a workspace-level `.vscode/mcp.json` similar to:
 
 Then run **MCP: Add Server** from the command palette and pick `aver`. VS Code dynamic-registers with `POST /oauth/register`, opens the consent screen in your browser, and — after you click **Approve** — receives the authorization code and exchanges it for an access token automatically. Other MCP clients that support the OAuth 2.1 + PKCE discovery profile (`/.well-known/oauth-authorization-server`) follow the same path.
 
-MCP currently exposes 18 tools through a progressive discovery card so agents keep the active choice set small:
+MCP currently exposes 19 tools through a progressive discovery card so agents keep the active choice set small:
 
 - **Default active set:** `recall`, `remember_claim`, `record_event`, `record_observation`, `assemble_compaction_summary`
 - **Event-to-claim workflow:** progressively load `should_extract_memories`, `propose_candidate_claim`, `list_candidate_claims`, `promote_candidate_claim`, `reject_candidate_claim` only when converting raw events into reviewed durable claims
+- **Decision-model triage:** `triage_candidate_claim` (ADR-0024, opt-in) asks the local decision model to promote, reject, or hold one candidate
 - **Graph navigation:** progressively load `expand` after recall returns an entity or an anchor is already known; use `add_triple` instead of `remember_claim` only when explicit source/confidence control is required
 - **Observation audit:** progressively load `recall_observation`, `observation_coverage` for handoff, compaction, or provenance checks
 - **Maintenance/repair:** keep `contradict`, `retire_claim`, `consolidate`, `add_vector_chunk` hidden until there is an explicit repair or retrieval-tuning need
+
+Setting `AVER_DECISION_MODEL` opts the server and CLI into the ADR-0024 decision model (only when `aver-core` is built with its `ollama` feature; `aver-server` and `aver-cli` depend on it with `default-features = false`, so a standalone `cargo run -p aver-server` or `cargo install` build ignores the variable). `triage_candidate_claim` (CLI: `triage --candidate-id N`) then lets the model promote, reject, or hold a pending candidate; promoted claims carry `INFERRED` provenance with confidence 0.45, and without the variable the tool returns an error. The opt-in also lets `should_extract_memories` ask the model when only undigested events remain (the MCP result then adds `reasons`), lets `propose_candidate_claim` without an explicit `scope` choose between the resolved scope and `global`, and adds the model's pick to unknown-predicate errors. Unset, every existing tool behaves as before.
 
 Aver's MCP guide is intentionally proactive but selective: agents should recall first, then record durable user-shared preferences, project facts, and long-lived working context even when the user does not say "remember this" explicitly. Identity details should be recorded only when they are necessary, user-shared, and not sensitive personal data. When durability is uncertain, agents should prefer `record_event` over `remember_claim`, and they must not store secrets, credentials, sensitive personal data, transient chat, or facts they cannot explain with provenance.
 
