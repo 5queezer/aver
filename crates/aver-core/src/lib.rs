@@ -8,7 +8,6 @@ mod claims;
 pub mod decision;
 mod episodic;
 mod error;
-pub mod extractor;
 mod graph;
 mod hyperedges;
 mod ids;
