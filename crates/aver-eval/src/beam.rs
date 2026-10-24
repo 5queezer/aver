@@ -215,9 +215,18 @@ pub fn judge_prompt(question: &str, answer: &str, rubric_item: &str) -> String {
         .replace("<llm_response>", safe_truncate(answer, 12000))
 }
 
-pub const DECISION_JUDGE_QUESTION: &str = "Does the response satisfy the rubric criterion?";
+pub const DECISION_JUDGE_QUESTION: &str =
+    "How completely does the response to evaluate comply with the rubric criterion?";
 
 pub const DECISION_JUDGE_OPTIONS: [&str; 3] = ["yes", "partial", "no"];
+
+/// Criteria for [`DECISION_JUDGE_OPTIONS`], matching the 1.0 / 0.5 / 0.0
+/// scale of [`BEAM_JUDGE_PROMPT`].
+pub const DECISION_JUDGE_DESCRIPTIONS: [&str; 3] = [
+    "complete compliance: the response fully satisfies the rubric criterion",
+    "partial compliance: the response satisfies only part of the rubric criterion",
+    "no compliance: the response does not satisfy the rubric criterion",
+];
 
 pub fn decision_judge_state(question: &str, answer: &str, rubric_item: &str) -> String {
     format!(
@@ -334,11 +343,10 @@ pub fn run_beam100k(config: BeamRunConfig) -> Result<BeamRunReport> {
             for rubric_item in question.rubric_items() {
                 let score = if let Some(decision_judge) = &decision_judge {
                     let state = decision_judge_state(&question.question, &answer, &rubric_item);
-                    let choice = decision_judge.decide(&Decision {
-                        state: &state,
-                        question: DECISION_JUDGE_QUESTION,
-                        options: &DECISION_JUDGE_OPTIONS,
-                    })?;
+                    let choice = decision_judge.decide(
+                        &Decision::new(&state, DECISION_JUDGE_QUESTION, &DECISION_JUDGE_OPTIONS)
+                            .with_descriptions(&DECISION_JUDGE_DESCRIPTIONS),
+                    )?;
                     score_from_choice(choice.index)
                 } else {
                     let judge_response = judge.generate(
@@ -870,5 +878,15 @@ mod tests {
     #[test]
     fn decision_judge_options_has_three_entries() {
         assert_eq!(DECISION_JUDGE_OPTIONS.len(), 3);
+    }
+
+    #[test]
+    fn decision_judge_descriptions_follow_judge_scale() {
+        let decision = Decision::new("s", DECISION_JUDGE_QUESTION, &DECISION_JUDGE_OPTIONS)
+            .with_descriptions(&DECISION_JUDGE_DESCRIPTIONS);
+        assert!(decision.validate().is_ok());
+        for (index, prefix) in ["complete", "partial", "no compliance"].iter().enumerate() {
+            assert!(DECISION_JUDGE_DESCRIPTIONS[index].starts_with(prefix));
+        }
     }
 }
