@@ -285,6 +285,47 @@ impl DecisionConfig {
 #[cfg(feature = "ollama")]
 const QUESTION_NAME: &str = "decision";
 
+/// Wire shape of a systemone request; field order is serialization order.
+#[cfg(feature = "ollama")]
+#[derive(serde::Serialize)]
+struct SystemoneRequest<'a> {
+    model: &'a str,
+    state: &'a str,
+    questions: Questions<'a>,
+}
+
+/// The single question, keyed `decision` (see `QUESTION_NAME`).
+#[cfg(feature = "ollama")]
+#[derive(serde::Serialize)]
+struct Questions<'a> {
+    decision: Question<'a>,
+}
+
+#[cfg(feature = "ollama")]
+#[derive(serde::Serialize)]
+struct Question<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    instructions: &'a str,
+    criteria: Criteria<'a>,
+}
+
+/// Serializes `option -> description` as a JSON object in `options` order.
+#[cfg(feature = "ollama")]
+struct Criteria<'a>(&'a Decision<'a>);
+
+#[cfg(feature = "ollama")]
+impl serde::Serialize for Criteria<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.0.options.len()))?;
+        for (index, option) in self.0.options.iter().enumerate() {
+            map.serialize_entry(option, self.0.description(index))?;
+        }
+        map.end()
+    }
+}
+
 #[cfg(feature = "ollama")]
 #[derive(Debug, Clone)]
 pub struct OllamaDecisionClient {
@@ -309,29 +350,21 @@ impl OllamaDecisionClient {
         &self.model
     }
 
-    /// Jev-style request: one `choice` question whose `criteria` maps each
-    /// option key to its description ([`Decision::description`]: the
-    /// caller's description, else the key itself).
-    pub fn build_request(&self, decision: &Decision<'_>) -> serde_json::Value {
-        let criteria: serde_json::Map<String, serde_json::Value> = decision
-            .options
-            .iter()
-            .enumerate()
-            .map(|(index, &option)| {
-                (
-                    option.to_string(),
-                    serde_json::Value::from(decision.description(index)),
-                )
-            })
-            .collect();
-        serde_json::json!({
-            "model": self.model,
-            "state": decision.state,
-            "questions": {
-                QUESTION_NAME: {
-                    "type": "choice",
-                    "instructions": decision.question,
-                    "criteria": criteria,
+    /// Jev-style request body: one `choice` question whose `criteria` maps
+    /// each option key to its description ([`Decision::description`]: the
+    /// caller's description, else the key itself). Option order is preserved
+    /// on the wire because the model's confidence depends on it (verified
+    /// 2026-10-24), so the body is a typed serialization, not a
+    /// `serde_json::Value` (whose maps reorder keys).
+    pub fn build_request(&self, decision: &Decision<'_>) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&SystemoneRequest {
+            model: &self.model,
+            state: decision.state,
+            questions: Questions {
+                decision: Question {
+                    kind: "choice",
+                    instructions: decision.question,
+                    criteria: Criteria(decision),
                 },
             },
         })
@@ -376,7 +409,8 @@ impl DecisionClient for OllamaDecisionClient {
     fn decide(&self, decision: &Decision<'_>) -> Result<Choice, DecisionError> {
         decision.validate()?;
         let body = ureq::post(&self.systemone_url())
-            .send_json(self.build_request(decision))
+            .set("Content-Type", "application/json")
+            .send_string(&self.build_request(decision)?)
             .map_err(|err| DecisionError::Http(err.to_string()))?
             .into_string()?;
         let (index, confidence) = Self::parse_response(&body, decision.options)?;
@@ -593,13 +627,15 @@ mod tests {
             client.systemone_url(),
             "http://localhost:11434/v1/systemone"
         );
-        let request = client.build_request(&Decision::new(
-            "Claim: repo uses sqlite.",
-            "Which scope does this candidate belong to?",
-            &["global", "project", "session"],
-        ));
+        let request = client
+            .build_request(&Decision::new(
+                "Claim: repo uses sqlite.",
+                "Which scope does this candidate belong to?",
+                &["global", "project", "session"],
+            ))
+            .unwrap();
         assert_eq!(
-            request,
+            serde_json::from_str::<serde_json::Value>(&request).unwrap(),
             serde_json::json!({
                 "model": "tev1:4b",
                 "state": "Claim: repo uses sqlite.",
@@ -614,15 +650,33 @@ mod tests {
 
     #[cfg(feature = "ollama")]
     #[test]
+    fn request_criteria_keep_option_order() {
+        let client = OllamaDecisionClient::new("http://localhost:11434", "tev1:4b");
+        let body = client
+            .build_request(&Decision::new("s", "q", &["promote", "reject", "hold"]))
+            .unwrap();
+        let criteria = &body[body.find("\"criteria\"").unwrap()..];
+        let at = |key: &str| criteria.find(&format!("\"{key}\":")).unwrap();
+        assert!(at("promote") < at("reject") && at("reject") < at("hold"));
+        let model = body.find("\"model\"").unwrap();
+        let state = body.find("\"state\"").unwrap();
+        assert!(model < state && state < body.find("\"questions\"").unwrap());
+    }
+
+    #[cfg(feature = "ollama")]
+    #[test]
     fn request_sends_descriptions_as_criteria_values() {
         let client = OllamaDecisionClient::new("http://localhost:11434", "tev1:4b");
-        let request = client.build_request(
-            &Decision::new("predicate: needs", "Pick one.", &["depends_on", "none"])
-                .with_descriptions(&[
-                    "depends_on: subject requires, needs, or relies on the object",
-                    "no listed predicate fits this input",
-                ]),
-        );
+        let request = client
+            .build_request(
+                &Decision::new("predicate: needs", "Pick one.", &["depends_on", "none"])
+                    .with_descriptions(&[
+                        "depends_on: subject requires, needs, or relies on the object",
+                        "no listed predicate fits this input",
+                    ]),
+            )
+            .unwrap();
+        let request: serde_json::Value = serde_json::from_str(&request).unwrap();
         assert_eq!(
             request["questions"]["decision"]["criteria"],
             serde_json::json!({
