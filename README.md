@@ -321,7 +321,7 @@ just build       # cargo build --workspace --locked
 just test        # cargo test --workspace --locked
 just fmt         # cargo fmt --all
 just clippy      # cargo clippy --workspace --no-deps -- -D warnings
-just check       # format check + clippy + tests + autoresearch checks
+just check       # format check + clippy + tests + policy checks
 just release     # release build for aver-cli
 just dist        # local release tarball and SHA256SUMS under target/dist
 ```
@@ -363,7 +363,6 @@ Partial or planned:
 
 - [`doc/how-it-works.md`](doc/how-it-works.md) — current runtime flow and ADR mapping.
 - [`doc/adr/`](doc/adr/) — architecture decisions.
-- [`autoresearch.md`](autoresearch.md) — active experimental protocol and guardrails.
 
 ## License
 

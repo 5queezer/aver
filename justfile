@@ -31,7 +31,7 @@ clippy:
 
 # Run the full local gate
 check: fmt-check clippy test
-    ./autoresearch.checks.sh
+    ./checks.sh
 
 # Install aver from this checkout into ~/.cargo/bin
 install:
