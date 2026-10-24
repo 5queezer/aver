@@ -720,10 +720,10 @@ enum BeamEmbeddingClient {
 impl BeamEmbeddingClient {
     fn from_config(config: &BeamRunConfig) -> Result<Self> {
         match config.provider {
-            BeamProvider::Ollama => Ok(Self::Ollama(OllamaEmbeddingClient::new(
-                &config.ollama_base_url,
-                &config.embedding_model,
-            ))),
+            BeamProvider::Ollama => Ok(Self::Ollama(
+                OllamaEmbeddingClient::new(&config.ollama_base_url, &config.embedding_model)
+                    .with_timeout(aver_core::vector::embedding_timeout_from_env()),
+            )),
             BeamProvider::OpenAi => Ok(Self::OpenAi(OpenAiEmbeddingClient::new(
                 &config.openai_base_url,
                 config

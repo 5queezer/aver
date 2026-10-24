@@ -41,7 +41,12 @@ pub fn embedding_from_env() -> (Option<Embedder>, String) {
 
 #[cfg(feature = "ollama")]
 fn ollama_embedder(url: Option<String>, model: &str) -> Option<Embedder> {
-    url.map(|url| Box::new(aver_core::vector::OllamaEmbeddingClient::new(url, model)) as Embedder)
+    url.map(|url| {
+        Box::new(
+            aver_core::vector::OllamaEmbeddingClient::new(url, model)
+                .with_timeout(aver_core::vector::embedding_timeout_from_env()),
+        ) as Embedder
+    })
 }
 
 #[cfg(not(feature = "ollama"))]
