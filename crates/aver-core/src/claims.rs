@@ -454,6 +454,9 @@ impl Store {
         }
     }
 
+    /// Exponentially decay active `INFERRED` claims by elapsed time since
+    /// `last_seen_at`. Claims seen after `now_ts` are left unchanged rather
+    /// than amplified. Returns the number of claims processed.
     pub fn decay_inferred_confidence_at(
         &self,
         now_ts: i64,

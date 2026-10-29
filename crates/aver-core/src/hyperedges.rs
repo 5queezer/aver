@@ -92,6 +92,7 @@ impl Store {
         }
     }
 
+    /// Retrieve a hyperedge by id; returns [`Error::MissingHyperedge`] if absent.
     pub fn get_hyperedge(&self, id: i64) -> Result<Hyperedge, Error> {
         let (id, predicate, provenance, confidence, source_refs, status, created_at, updated_at): (
             i64,
