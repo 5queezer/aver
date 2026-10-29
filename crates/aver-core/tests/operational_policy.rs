@@ -528,14 +528,33 @@ fn replay_walks_rotated_event_and_observation_logs() {
 }
 
 #[test]
-fn lock_is_not_stolen_from_live_foreign_owned_process() {
+fn unlocked_stale_lock_file_does_not_block_acquisition() {
     let dir = tempfile::tempdir().unwrap();
-    // PID 1 (init) always exists, but for a non-root test runner it is owned
-    // by another UID: kill(pid, 0) fails with EPERM, which must count as
-    // "alive" — never as a stale lock to steal.
+    // PID 1 always exists; under the old PID-file lock this text blocked
+    // acquisition. Only an active OS lock may block now.
     std::fs::write(dir.path().join(".lock"), "1\n").unwrap();
+
+    let _guard = aver_core::AverLock::acquire(dir.path())
+        .expect("only an active OS lock, not stale PID text, should block");
+}
+
+#[test]
+fn advisory_lock_keeps_a_stable_inode_after_release() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let _guard = aver_core::AverLock::acquire(dir.path()).unwrap();
+    }
+
+    assert!(dir.path().join(".lock").exists());
+    let _next = aver_core::AverLock::acquire(dir.path()).unwrap();
+}
+
+#[test]
+fn advisory_lock_refuses_a_second_holder() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = aver_core::AverLock::acquire(dir.path()).unwrap();
     let err = match aver_core::AverLock::acquire(dir.path()) {
-        Ok(_guard) => panic!("PID 1 is alive; the lock must not be treated as stale"),
+        Ok(_second) => panic!("a held OS lock must refuse a second holder"),
         Err(err) => err,
     };
     assert!(
