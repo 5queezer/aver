@@ -83,7 +83,10 @@ quarantines invalid lines instead — each is reported with path, line number,
 and error — and continues with the next line, so one poisoned record cannot
 block rebuilding every other projection. Replay holds the advisory `.lock`
 for the whole run (like vacuum and rotation), so it cannot race a live
-store writing to the same memory directory.
+store writing to the same memory directory. The `.lock` file carries an OS
+advisory file lock held for the operation's lifetime and released when the
+process exits, so a `.lock` file left behind by a crashed process does not
+block the next run; the file itself is never deleted.
 
 Log rotation compresses all three series — `log.jsonl`, `events.jsonl`, and
 `observations.jsonl` — into `{series}.{N}.jsonl.gz` at session boundaries.

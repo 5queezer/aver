@@ -27,6 +27,16 @@ fn participant(role: &str, entity: &str) -> HyperedgeParticipantInput {
 }
 
 #[test]
+fn get_hyperedge_maps_missing_rows_to_domain_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let err = store.get_hyperedge(404).unwrap_err();
+
+    assert!(matches!(err, Error::MissingHyperedge { hyperedge_id: 404 }));
+}
+
+#[test]
 fn hyperedge_predicates_follow_ontology_policy() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

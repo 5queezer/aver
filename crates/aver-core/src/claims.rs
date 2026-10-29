@@ -454,6 +454,9 @@ impl Store {
         }
     }
 
+    /// Exponentially decay active `INFERRED` claims by elapsed time since
+    /// `last_seen_at`. Claims seen after `now_ts` are left unchanged rather
+    /// than amplified. Returns the number of claims processed.
     pub fn decay_inferred_confidence_at(
         &self,
         now_ts: i64,
@@ -484,7 +487,8 @@ impl Store {
 
             let mut changes = Vec::with_capacity(rows.len());
             for (id, confidence, last_seen_at) in rows {
-                let delta = now_ts.saturating_sub(last_seen_at) as f64;
+                // Clamp so a future `last_seen_at` cannot amplify confidence.
+                let delta = now_ts.saturating_sub(last_seen_at).max(0) as f64;
                 let decayed = confidence * (-delta / tau_seconds).exp();
                 changes.push(ConfidenceChange {
                     claim_id: id,
