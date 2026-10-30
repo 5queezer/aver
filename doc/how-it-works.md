@@ -86,11 +86,20 @@ for the whole run (like vacuum and rotation), so it cannot race a live
 store writing to the same memory directory. The `.lock` file carries an OS
 advisory file lock held for the operation's lifetime and released when the
 process exits, so a `.lock` file left behind by a crashed process does not
-block the next run; the file itself is never deleted.
+block the next run; the file itself is never deleted. Every log append holds
+the same lock *shared* for its open → write → sync, so replay, vacuum, and
+rotation (which lock it exclusively) never interleave with an in-flight
+append: appends wait up to 4 s while one of them runs (below SQLite's 5 s
+busy timeout) and then fail with "advisory lock held", rolling back their
+transaction; replay or vacuum refuse with the same error if an append is
+mid-flight.
 
 Log rotation compresses all three series — `log.jsonl`, `events.jsonl`, and
 `observations.jsonl` — into `{series}.{N}.jsonl.gz` at session boundaries.
-Replay walks rotated archives in numeric order before the active file of
+Rotation is opportunistic: if the lock is held (an append, replay, vacuum,
+or another rotation in progress), `Store::open` skips it and the next open
+retries, and it re-checks the thresholds after taking the lock so two
+processes cannot rotate the same log twice. Replay walks rotated archives in numeric order before the active file of
 each series, so no records are skipped. Compression writes a temporary file
 and renames atomically; recovery verifies archive integrity before dropping
 a plain intermediate, so a crash mid-compression cannot lose log tail
