@@ -89,8 +89,10 @@ process exits, so a `.lock` file left behind by a crashed process does not
 block the next run; the file itself is never deleted. Every log append holds
 the same lock *shared* for its open → write → sync, so replay, vacuum, and
 rotation (which lock it exclusively) never interleave with an in-flight
-append: appends wait while one of them runs, and replay or vacuum refuse
-with "advisory lock held" if an append is mid-flight.
+append: appends wait up to 4 s while one of them runs (below SQLite's 5 s
+busy timeout) and then fail with "advisory lock held", rolling back their
+transaction; replay or vacuum refuse with the same error if an append is
+mid-flight.
 
 Log rotation compresses all three series — `log.jsonl`, `events.jsonl`, and
 `observations.jsonl` — into `{series}.{N}.jsonl.gz` at session boundaries.

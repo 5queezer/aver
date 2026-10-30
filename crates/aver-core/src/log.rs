@@ -13,6 +13,12 @@ use crate::types::HyperedgeParticipantInput;
 pub const LOG_ROTATE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 pub const LOG_ROTATE_MAX_LINES: u64 = 500_000;
 
+/// How long an append waits for its shared lock. Appends run inside
+/// `BEGIN IMMEDIATE`, so this stays below the 5 s SQLite `busy_timeout`
+/// (`store.rs`): a writer stalled behind rotation, replay or vacuum gives up
+/// and rolls back instead of starving other writers into `SQLITE_BUSY`.
+const APPEND_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
+
 /// JSONL log series rotated at session boundaries (ADR-0019 §5): the claims
 /// log plus the episodic event and observation logs, which otherwise grow
 /// without bound. Order matters for replay: claims apply before events and
@@ -280,25 +286,40 @@ pub(crate) fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), E
     // Hold a shared lock across open → write → sync so rotation (and
     // replay/vacuum), which lock `.lock` exclusively, can never rename the
     // active log out from under an in-flight append.
-    let _lock = lock_shared(parent)?;
+    let _lock = lock_shared(parent, APPEND_LOCK_TIMEOUT)?;
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(&line)?;
     file.sync_data()?;
     Ok(())
 }
 
-/// Block until a shared advisory lock on `<dir>/.lock` (the file
-/// [`AverLock`] locks exclusively) is held; released when the handle drops.
-/// Never truncates or deletes the file.
-fn lock_shared(dir: &Path) -> Result<File, Error> {
+/// Take a shared advisory lock on `<dir>/.lock` (the file [`AverLock`]
+/// locks exclusively), retrying until `timeout` elapses; released when the
+/// handle drops. Returns [`Error::LockHeld`] at the deadline. Never truncates
+/// or deletes the file.
+fn lock_shared(dir: &Path, timeout: std::time::Duration) -> Result<File, Error> {
+    let path = dir.join(".lock");
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(dir.join(".lock"))?;
-    file.lock_shared()?;
-    Ok(file)
+        .open(&path)?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match file.try_lock_shared() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(Error::LockHeld {
+                    path: path.display().to_string(),
+                });
+            }
+            Err(std::fs::TryLockError::Error(err)) => return Err(Error::Io(err)),
+        }
+    }
 }
 
 /// Last non-empty line of a file, read from the tail without loading the
@@ -815,10 +836,12 @@ mod record_tests {
 
 #[cfg(test)]
 mod rotation_tests {
-    use super::{LOG_ROTATE_MAX_LINES, lock_shared, maybe_rotate_log};
+    use super::{AverLock, LOG_ROTATE_MAX_LINES, lock_shared, maybe_rotate_log};
+    use crate::error::Error;
     use std::fs::OpenOptions;
     use std::io::{Read, Write};
     use std::path::Path;
+    use std::time::Duration;
 
     /// Fill `{series}.jsonl` just past the line threshold with tiny lines.
     fn write_log_over_threshold(log_path: &Path) {
@@ -855,7 +878,7 @@ mod rotation_tests {
         // Interleave rotation into `append_jsonl`'s open → write window: the
         // writer holds its shared lock and has opened the active log when
         // rotation runs.
-        let lock = lock_shared(dir.path()).unwrap();
+        let lock = lock_shared(dir.path(), Duration::ZERO).unwrap();
         let mut writer = OpenOptions::new()
             .create(true)
             .append(true)
@@ -881,7 +904,7 @@ mod rotation_tests {
         let before = std::fs::read(&log_path).unwrap();
         let archive = dir.path().join("log.1.jsonl.gz");
 
-        let lock = lock_shared(dir.path()).unwrap();
+        let lock = lock_shared(dir.path(), Duration::ZERO).unwrap();
         maybe_rotate_log(dir.path(), "log").expect("a held lock must skip rotation, not fail");
         assert_eq!(std::fs::read(&log_path).unwrap(), before);
         assert!(!archive.exists(), "no archive while the lock is held");
@@ -891,5 +914,15 @@ mod rotation_tests {
         maybe_rotate_log(dir.path(), "log").unwrap();
         assert!(archive.exists());
         assert_eq!(std::fs::metadata(&log_path).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn shared_lock_gives_up_with_lock_held_at_the_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let exclusive = AverLock::acquire(dir.path()).unwrap();
+        let err = lock_shared(dir.path(), Duration::from_millis(50)).unwrap_err();
+        assert!(matches!(err, Error::LockHeld { .. }), "got {err:?}");
+        drop(exclusive);
+        lock_shared(dir.path(), Duration::ZERO).expect("free lock is taken immediately");
     }
 }
