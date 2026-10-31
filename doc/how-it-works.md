@@ -99,7 +99,10 @@ Log rotation compresses all three series — `log.jsonl`, `events.jsonl`, and
 Rotation is opportunistic: if the lock is held (an append, replay, vacuum,
 or another rotation in progress), `Store::open` skips it and the next open
 retries, and it re-checks the thresholds after taking the lock so two
-processes cannot rotate the same log twice. Replay walks rotated archives in numeric order before the active file of
+processes cannot rotate the same log twice. Recovery of a crash-interrupted
+rotation (`finalize_pending_rotations`) follows the same rule: under a held
+lock the `.tmp` archive and intermediate may belong to a live rotation, so
+it skips rather than deleting or re-gzipping them. Replay walks rotated archives in numeric order before the active file of
 each series, so no records are skipped. Compression writes a temporary file
 and renames atomically; recovery verifies archive integrity before dropping
 a plain intermediate, so a crash mid-compression cannot lose log tail

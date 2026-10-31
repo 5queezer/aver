@@ -479,6 +479,14 @@ fn next_rotation_index(memory_dir: &Path, series: &str) -> std::io::Result<u32> 
 /// of silently winning over it. Stale `.tmp` archives from a crash between
 /// compression and atomic rename are removed. ADR-0019 §5.
 pub(crate) fn finalize_pending_rotations(memory_dir: &Path) -> Result<(), Error> {
+    // A held lock may mean another process is mid-rotation: its `.tmp` and
+    // intermediate are live, not crash leftovers. Skip like rotation does;
+    // the next open finishes any real leftovers.
+    let _lock = match AverLock::acquire(memory_dir) {
+        Ok(lock) => lock,
+        Err(Error::LockHeld { .. }) => return Ok(()),
+        Err(err) => return Err(err),
+    };
     let read_dir = match std::fs::read_dir(memory_dir) {
         Ok(rd) => rd,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -836,7 +844,9 @@ mod record_tests {
 
 #[cfg(test)]
 mod rotation_tests {
-    use super::{AverLock, LOG_ROTATE_MAX_LINES, lock_shared, maybe_rotate_log};
+    use super::{
+        AverLock, LOG_ROTATE_MAX_LINES, finalize_pending_rotations, lock_shared, maybe_rotate_log,
+    };
     use crate::error::Error;
     use std::fs::OpenOptions;
     use std::io::{Read, Write};
@@ -924,5 +934,30 @@ mod rotation_tests {
         assert!(matches!(err, Error::LockHeld { .. }), "got {err:?}");
         drop(exclusive);
         lock_shared(dir.path(), Duration::ZERO).expect("free lock is taken immediately");
+    }
+
+    #[test]
+    fn finalize_leaves_in_flight_rotation_files_alone_while_the_lock_is_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let intermediate = dir.path().join("log.1.jsonl");
+        let tmp = dir.path().join("log.1.jsonl.gz.tmp");
+        std::fs::write(&intermediate, "{}\n").unwrap();
+        std::fs::write(&tmp, "partial").unwrap();
+
+        // Another process mid-rotation holds the lock exclusively.
+        let rotating = AverLock::acquire(dir.path()).unwrap();
+        finalize_pending_rotations(dir.path()).expect("a held lock must skip, not fail");
+        assert!(
+            intermediate.exists(),
+            "live intermediate must not be gzipped away"
+        );
+        assert!(tmp.exists(), "live .tmp archive must not be deleted");
+        drop(rotating);
+
+        // Once free, real leftovers are finished.
+        finalize_pending_rotations(dir.path()).unwrap();
+        assert!(!intermediate.exists());
+        assert!(!tmp.exists());
+        assert!(series_contents(dir.path(), "log").contains("{}"));
     }
 }
