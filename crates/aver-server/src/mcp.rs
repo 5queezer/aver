@@ -27,12 +27,20 @@ use crate::tools::{
 /// in `ctx.extensions`) include the scope `tool` declares. Returns an
 /// `INVALID_PARAMS`-coded `insufficient_scope` error per the ADR-0015
 /// unsupported-scope contract when the check fails.
-fn require_scope(ctx: &RequestContext<RoleServer>, tool: ToolScope) -> Result<(), McpError> {
+///
+/// A stdio session (`local` is `Some`) has no HTTP request and no OAuth
+/// grant: the process that spawned the server is its only client and is
+/// granted every scope.
+fn require_scope(
+    ctx: &RequestContext<RoleServer>,
+    local: Option<&ResolvedScope>,
+    tool: ToolScope,
+) -> Result<(), McpError> {
     let granted = ctx
         .extensions
         .get::<http::request::Parts>()
         .and_then(|parts| parts.extensions.get::<GrantedScopes>());
-    if granted.is_some_and(|g| g.0.contains(&tool.scope)) {
+    if local.is_some() || granted.is_some_and(|g| g.0.contains(&tool.scope)) {
         Ok(())
     } else {
         Err(McpError::new(
@@ -93,10 +101,11 @@ fn default_top_k() -> usize {
 /// extensions. Precedence is: per-call param, header, default header, env,
 /// then `global`. Falls back to global resolution if no middleware ran (e.g.
 /// unit tests that bypass HTTP).
-fn request_scope(ctx: &RequestContext<RoleServer>) -> ResolvedScope {
+fn request_scope(ctx: &RequestContext<RoleServer>, local: Option<&ResolvedScope>) -> ResolvedScope {
     ctx.extensions
         .get::<http::request::Parts>()
         .and_then(|parts| parts.extensions.get::<ResolvedScope>())
+        .or(local)
         .cloned()
         .unwrap_or(ResolvedScope {
             scope: "global".to_string(),
@@ -138,6 +147,9 @@ pub struct ExtractParams {
 pub struct AverMcpService {
     tools: Arc<Mutex<AverTools>>,
     base_url: String,
+    /// `Some` for a stdio session: the scope resolved once at startup. Its
+    /// presence also marks the session as local and fully trusted.
+    local: Option<ResolvedScope>,
     #[allow(dead_code)]
     tool_router: ToolRouter<AverMcpService>,
 }
@@ -159,8 +171,19 @@ impl AverMcpService {
         Self {
             tools,
             base_url,
+            local: None,
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Marks this service as a stdio session serving the process that
+    /// spawned it. There is no HTTP request to carry an OAuth grant or scope
+    /// headers, so every tool scope is granted and `scope` (resolved once
+    /// from `AVER_DEFAULT_SCOPE`) is the session's default memory scope.
+    /// Never use this for a network transport.
+    pub fn local_stdio(mut self, scope: ResolvedScope) -> Self {
+        self.local = Some(scope);
+        self
     }
 
     fn lock_tools(&self) -> Result<MutexGuard<'_, AverTools>, McpError> {
@@ -211,7 +234,7 @@ impl AverMcpService {
         Parameters(params): Parameters<RememberClaimParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::REMEMBER_CLAIM)?;
+        require_scope(&ctx, self.local.as_ref(), Self::REMEMBER_CLAIM)?;
         let tools = self.lock_tools()?;
         let result = tools.remember_claim(CoreRememberClaimParams {
             subject: params.subject,
@@ -220,7 +243,9 @@ impl AverMcpService {
             source: params.source,
             agent_id: params.agent_id.or_else(|| Some(request_agent_id(&ctx))),
             agent_kind: params.agent_kind,
-            scope: params.scope.or_else(|| Some(request_scope(&ctx).scope)),
+            scope: params
+                .scope
+                .or_else(|| Some(request_scope(&ctx, self.local.as_ref()).scope)),
         });
         json_tool_result(&tools, result, "remember_claim")
     }
@@ -234,9 +259,9 @@ impl AverMcpService {
         Parameters(mut params): Parameters<AddTripleParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::ADD_TRIPLE)?;
+        require_scope(&ctx, self.local.as_ref(), Self::ADD_TRIPLE)?;
         if params.scope.is_none() {
-            params.scope = Some(request_scope(&ctx).scope);
+            params.scope = Some(request_scope(&ctx, self.local.as_ref()).scope);
         }
         if params.agent_id.is_none() {
             params.agent_id = Some(request_agent_id(&ctx));
@@ -255,8 +280,8 @@ impl AverMcpService {
         Parameters(mut params): Parameters<ExpandParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::EXPAND)?;
-        let resolved = request_scope(&ctx);
+        require_scope(&ctx, self.local.as_ref(), Self::EXPAND)?;
+        let resolved = request_scope(&ctx, self.local.as_ref());
         if params.scope_walk.is_none() && params.scope.is_none() {
             params.scope_walk = Some(resolved.default_walk.as_str().to_string());
         }
@@ -277,8 +302,8 @@ impl AverMcpService {
         Parameters(mut params): Parameters<PathParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::PATH)?;
-        let resolved = request_scope(&ctx);
+        require_scope(&ctx, self.local.as_ref(), Self::PATH)?;
+        let resolved = request_scope(&ctx, self.local.as_ref());
         if params.scope_walk.is_none() && params.scope.is_none() {
             params.scope_walk = Some(resolved.default_walk.as_str().to_string());
         }
@@ -299,8 +324,8 @@ impl AverMcpService {
         Parameters(mut params): Parameters<CommunitiesParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::COMMUNITIES)?;
-        let resolved = request_scope(&ctx);
+        require_scope(&ctx, self.local.as_ref(), Self::COMMUNITIES)?;
+        let resolved = request_scope(&ctx, self.local.as_ref());
         if params.scope_walk.is_none() && params.scope.is_none() {
             params.scope_walk = Some(resolved.default_walk.as_str().to_string());
         }
@@ -321,7 +346,7 @@ impl AverMcpService {
         Parameters(mut params): Parameters<ContradictParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::CONTRADICT)?;
+        require_scope(&ctx, self.local.as_ref(), Self::CONTRADICT)?;
         if let Some(new_claim) = params.new_claim.as_mut()
             && new_claim.agent_id.is_none()
         {
@@ -341,7 +366,7 @@ impl AverMcpService {
         Parameters(params): Parameters<ConsolidateParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::CONSOLIDATE)?;
+        require_scope(&ctx, self.local.as_ref(), Self::CONSOLIDATE)?;
         let tools = self.lock_tools()?;
         let result = tools.consolidate(params);
         json_tool_result(&tools, result, "consolidate")
@@ -356,9 +381,9 @@ impl AverMcpService {
         Parameters(mut params): Parameters<RecordEventParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::RECORD_EVENT)?;
+        require_scope(&ctx, self.local.as_ref(), Self::RECORD_EVENT)?;
         if params.scope.is_none() {
-            params.scope = Some(request_scope(&ctx).scope);
+            params.scope = Some(request_scope(&ctx, self.local.as_ref()).scope);
         }
         if params.agent_id.is_none() {
             params.agent_id = Some(request_agent_id(&ctx));
@@ -378,7 +403,7 @@ impl AverMcpService {
         Parameters(params): Parameters<ShouldExtractMemoriesParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::SHOULD_EXTRACT_MEMORIES)?;
+        require_scope(&ctx, self.local.as_ref(), Self::SHOULD_EXTRACT_MEMORIES)?;
         let tools = self.lock_tools()?;
         let result = tools.should_extract_memories(params);
         json_tool_result(&tools, result, "should_extract_memories")
@@ -394,9 +419,9 @@ impl AverMcpService {
         Parameters(mut params): Parameters<ProposeCandidateClaimParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::PROPOSE_CANDIDATE_CLAIM)?;
+        require_scope(&ctx, self.local.as_ref(), Self::PROPOSE_CANDIDATE_CLAIM)?;
         if params.scope.is_none() {
-            params.scope = Some(request_scope(&ctx).scope);
+            params.scope = Some(request_scope(&ctx, self.local.as_ref()).scope);
         }
         let tools = self.lock_tools()?;
         let result = tools.propose_candidate_claim(params);
@@ -413,7 +438,7 @@ impl AverMcpService {
         Parameters(params): Parameters<ListCandidateClaimsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::LIST_CANDIDATE_CLAIMS)?;
+        require_scope(&ctx, self.local.as_ref(), Self::LIST_CANDIDATE_CLAIMS)?;
         let tools = self.lock_tools()?;
         let result = tools.list_candidate_claims(params);
         json_tool_result(&tools, result, "list_candidate_claims")
@@ -429,7 +454,7 @@ impl AverMcpService {
         Parameters(params): Parameters<PromoteCandidateClaimParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::PROMOTE_CANDIDATE_CLAIM)?;
+        require_scope(&ctx, self.local.as_ref(), Self::PROMOTE_CANDIDATE_CLAIM)?;
         let tools = self.lock_tools()?;
         let result = tools.promote_candidate_claim(params);
         json_tool_result(&tools, result, "promote_candidate_claim")
@@ -445,7 +470,7 @@ impl AverMcpService {
         Parameters(params): Parameters<TriageCandidateClaimParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::TRIAGE_CANDIDATE_CLAIM)?;
+        require_scope(&ctx, self.local.as_ref(), Self::TRIAGE_CANDIDATE_CLAIM)?;
         let tools = self.lock_tools()?;
         let result = tools.triage_candidate_claim(params);
         json_tool_result(&tools, result, "triage_candidate_claim")
@@ -461,7 +486,7 @@ impl AverMcpService {
         Parameters(params): Parameters<RejectCandidateClaimParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::REJECT_CANDIDATE_CLAIM)?;
+        require_scope(&ctx, self.local.as_ref(), Self::REJECT_CANDIDATE_CLAIM)?;
         let tools = self.lock_tools()?;
         let result = tools.reject_candidate_claim(params);
         json_tool_result(&tools, result, "reject_candidate_claim")
@@ -477,9 +502,9 @@ impl AverMcpService {
         Parameters(mut params): Parameters<RecordObservationParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::RECORD_OBSERVATION)?;
+        require_scope(&ctx, self.local.as_ref(), Self::RECORD_OBSERVATION)?;
         if params.scope.is_none() {
-            params.scope = Some(request_scope(&ctx).scope);
+            params.scope = Some(request_scope(&ctx, self.local.as_ref()).scope);
         }
         let tools = self.lock_tools()?;
         let result = tools.record_observation(params);
@@ -496,7 +521,7 @@ impl AverMcpService {
         Parameters(params): Parameters<RecallObservationParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::RECALL_OBSERVATION)?;
+        require_scope(&ctx, self.local.as_ref(), Self::RECALL_OBSERVATION)?;
         let tools = self.lock_tools()?;
         let result = tools.recall_observation(params);
         json_tool_result(&tools, result, "recall_observation")
@@ -512,7 +537,7 @@ impl AverMcpService {
         Parameters(params): Parameters<ObservationCoverageParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::OBSERVATION_COVERAGE)?;
+        require_scope(&ctx, self.local.as_ref(), Self::OBSERVATION_COVERAGE)?;
         let tools = self.lock_tools()?;
         let result = tools.observation_coverage(params);
         json_tool_result(&tools, result, "observation_coverage")
@@ -528,7 +553,7 @@ impl AverMcpService {
         Parameters(params): Parameters<AssembleCompactionSummaryParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::ASSEMBLE_COMPACTION_SUMMARY)?;
+        require_scope(&ctx, self.local.as_ref(), Self::ASSEMBLE_COMPACTION_SUMMARY)?;
         let tools = self.lock_tools()?;
         let result = tools.assemble_compaction_summary(params);
         json_tool_result(&tools, result, "assemble_compaction_summary")
@@ -543,7 +568,7 @@ impl AverMcpService {
         Parameters(params): Parameters<AddVectorChunkParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::ADD_VECTOR_CHUNK)?;
+        require_scope(&ctx, self.local.as_ref(), Self::ADD_VECTOR_CHUNK)?;
         let tools = self.lock_tools()?;
         let result = tools.add_vector_chunk(params);
         json_tool_result(&tools, result, "add_vector_chunk")
@@ -560,7 +585,7 @@ impl AverMcpService {
         Parameters(params): Parameters<RetireClaimParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::RETIRE_CLAIM)?;
+        require_scope(&ctx, self.local.as_ref(), Self::RETIRE_CLAIM)?;
         let tools = self.lock_tools()?;
         let result = tools.retire_claim(params);
         json_tool_result(&tools, result, "retire_claim")
@@ -575,11 +600,13 @@ impl AverMcpService {
         Parameters(params): Parameters<ExtractParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::EXTRACT)?;
+        require_scope(&ctx, self.local.as_ref(), Self::EXTRACT)?;
         let tools = self.lock_tools()?;
         let result = tools.extract(CoreExtractParams {
             path: params.path,
-            scope: params.scope.or_else(|| Some(request_scope(&ctx).scope)),
+            scope: params
+                .scope
+                .or_else(|| Some(request_scope(&ctx, self.local.as_ref()).scope)),
             lang: params.lang,
             dry_run: params.dry_run,
             agent_id: request_agent_id(&ctx),
@@ -596,10 +623,10 @@ impl AverMcpService {
         Parameters(params): Parameters<RecallParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, Self::RECALL)?;
+        require_scope(&ctx, self.local.as_ref(), Self::RECALL)?;
         let tools = self.lock_tools()?;
         let params = {
-            let resolved = request_scope(&ctx);
+            let resolved = request_scope(&ctx, self.local.as_ref());
             let walk = params.scope_walk.clone().or_else(|| {
                 if params.scope.is_none() {
                     Some(resolved.default_walk.as_str().to_string())

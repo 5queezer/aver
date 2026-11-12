@@ -35,7 +35,7 @@ hmac = "0.12"
 base64 = "0.22"
 time = { workspace = true, features = ["formatting"] }
 schemars = "1.0"
-rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", rev = "a64be231527f923e9f84d4dd7bf3c3bd695ee53e", features = ["server", "macros", "transport-streamable-http-server"] }
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", rev = "a64be231527f923e9f84d4dd7bf3c3bd695ee53e", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
 uuid = { version = "1", features = ["v4"] }
 axum = { version = "0.8", default-features = false, features = ["form", "http1", "json", "macros", "query", "tokio"] }
 http = "1"
