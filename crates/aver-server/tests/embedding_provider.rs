@@ -1,5 +1,6 @@
 //! Embedding provider selection from configuration, and what a failing
 //! OpenAI-compatible provider does to recall and chunk writes.
+#![cfg(feature = "ollama")]
 
 use std::collections::HashMap;
 use std::time::Duration;

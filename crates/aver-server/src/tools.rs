@@ -9,7 +9,7 @@ use aver_core::vector::{DEFAULT_OPENAI_EMBEDDING_MODEL, EmbeddingClient, VectorI
 use aver_core::{
     AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, Error,
     ExtractionTriggerReason, GraphPathQuery, Observation, ObservationCoverage, ObservationRecall,
-    ObservationRelevance, PredicateWalk, RecallFilters, ScopeWalk, Store, VECTOR_INDEX_DIM,
+    ObservationRelevance, PredicateWalk, RecallFilters, ScopeWalk, Store,
 };
 use aver_extractor::LANGUAGES;
 use aver_extractor::bridge::extract_tree;
@@ -31,7 +31,8 @@ pub type Embedder = Box<dyn EmbeddingClient + Send + Sync>;
 ///   `AVER_EMBEDDING_URL` defaults to `https://api.openai.com/v1`,
 ///   `AVER_EMBEDDING_MODEL` to `text-embedding-3-small`, and the API key is
 ///   read from the variable named by `AVER_EMBEDDING_API_KEY_ENV` (default
-///   `OPENAI_API_KEY`). Vectors are requested at [`VECTOR_INDEX_DIM`].
+///   `OPENAI_API_KEY`). Vectors are requested at
+///   [`aver_core::VECTOR_INDEX_DIM`].
 ///
 /// A misconfigured provider is reported on stderr (never with the key) and
 /// leaves recall on the keyword path.
@@ -89,8 +90,13 @@ pub fn embedding_from_vars(vars: impl Fn(&str) -> Option<String>) -> (Option<Emb
 #[cfg(feature = "ollama")]
 fn openai_embedder(url: String, model: &str, api_key: String) -> Option<Embedder> {
     Some(Box::new(
-        aver_core::vector::OpenAiEmbeddingClient::new(url, model, VECTOR_INDEX_DIM, api_key)
-            .with_timeout(aver_core::vector::embedding_timeout_from_env()),
+        aver_core::vector::OpenAiEmbeddingClient::new(
+            url,
+            model,
+            aver_core::VECTOR_INDEX_DIM,
+            api_key,
+        )
+        .with_timeout(aver_core::vector::embedding_timeout_from_env()),
     ))
 }
 
