@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use aver_core::candidate_decision::CandidateTriage;
 use aver_core::decision::{DecisionClient, DecisionConfig, client_from_env};
-use aver_core::retrieval::HybridWeights;
+use aver_core::retrieval::{DEFAULT_RECENCY_TAU_SECS, HybridWeights};
 use aver_core::vector::{EmbeddingClient, VectorIndexConfig};
 use aver_core::{
     AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, Error,
@@ -37,6 +37,42 @@ pub fn embedding_from_env() -> (Option<Embedder>, String) {
             .unwrap_or_default()
             .embedding_model;
     (ollama_embedder(var("AVER_EMBEDDING_URL"), &model), model)
+}
+
+/// Reads the opt-in recall recency term (ADR-0004) once:
+/// `AVER_RECALL_RECENCY_WEIGHT` (`w` in `[0, 1]`, default `0` = off) and
+/// `AVER_RECALL_RECENCY_TAU_DAYS` (positive, default 90). An invalid value
+/// is reported on stderr and leaves recency off.
+pub fn recency_from_env() -> (f64, f64) {
+    let var = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_string())
+    };
+    let off = (0.0, DEFAULT_RECENCY_TAU_SECS);
+    let Some(weight) = var("AVER_RECALL_RECENCY_WEIGHT").filter(|value| !value.is_empty()) else {
+        return off;
+    };
+    let tau_secs = match var("AVER_RECALL_RECENCY_TAU_DAYS").filter(|value| !value.is_empty()) {
+        Some(days) => days.parse::<f64>().map(|days| days * 86_400.0),
+        None => Ok(DEFAULT_RECENCY_TAU_SECS),
+    };
+    let parsed = weight
+        .parse::<f64>()
+        .ok()
+        .zip(tau_secs.ok())
+        .and_then(|(weight, tau_secs)| {
+            HybridWeights::default().with_recency(weight, tau_secs).ok()
+        });
+    match parsed {
+        Some(weights) => (weights.recency_weight, weights.recency_tau_secs),
+        None => {
+            eprintln!(
+                "aver-server: invalid AVER_RECALL_RECENCY_WEIGHT/AVER_RECALL_RECENCY_TAU_DAYS, recency stays off"
+            );
+            off
+        }
+    }
 }
 
 #[cfg(feature = "ollama")]
@@ -742,6 +778,9 @@ pub struct AverTools {
     embedding_model: String,
     /// Content-free recall-miss log; `None` unless `AVER_RECALL_MISS_LOG=1`.
     recall_miss_log: Option<RecallMissLog>,
+    /// ADR-0004 opt-in recency `(w, tau_secs)`; `w == 0` unless
+    /// `AVER_RECALL_RECENCY_WEIGHT` opts in.
+    recency: (f64, f64),
 }
 
 impl AverTools {
@@ -765,7 +804,16 @@ impl AverTools {
             embedder,
             embedding_model,
             recall_miss_log,
+            recency: recency_from_env(),
         })
+    }
+
+    /// Replaces the recency term read from the environment (tests inject
+    /// weights here instead of setting `AVER_RECALL_RECENCY_WEIGHT`).
+    pub fn with_recency(mut self, weight: f64, tau_secs: f64) -> anyhow::Result<Self> {
+        let weights = HybridWeights::default().with_recency(weight, tau_secs)?;
+        self.recency = (weights.recency_weight, weights.recency_tau_secs);
+        Ok(self)
     }
 
     /// Replaces the recall-miss log read from the environment (tests inject
@@ -1001,6 +1049,11 @@ impl AverTools {
                 .map_err(|err| anyhow::anyhow!("invalid alpha: {err}"))?,
             None => HybridWeights::for_query(&params.query),
         };
+        let weights = HybridWeights {
+            recency_weight: self.recency.0,
+            recency_tau_secs: self.recency.1,
+            ..weights
+        };
         let (mut claims, chunks, retrieval, alpha) =
             match self.recall_hybrid(&params.query, &filters, top_k, weights)? {
                 Some((claims, chunks)) => (claims, chunks, "hybrid", Some(weights.alpha)),
@@ -1076,6 +1129,7 @@ impl AverTools {
             top_k,
             weights,
             filters,
+            time::OffsetDateTime::now_utc().unix_timestamp(),
         )?;
         let mut chunks = Vec::new();
         for claim in &claims {

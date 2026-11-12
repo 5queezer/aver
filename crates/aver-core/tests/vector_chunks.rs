@@ -411,7 +411,7 @@ fn recall_hybrid_claims_falls_back_to_text_when_vector_index_empty() {
     let client = MockEmbeddingClient::new(vec![1.0, 0.0]);
 
     let claims = store
-        .recall_hybrid_claims("stripe", &client, 8, HybridWeights::for_query("stripe"))
+        .recall_hybrid_claims("stripe", &client, 8, HybridWeights::for_query("stripe"), 0)
         .expect("hybrid recall should use text fallback when no vectors exist");
 
     assert_eq!(claims.len(), 1);
@@ -429,6 +429,7 @@ fn recall_hybrid_claims_top_k_zero_does_not_embed_query() {
             &FailingEmbeddingClient,
             0,
             HybridWeights::for_query("anything"),
+            0,
         )
         .expect("top_k=0 should short-circuit before embedding");
 

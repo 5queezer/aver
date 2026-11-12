@@ -294,7 +294,8 @@ fn apply_log_line(
         | LogRecord::RejectCandidateClaim { .. }
         | LogRecord::SupersedeClaims { .. }
         | LogRecord::DecayConfidence { .. }
-        | LogRecord::MergeSourceRefs { .. } => report.lifecycle += 1,
+        | LogRecord::MergeSourceRefs { .. }
+        | LogRecord::ReverifyClaim { .. } => report.lifecycle += 1,
     }
     Ok(())
 }

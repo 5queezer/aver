@@ -30,7 +30,7 @@ fn adaptive_hybrid_weights_classifies_structural_and_semantic_queries() {
 
 #[test]
 fn hybrid_weights_blend_vector_and_graph_scores() {
-    let weights = HybridWeights { alpha: 0.65 };
+    let weights = HybridWeights::default();
 
     let score = weights.blend(0.8, 0.2);
 
@@ -39,7 +39,7 @@ fn hybrid_weights_blend_vector_and_graph_scores() {
 
 #[test]
 fn retrieval_candidate_uses_hybrid_score_for_ordering_signal() {
-    let weights = HybridWeights { alpha: 0.65 };
+    let weights = HybridWeights::default();
     let candidate = RetrievalCandidate::new(42, 0.8, 0.2, weights);
 
     assert_eq!(candidate.claim_id, 42);
@@ -204,6 +204,7 @@ fn hybrid_recall_alpha_zero_prefers_graph_match_over_vector_match() {
             &client,
             2,
             HybridWeights::try_new(0.0).unwrap(),
+            0,
         )
         .unwrap();
 
@@ -254,6 +255,7 @@ fn hybrid_recall_alpha_one_prefers_vector_match_over_graph_match() {
             &client,
             2,
             HybridWeights::try_new(1.0).unwrap(),
+            0,
         )
         .unwrap();
 
@@ -305,6 +307,7 @@ fn hybrid_recall_with_filters_applies_them_to_both_halves() {
                 scope_walk: ScopeWalk::Exact,
                 ..RecallFilters::default()
             },
+            0,
         )
         .unwrap();
     let ids: Vec<i64> = scoped.iter().map(|claim| claim.id).collect();
@@ -322,6 +325,7 @@ fn hybrid_recall_with_filters_applies_them_to_both_halves() {
                 min_confidence: Some(0.5),
                 ..RecallFilters::default()
             },
+            0,
         )
         .unwrap();
     let ids: Vec<i64> = confident.iter().map(|claim| claim.id).collect();
@@ -339,6 +343,7 @@ fn hybrid_recall_with_filters_applies_them_to_both_halves() {
                 status: Some(ClaimStatus::Invalidated),
                 ..RecallFilters::default()
             },
+            0,
         )
         .unwrap();
     assert_eq!(
@@ -352,6 +357,7 @@ fn hybrid_recall_with_filters_applies_them_to_both_halves() {
             &MockEmbeddingClient::new(vec![1.0, 0.0]),
             5,
             weights,
+            0,
         )
         .unwrap();
     assert!(active.iter().all(|claim| claim.id != out_of_scope));

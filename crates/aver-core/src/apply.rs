@@ -260,6 +260,11 @@ pub(crate) fn apply(conn: &Connection, record: &LogRecord) -> Result<Applied, Er
             embedding,
             ..
         } => embed_vector_chunk(conn, *chunk_id, embedding),
+        LogRecord::ReverifyClaim {
+            claim_id,
+            verified_at,
+            ..
+        } => reverify_claim(conn, *claim_id, *verified_at),
     }
 }
 
@@ -925,6 +930,24 @@ fn merge_source_refs(
     if rows_changed != 1 {
         return Err(invalid(format!(
             "merge_source_refs references missing claim {claim_id}"
+        )));
+    }
+    Ok(Applied::Applied)
+}
+
+/// Monotonic and idempotent: `last_verified_at` only ever moves forward, and
+/// never below the claim's own write time (the `>= created_at` trigger), so
+/// replaying the record twice, or after a later one, changes nothing.
+fn reverify_claim(conn: &Connection, claim_id: i64, verified_at: i64) -> Result<Applied, Error> {
+    let rows_changed = conn.execute(
+        "UPDATE claims
+            SET last_verified_at = MAX(COALESCE(last_verified_at, write_ts), ?1)
+          WHERE id = ?2",
+        params![verified_at, claim_id],
+    )?;
+    if rows_changed != 1 {
+        return Err(invalid(format!(
+            "reverify_claim references missing claim {claim_id}"
         )));
     }
     Ok(Applied::Applied)
