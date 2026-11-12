@@ -714,6 +714,7 @@ fn mcp_tool_instructions() -> String {
                 "Use path to explain how two known entities connect through claims. ",
                 "Use communities to survey clusters of connected entities and the bridges between them, not to answer a specific question. ",
                 "Keep maintenance tools hidden until there is an explicit repair need: {}. Prefer contradict for normal conflicting evidence, retire_claim only for explicit invalidation, consolidate only when you need refreshed derived state, and add_vector_chunk only for retrieval tuning. ",
+                "Embedding on write: when a result of remember_claim, add_triple or promote_candidate_claim carries `embedded`, true means the claim is eligible for hybrid recall and false means it was saved keyword-only (not retried); without the field the server does not embed on write. ",
                 "Code extraction: extract reads a source tree on the server (operator-configured root) and writes EXTRACTED code facts; use it for project code, not for chat or user facts. ",
                 "Tool groups: event workflow {}. Observation workflow {}. Full tool index: {}.",
                 "Progressively load event-to-claim tools only when converting raw events into reviewed durable claims: {}. ",

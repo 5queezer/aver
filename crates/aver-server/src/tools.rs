@@ -509,6 +509,12 @@ pub struct ClaimView {
     pub agent_id: String,
     pub agent_kind: String,
     pub scope: String,
+    /// Present only on a write made with `AVER_EMBED_ON_WRITE=1` and an
+    /// embedding provider: `true` when the claim got a vector chunk and is
+    /// eligible for hybrid recall, `false` when embedding failed and the
+    /// claim is keyword-only (nothing retries it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedded: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -638,6 +644,9 @@ pub struct PathView {
 pub struct AddTripleView {
     pub triple_id: i64,
     pub status: String,
+    /// See [`ClaimView::embedded`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedded: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -647,6 +656,9 @@ pub struct ContradictionView {
     pub reason: String,
     pub new_claim_id: Option<i64>,
     pub status: String,
+    /// For the replacement claim; see [`ClaimView::embedded`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedded: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -671,6 +683,9 @@ pub struct TriageCandidateClaimView {
     pub triage: String,
     /// Durable claim id when the candidate was promoted.
     pub claim_id: Option<i64>,
+    /// For the promoted claim; see [`ClaimView::embedded`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedded: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -693,6 +708,7 @@ impl From<Claim> for ClaimView {
             agent_id: claim.agent_id,
             agent_kind: claim.agent_kind.as_str().to_string(),
             scope: claim.scope,
+            embedded: None,
         }
     }
 }
@@ -777,6 +793,7 @@ impl From<ContradictionRecord> for ContradictionView {
             reason: record.reason,
             new_claim_id: record.new_claim_id,
             status: record.status.to_ascii_lowercase(),
+            embedded: None,
         }
     }
 }
@@ -849,6 +866,8 @@ pub struct AverTools {
     /// ADR-0004 opt-in recency `(w, tau_secs)`; `w == 0` unless
     /// `AVER_RECALL_RECENCY_WEIGHT` opts in.
     recency: (f64, f64),
+    /// `AVER_EMBED_ON_WRITE=1`: claim writes also store an embedded chunk.
+    embed_on_write: bool,
 }
 
 impl AverTools {
@@ -873,7 +892,42 @@ impl AverTools {
             embedding_model,
             recall_miss_log,
             recency: recency_from_env(),
+            embed_on_write: std::env::var("AVER_EMBED_ON_WRITE").is_ok_and(|v| v.trim() == "1"),
         })
+    }
+
+    /// Replaces the `AVER_EMBED_ON_WRITE` setting read from the environment.
+    pub fn with_embed_on_write(mut self, embed_on_write: bool) -> Self {
+        self.embed_on_write = embed_on_write;
+        self
+    }
+
+    /// Opt-in (`AVER_EMBED_ON_WRITE=1` with an embedding provider): store one
+    /// vector chunk holding the canonical text of a claim that was just
+    /// written, so it is eligible for hybrid recall without a separate
+    /// `add_vector_chunk` call. Runs only after the claim write has passed
+    /// validation and the privacy filter and is committed; nothing here can
+    /// fail or undo that write. Costs one embedding request, bounded by
+    /// `AVER_EMBEDDING_TIMEOUT_SECS`, made while the caller holds the tools.
+    ///
+    /// `None` when not opted in (the result is then unchanged); otherwise
+    /// whether the chunk carries a vector.
+    fn embed_written_claim(&self, claim_id: i64) -> Option<bool> {
+        if !self.embed_on_write || self.embedder.is_none() {
+            return None;
+        }
+        let written = self
+            .store
+            .get_claim(claim_id)
+            .map_err(anyhow::Error::from)
+            .and_then(|claim| self.write_chunk(claim_id, &claim.text()));
+        match written {
+            Ok((_, embedded)) => Some(embedded),
+            Err(err) => {
+                eprintln!("aver-server: claim {claim_id} saved without a vector chunk: {err}");
+                Some(false)
+            }
+        }
     }
 
     /// Replaces the recency term read from the environment (tests inject
@@ -971,7 +1025,11 @@ impl AverTools {
             )
             .scope(scope),
         )?;
-        Ok(self.store.get_claim(id)?.into())
+        let embedded = self.embed_written_claim(id);
+        Ok(ClaimView {
+            embedded,
+            ..self.store.get_claim(id)?.into()
+        })
     }
 
     /// ADR-0027 `extract` tool: the server-side twin of `aver extract`.
@@ -1335,6 +1393,7 @@ impl AverTools {
         Ok(AddTripleView {
             triple_id: id,
             status: "appended".to_string(),
+            embedded: self.embed_written_claim(id),
         })
     }
 
@@ -1367,10 +1426,16 @@ impl AverTools {
                 )
             }
         };
-        Ok(self
+        let record = self
             .store
-            .contradict(params.triple_id, &params.reason, new_claim)?
-            .into())
+            .contradict(params.triple_id, &params.reason, new_claim)?;
+        let embedded = record
+            .new_claim_id
+            .and_then(|id| self.embed_written_claim(id));
+        Ok(ContradictionView {
+            embedded,
+            ..record.into()
+        })
     }
 
     pub fn consolidate(&self, params: ConsolidateParams) -> anyhow::Result<ConsolidateView> {
@@ -1474,7 +1539,11 @@ impl AverTools {
         params: PromoteCandidateClaimParams,
     ) -> anyhow::Result<ClaimView> {
         let claim_id = self.store.promote_candidate_claim(params.candidate_id)?;
-        Ok(self.store.get_claim(claim_id)?.into())
+        let embedded = self.embed_written_claim(claim_id);
+        Ok(ClaimView {
+            embedded,
+            ..self.store.get_claim(claim_id)?.into()
+        })
     }
 
     pub fn triage_candidate_claim(
@@ -1502,6 +1571,7 @@ impl AverTools {
             candidate_id: params.candidate_id,
             triage: triage.to_string(),
             claim_id,
+            embedded: claim_id.and_then(|id| self.embed_written_claim(id)),
         })
     }
 
@@ -1571,38 +1641,45 @@ impl AverTools {
         &self,
         params: AddVectorChunkParams,
     ) -> anyhow::Result<VectorChunkView> {
+        let (chunk_id, _) = self.write_chunk(params.claim_id, &params.text)?;
+        Ok(VectorChunkView {
+            id: chunk_id,
+            claim_id: params.claim_id,
+            text: params.text,
+        })
+    }
+
+    /// Stores a vector chunk and reports whether it carries an embedding.
+    fn write_chunk(&self, claim_id: i64, text: &str) -> anyhow::Result<(i64, bool)> {
         // Embed only text that core's validation and privacy filter would
         // accept, so rejected text never leaves the process. Without a client,
         // or when embedding fails, the chunk is stored text-only.
         let embedding = self
             .embedder
             .as_deref()
-            .filter(|_| {
-                !params.text.trim().is_empty() && aver_core::privacy_filter(&params.text).is_ok()
-            })
-            .and_then(|embedder| match embedder.embed(&params.text) {
+            .filter(|_| !text.trim().is_empty() && aver_core::privacy_filter(text).is_ok())
+            .and_then(|embedder| match embedder.embed(text) {
                 Ok(embedding) => Some(embedding),
                 Err(err) => {
                     eprintln!("aver-server: chunk embedding failed, storing text only: {err}");
                     None
                 }
             });
-        let chunk_id = match embedding {
-            Some(embedding) => self.store.add_vector_chunk_with_embedding(
-                params.claim_id,
-                &params.text,
-                &self.embedding_model,
-                &embedding,
-            )?,
-            None => {
+        Ok(match embedding {
+            Some(embedding) => (
+                self.store.add_vector_chunk_with_embedding(
+                    claim_id,
+                    text,
+                    &self.embedding_model,
+                    &embedding,
+                )?,
+                true,
+            ),
+            None => (
                 self.store
-                    .add_vector_chunk(params.claim_id, &params.text, &self.embedding_model)?
-            }
-        };
-        Ok(VectorChunkView {
-            id: chunk_id,
-            claim_id: params.claim_id,
-            text: params.text,
+                    .add_vector_chunk(claim_id, text, &self.embedding_model)?,
+                false,
+            ),
         })
     }
 }

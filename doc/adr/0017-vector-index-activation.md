@@ -147,3 +147,12 @@ The embedding client was Ollama-only. `AVER_EMBEDDING_PROVIDER=openai` selects a
 - The API key is read from the environment variable named by `AVER_EMBEDDING_API_KEY_ENV` (default `OPENAI_API_KEY`), sent only as the bearer token, redacted from `Debug`, and never part of an error: errors carry the HTTP status or transport error kind, not the response body.
 - Chunk text and query text leave the machine with this provider. The privacy filter still gates what is stored and therefore what is sent.
 - Unset, behaviour is unchanged. A missing key or unknown provider is reported on stderr and leaves recall on the keyword path.
+
+## Amendment (2026-11-12): opt-in embedding on claim writes
+
+Vector chunks were only written by the maintenance tool `add_vector_chunk`, so the memories an agent stores through `remember_claim` never took part in hybrid recall. With `AVER_EMBED_ON_WRITE=1` and a provider configured, the server stores one chunk with the canonical claim text for every claim it creates (`remember_claim`, `add_triple`, `promote_candidate_claim`, `triage_candidate_claim`, the replacement claim of `contradict`).
+
+- Opt-in by its own setting, not implied by a provider: it adds an embedding request, made under the server's tool lock, to every claim write.
+- The claim write (validation, privacy gate, log append, commit) completes first. The chunk is best effort through the existing logged chunk path, so no new record type exists and replay is unchanged. A provider failure leaves a text-only chunk and the result says `embedded: false`; nothing retries it.
+- Not covered: `aver extract`, consolidation, and claims written before the setting was on. No backfill is exposed.
+- Known limit: re-assertions add chunks with identical vectors, and chunks of superseded duplicates stay in the index.
