@@ -387,13 +387,15 @@ impl Store {
 
     /// ADR-0004 hybrid recall: the vector half plus the keyword half blended
     /// by `weights`, ACTIVE claims only, no other filters. Embeds the query
-    /// with `client`; `top_k == 0` returns nothing without embedding.
+    /// with `client`; `top_k == 0` returns nothing without embedding. `now`
+    /// (Unix seconds) is the recall instant for the opt-in recency term.
     pub fn recall_hybrid_claims(
         &self,
         query: &str,
         client: &impl vector::EmbeddingClient,
         top_k: usize,
         weights: retrieval::HybridWeights,
+        now: i64,
     ) -> Result<Vec<Claim>, Error> {
         if top_k == 0 {
             return Ok(Vec::new());
@@ -406,6 +408,7 @@ impl Store {
             top_k,
             weights,
             &RecallFilters::default(),
+            now,
         )
     }
 
@@ -420,6 +423,12 @@ impl Store {
     /// only if they pass `filters`; the keyword half runs with the same
     /// filters. Scores blend `weights.alpha` × vector similarity with the
     /// graph score; ties break by id.
+    ///
+    /// When `weights.recency_weight` is non-zero the score also gets
+    /// `w * exp(-age / tau)`, with age measured from the claim's
+    /// `last_verified_at` (falling back to `write_ts`) to the caller's
+    /// explicit `now` in Unix seconds. Recall never reads the clock and
+    /// never writes: no read log, no access counter.
     pub fn recall_hybrid_claims_with_filters(
         &self,
         query: &str,
@@ -427,6 +436,7 @@ impl Store {
         top_k: usize,
         weights: retrieval::HybridWeights,
         filters: &RecallFilters,
+        now: i64,
     ) -> Result<Vec<Claim>, Error> {
         if top_k == 0 {
             return Ok(Vec::new());
@@ -472,7 +482,9 @@ impl Store {
             .map(|claim| {
                 let vector_score = vector_scores.get(&claim.id).copied().unwrap_or(0.0);
                 let graph_score = graph_score_for_query_claim(query, &claim);
-                (weights.blend(vector_score, graph_score), claim)
+                let score =
+                    weights.blend_with_age(vector_score, graph_score, claim.verified_age_secs(now));
+                (score, claim)
             })
             .collect();
         ranked.sort_by(|(a_score, a_claim), (b_score, b_claim)| {

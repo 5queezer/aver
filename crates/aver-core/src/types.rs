@@ -64,6 +64,13 @@ impl Claim {
         format!("{} {} {}", self.subject, self.predicate, self.object)
     }
 
+    /// Seconds between the claim's last verification and `now`:
+    /// `last_verified_at`, or `write_ts` for rows that never recorded one.
+    /// Negative when the timestamp is ahead of `now`.
+    pub fn verified_age_secs(&self, now: i64) -> f64 {
+        now.saturating_sub(self.last_verified_at.unwrap_or(self.write_ts)) as f64
+    }
+
     pub fn verification_weighted_confidence(&self) -> f64 {
         if self.last_verified_at.is_some() {
             self.confidence

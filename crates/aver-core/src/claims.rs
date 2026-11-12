@@ -11,8 +11,8 @@ use crate::privacy::{PrivacyRejection, privacy_filter, privacy_filter_path};
 use crate::recall::{query_tokens_for_recall, recall_token_score};
 use crate::store::{Store, scope_filter_sql};
 use crate::types::{
-    AgentKind, Claim, ClaimWrite, ConsolidationReport, ContradictionRecord, ExtractorFact,
-    PredicateWalk, Provenance, RecallFilters, RecallQuery,
+    AgentKind, Claim, ClaimStatus, ClaimWrite, ConsolidationReport, ContradictionRecord,
+    ExtractorFact, PredicateWalk, Provenance, RecallFilters, RecallQuery,
 };
 use crate::validation::{
     validate_agent_id, validate_claim_field, validate_contradiction_reason, validate_scope,
@@ -667,6 +667,29 @@ impl Store {
                 };
                 append_jsonl(&self.log_path, &record)?;
                 apply(&self.conn, &record)?;
+                // ADR-0004 recency: every row in the group asserted this
+                // triple, so the latest of them is when the surviving claim
+                // was last verified. Logged as an outcome, and only when it
+                // moves the survivor forward, so repeated consolidation
+                // appends nothing.
+                let latest: i64 = self.conn.query_row(
+                    "SELECT MAX(COALESCE(last_verified_at, write_ts))
+                       FROM claims
+                      WHERE subject = ?1 AND predicate = ?2 AND object = ?3",
+                    params![subject, predicate, object],
+                    |row| row.get(0),
+                )?;
+                if survivor.status == ClaimStatus::Active
+                    && latest > survivor.last_verified_at.unwrap_or(survivor.write_ts)
+                {
+                    let record = LogRecord::ReverifyClaim {
+                        ts: now,
+                        claim_id: survivor_id,
+                        verified_at: latest,
+                    };
+                    append_jsonl(&self.log_path, &record)?;
+                    apply(&self.conn, &record)?;
+                }
                 merged_groups += 1;
             }
             Ok(merged_groups)

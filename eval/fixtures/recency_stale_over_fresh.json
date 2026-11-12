@@ -18,25 +18,28 @@
       "query": "checkout-service stripe api",
       "relevant_indices": [1],
       "top_k": 1,
+      "stale_index": 0,
       "note": "Exact score tie: both objects have the same tokens except the version, which the query omits. Hybrid recall breaks ties by ascending claim id, ids are time-ordered, so the 2025 claim wins over the 2026 one."
     },
     {
       "query": "what does the deploy-pipeline depend on",
       "relevant_indices": [3],
       "top_k": 1,
+      "stale_index": 2,
       "note": "Graph scores tie. The stale claim has the shorter text, so length normalisation gives it a slightly higher vector score."
     },
     {
       "query": "what does the api-gateway use",
       "relevant_indices": [4],
       "top_k": 1,
+      "stale_index": 5,
       "note": "envoy was written first and re-asserted in 2026-10, after nginx was written. nginx has the shorter text and the slightly higher vector score. Consolidation keeps the oldest envoy row and supersedes the re-assertion, so the surviving row carries only its 2025 timestamps: write time alone cannot rank it first."
     },
     {
       "query": "checkout-service stripe-api-v1",
       "relevant_indices": [0],
       "top_k": 1,
-      "note": "Control: the query names the old object explicitly. Relevance must keep winning here whatever recency weight is used."
+      "note": "Control: the query names the old object explicitly, so relevance already ranks the right claim first. A recency weight large enough to change this answer is too large."
     }
   ]
 }

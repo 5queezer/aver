@@ -546,7 +546,7 @@ impl BeamMemory<'_> {
     ) -> Result<Vec<(String, String)>> {
         match self {
             Self::Direct(store) => Ok(store
-                .recall_hybrid_claims(question, embedder, top_k, weights)?
+                .recall_hybrid_claims(question, embedder, top_k, weights, unix_now())?
                 .into_iter()
                 .map(|claim| (claim.subject, claim.object))
                 .collect()),
@@ -702,6 +702,13 @@ fn rpc_result(body: &str, id: u64) -> Result<serde_json::Value> {
         anyhow::bail!("JSON-RPC error: {error}");
     }
     Ok(message["result"].clone())
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or_default()
 }
 
 fn unique_run_id() -> u128 {

@@ -4,7 +4,7 @@
 //! ranks with keyword recall, so it cannot express "this claim is older than
 //! that one". A timed fixture gives every claim a write timestamp (and
 //! optional later re-assertions of the same triple) and ranks through the
-//! real ADR-0004 hybrid path with a deterministic hashed bag-of-tokens
+//! real ADR-0004 hybrid path, at the fixture's own `now`, with a deterministic hashed bag-of-tokens
 //! embedder.
 //!
 //! Timestamps reach the store the only way history can: as `add_claim` lines
@@ -75,15 +75,28 @@ pub struct TimedClaim {
     pub reasserted_at: Vec<i64>,
 }
 
-/// A query with ground-truth indices into the fixture's claims. `note`
-/// records why the expected claim loses or wins on relevance alone.
+/// A query with ground-truth indices into the fixture's claims.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimedQuery {
     pub query: String,
     pub relevant_indices: Vec<usize>,
     pub top_k: usize,
+    /// The older competing claim that relevance alone ranks first. Absent on
+    /// control queries, where relevance already picks the expected claim and
+    /// recency must not change that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_index: Option<usize>,
+    /// Why the stale claim wins on relevance alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+/// Metrics plus, per query, the fixture indices of the retrieved claims in
+/// rank order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimedRun {
+    pub metrics: BenchMetrics,
+    pub ranked_indices: Vec<Vec<usize>>,
 }
 
 /// Top-level timed fixture file. `now` is the recall instant (Unix seconds).
@@ -111,7 +124,7 @@ pub fn load_timed_fixture(json_str: &str) -> Result<TimedFixture> {
 /// 3. Embed every ACTIVE claim with [`HashedTokenEmbedder`].
 /// 4. Rank each query with `recall_hybrid_claims` and score it against the
 ///    fixture's relevant triples.
-pub fn run_timed_fixture(fixture: &TimedFixture, weights: HybridWeights) -> Result<BenchMetrics> {
+pub fn run_timed_fixture(fixture: &TimedFixture, weights: HybridWeights) -> Result<TimedRun> {
     let dir = tempfile::tempdir()?;
 
     let mut assertions: Vec<(i64, &TimedClaim)> = Vec::new();
@@ -171,21 +184,25 @@ pub fn run_timed_fixture(fixture: &TimedFixture, weights: HybridWeights) -> Resu
     }
 
     let mut query_results = Vec::new();
+    let mut ranked_indices = Vec::new();
     let mut total_retrieved = 0;
     let mut total_non_relevant = 0;
     for fq in &fixture.queries {
-        let retrieved = store.recall_hybrid_claims(&fq.query, &embedder, fq.top_k, weights)?;
-        let relevant_found = retrieved
+        let retrieved =
+            store.recall_hybrid_claims(&fq.query, &embedder, fq.top_k, weights, fixture.now)?;
+        let ranked: Vec<usize> = retrieved
             .iter()
-            .filter(|claim| {
-                fq.relevant_indices.iter().any(|&idx| {
-                    fixture.claims.get(idx).is_some_and(|fc| {
-                        claim.subject == fc.subject
-                            && claim.predicate == fc.predicate
-                            && claim.object == fc.object
-                    })
+            .filter_map(|claim| {
+                fixture.claims.iter().position(|fc| {
+                    claim.subject == fc.subject
+                        && claim.predicate == fc.predicate
+                        && claim.object == fc.object
                 })
             })
+            .collect();
+        let relevant_found = ranked
+            .iter()
+            .filter(|idx| fq.relevant_indices.contains(idx))
             .count();
         total_retrieved += retrieved.len();
         total_non_relevant += retrieved.len() - relevant_found;
@@ -196,10 +213,11 @@ pub fn run_timed_fixture(fixture: &TimedFixture, weights: HybridWeights) -> Resu
             retrieved_count: retrieved.len(),
             relevant_found,
         });
+        ranked_indices.push(ranked);
     }
 
     let n = query_results.len();
-    Ok(BenchMetrics {
+    let metrics = BenchMetrics {
         fixture_name: fixture.name.clone(),
         mean_recall_at_k: query_results.iter().map(|q| q.recall_at_k).sum::<f64>()
             / n.max(1) as f64,
@@ -207,6 +225,10 @@ pub fn run_timed_fixture(fixture: &TimedFixture, weights: HybridWeights) -> Resu
             / n.max(1) as f64,
         unsupported_claim_rate: ratio(total_non_relevant, total_retrieved),
         query_results,
+    };
+    Ok(TimedRun {
+        metrics,
+        ranked_indices,
     })
 }
 

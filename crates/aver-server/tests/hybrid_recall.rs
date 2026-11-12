@@ -219,3 +219,55 @@ fn non_active_status_filter_stays_hybrid() {
     assert_eq!(recalled.retrieval, "hybrid");
     assert!(!recalled.triples.is_empty());
 }
+
+/// ADR-0004 recency through the server: two claims with identical relevance,
+/// seeded through the log so their write times differ by years. The default
+/// keeps the older claim first (tie broken by id); the opt-in weight puts the
+/// recently written one first.
+#[test]
+fn recall_recency_is_off_by_default_and_reorders_when_opted_in() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let line = |ts: i64, claim_id: i64, object: &str| {
+        serde_json::json!({
+            "kind": "add_claim", "ts": ts, "claim_id": claim_id,
+            "subject": "billing", "predicate": "relates_to", "object": object,
+            "source": "test", "agent_id": "local", "agent_kind": "HUMAN",
+            "confidence": 0.95, "provenance": "USER_ASSERTED", "scope": "global",
+        })
+        .to_string()
+    };
+    let (old, fresh) = (10, 20);
+    let open = |dir: &tempfile::TempDir| {
+        std::fs::write(
+            dir.path().join("log.jsonl"),
+            format!(
+                "{}\n{}\n",
+                line(now - 3 * 365 * 86_400, old, "ledger"),
+                line(now - 3_600, fresh, "cards")
+            ),
+        )
+        .unwrap();
+        aver_core::replay(dir.path(), false).unwrap();
+        let tools = AverTools::open(dir.path())
+            .unwrap()
+            .with_embedding_client(Some(Box::new(lookup_embedder())));
+        add_chunk(&tools, old, CARD_CHUNK);
+        add_chunk(&tools, fresh, CARD_CHUNK);
+        tools
+    };
+    let top = |tools: &AverTools| tools.recall(recall_params(QUERY, None)).unwrap().triples[0].id;
+
+    let default_dir = tempfile::tempdir().unwrap();
+    assert_eq!(top(&open(&default_dir)), old);
+
+    let recency_dir = tempfile::tempdir().unwrap();
+    let tools = open(&recency_dir)
+        .with_recency(0.08, 90.0 * 86_400.0)
+        .unwrap();
+    assert_eq!(top(&tools), fresh);
+    let invalid_dir = tempfile::tempdir().unwrap();
+    assert!(open(&invalid_dir).with_recency(1.5, 1.0).is_err());
+}

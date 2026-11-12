@@ -80,7 +80,13 @@ fn knn_query_returns_nearest_neighbour_first() {
     // Query closest to seed=1.0 — `near` should rank first.
     let query_client = MockEmbeddingClient::new(make_embedding(1.0));
     let results = store
-        .recall_hybrid_claims("Near", &query_client, 3, HybridWeights::for_query("Near"))
+        .recall_hybrid_claims(
+            "Near",
+            &query_client,
+            3,
+            HybridWeights::for_query("Near"),
+            0,
+        )
         .unwrap();
     assert!(!results.is_empty());
     assert_eq!(results[0].id, near, "nearest neighbour should rank first");

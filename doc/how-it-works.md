@@ -28,9 +28,10 @@ A memory directory contains the local source of truth and projections:
 
 `log.jsonl` carries both new memories (`add_claim`, `add_hyperedge`) and
 claim lifecycle transitions (`retire_claim`, `add_contradiction`,
-`supersede_claims`, `decay_confidence`, `merge_source_refs`). Consolidation
+`supersede_claims`, `decay_confidence`, `merge_source_refs`,
+`reverify_claim`). Consolidation
 logs concrete outcomes (claim ids, post-decay confidences, merged source
-references), not the formulas that produced them, so replay asserts the same
+references, refreshed verification times), not the formulas that produced them, so replay asserts the same
 transitions even if consolidation policy changes later. Candidate-claim
 staging (`propose_candidate_claim`, `promote_candidate_claim`,
 `reject_candidate_claim`) is recorded in `events.jsonl` because candidates

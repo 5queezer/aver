@@ -204,12 +204,20 @@ pub(crate) enum LogRecord {
         chunk_id: i64,
         embedding: Vec<f32>,
     },
+    /// ADR-0004 recency: a re-assertion of an existing claim refreshes its
+    /// `last_verified_at`. The outcome (`verified_at`) is logged, not the
+    /// rule that derived it, and the record carries no claim content.
+    ReverifyClaim {
+        ts: i64,
+        claim_id: i64,
+        verified_at: i64,
+    },
 }
 
 impl LogRecord {
     /// Every `kind` tag, for distinguishing an unknown kind from a malformed
     /// line. Kept in sync with the enum by `record_tests::kinds_are_complete`.
-    pub(crate) const KINDS: [&'static str; 15] = [
+    pub(crate) const KINDS: [&'static str; 16] = [
         "add_claim",
         "add_hyperedge",
         "record_event",
@@ -225,6 +233,7 @@ impl LogRecord {
         "merge_source_refs",
         "add_vector_chunk",
         "embed_vector_chunk",
+        "reverify_claim",
     ];
 
     #[cfg(test)]
@@ -245,6 +254,7 @@ impl LogRecord {
             Self::MergeSourceRefs { .. } => "merge_source_refs",
             Self::AddVectorChunk { .. } => "add_vector_chunk",
             Self::EmbedVectorChunk { .. } => "embed_vector_chunk",
+            Self::ReverifyClaim { .. } => "reverify_claim",
         }
     }
 
@@ -273,7 +283,8 @@ impl LogRecord {
             | Self::SupersedeClaims { .. }
             | Self::DecayConfidence { .. }
             | Self::MergeSourceRefs { .. }
-            | Self::EmbedVectorChunk { .. } => None,
+            | Self::EmbedVectorChunk { .. }
+            | Self::ReverifyClaim { .. } => None,
         }
     }
 }
@@ -670,7 +681,7 @@ mod record_tests {
     /// One literal line per kind, in the exact shape the live writer emits
     /// today (copied from real logs where available). Parsing must succeed
     /// and re-serialising must reproduce the bytes.
-    const CURRENT_LINES: [&str; 15] = [
+    const CURRENT_LINES: [&str; 16] = [
         r#"{"kind":"add_claim","ts":1778359774,"claim_id":1,"subject":"vasudev-core","predicate":"is_about","object":"a dual-mission project","source":"User asked to save project summary","agent_id":"mcp","agent_kind":"EXTERNAL_TOOL","confidence":0.9,"provenance":"EXTRACTED","scope":"global"}"#,
         r#"{"kind":"add_hyperedge","ts":1,"hyperedge_id":7,"predicate":"deployment","provenance":"USER_ASSERTED","confidence":0.87,"source_refs":["deploy-log"],"participants":[{"role":"service","entity":"api"},{"role":"environment","entity":"prod"}]}"#,
         r#"{"kind":"record_event","ts":1778443106,"event_id":1,"session_id":"aver-cap-test-2026-05-10","event_kind":"user_message","payload":"TEST: aver-cli is built in Rust using clap as the argument parser.","source":"capability test","agent_id":"mcp","agent_kind":"EXTERNAL_TOOL","scope":"global"}"#,
@@ -686,6 +697,7 @@ mod record_tests {
         r#"{"kind":"merge_source_refs","ts":8,"claim_id":1,"source_refs":["src1","src2"],"promote":true}"#,
         r#"{"kind":"add_vector_chunk","ts":9,"chunk_id":20,"claim_id":1,"text":"alpha depends_on beta","embedding_model":"test-model","embedding":[0.5,0.25,-1.0]}"#,
         r#"{"kind":"embed_vector_chunk","ts":10,"chunk_id":20,"embedding":[0.5,0.25,-1.0]}"#,
+        r#"{"kind":"reverify_claim","ts":11,"claim_id":1,"verified_at":10}"#,
     ];
 
     #[test]
