@@ -124,3 +124,30 @@ fn failing_openai_provider_falls_back_to_keyword_and_text_only_chunks() {
     assert!(!log.contains("\"embedding\":["), "chunk must be text-only");
     assert!(!log.contains("sk-x"));
 }
+
+/// A key pasted into the wrong setting must not be echoed: the real binary's
+/// stderr names settings, never their values.
+#[test]
+fn misplaced_key_values_never_reach_stderr() {
+    const MARKER: &str = "sk-FAKE-MISPLACED-KEY-MARKER";
+    for (name, value) in [
+        ("AVER_EMBEDDING_API_KEY_ENV", MARKER),
+        ("AVER_EMBEDDING_PROVIDER", MARKER),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_aver-server"))
+            .arg("--stdio")
+            .env("AVER_MEMORY_DIR", dir.path())
+            .env("AVER_EMBEDDING_PROVIDER", "openai")
+            .env_remove("AVER_EMBEDDING_API_KEY_ENV")
+            .env_remove("OPENAI_API_KEY")
+            .env(name, value)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("using keyword recall"), "{name}: {stderr}");
+        assert!(!stderr.contains(MARKER), "{name}: {stderr}");
+        assert!(output.stdout.is_empty(), "{name}: {output:?}");
+    }
+}

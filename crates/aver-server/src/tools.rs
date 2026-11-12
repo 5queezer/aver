@@ -70,17 +70,19 @@ pub fn embedding_from_vars(vars: impl Fn(&str) -> Option<String>) -> (Option<Emb
                     api_key,
                 ),
                 None => {
+                    // Settings are never echoed: a key pasted into the wrong
+                    // variable must not reach stderr and the parent's logs.
                     eprintln!(
-                        "aver-server: AVER_EMBEDDING_PROVIDER=openai but {key_var} is not set, using keyword recall"
+                        "aver-server: AVER_EMBEDDING_PROVIDER=openai but the variable named by AVER_EMBEDDING_API_KEY_ENV (default OPENAI_API_KEY) is not set, using keyword recall"
                     );
                     None
                 }
             };
             (embedder, model)
         }
-        Some(other) => {
+        Some(_) => {
             eprintln!(
-                "aver-server: unknown AVER_EMBEDDING_PROVIDER {other:?} (expected ollama or openai), using keyword recall"
+                "aver-server: unknown AVER_EMBEDDING_PROVIDER (expected ollama or openai), using keyword recall"
             );
             (None, VectorIndexConfig::default().embedding_model)
         }
