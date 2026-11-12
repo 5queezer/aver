@@ -224,6 +224,7 @@ Default configuration:
 | `AVER_EMBEDDING_URL` | *(unset)*; `https://api.openai.com/v1` for `openai` | Provider base URL. With the `ollama` provider (for example `http://localhost:11434`) setting it is what enables embeddings: MCP `recall` becomes hybrid (ADR-0004) and `add_vector_chunk` stores an embedding with each chunk. Requires the default `ollama` feature. |
 | `AVER_EMBEDDING_MODEL` | `nomic-embed-text`; `text-embedding-3-small` for `openai` | Embedding model, recorded on vector chunks. |
 | `AVER_EMBEDDING_API_KEY_ENV` | `OPENAI_API_KEY` | Name of the environment variable that holds the API key for the `openai` provider. Without a key in that variable the provider stays off and recall is keyword-only. |
+| `AVER_EMBED_ON_WRITE` | *(unset)* | Set to `1` to store an embedded vector chunk with every claim written through the server, so ordinary memories are eligible for hybrid recall. Needs an embedding provider; see [Embedding providers](#embedding-providers) for cost and limits. |
 | `AVER_EMBEDDING_TIMEOUT_SECS` | `10` | Timeout in whole seconds for one embedding request; on timeout `recall` falls back to keyword recall and chunk writes store text only. Zero or unparsable values are ignored. |
 | `AVER_RECALL_RECENCY_WEIGHT` | `0` | Opt-in recency weight `w` in `[0, 1]` for hybrid `recall` (ADR-0004 amendment): adds `w * exp(-age / tau)` to each claim's score, with age measured from `last_verified_at` (or the write time). `0` or unset keeps ranking unchanged; an invalid value is reported on stderr and leaves recency off. `0.08` passes the bundled timed fixture. |
 | `AVER_RECALL_RECENCY_TAU_DAYS` | `90` | Time constant `tau` in days for `AVER_RECALL_RECENCY_WEIGHT`; must be positive. |
@@ -277,7 +278,12 @@ Embeddings are off unless configured. One provider serves a store; there is no f
 
 What to expect either way:
 
-- `remember_claim` does not embed. Only `add_vector_chunk` stores an embedding, so hybrid recall (and the opt-in recency term) covers claims that have chunks.
+- By default `remember_claim` does not embed. Only `add_vector_chunk` stores an embedding, so hybrid recall (and the opt-in recency term) covers claims that have chunks.
+- **Embed on write (opt-in).** With `AVER_EMBED_ON_WRITE=1` and a provider configured, every claim created through the server (`remember_claim`, `add_triple`, `promote_candidate_claim`, `triage_candidate_claim`, and the replacement claim of `contradict`) also gets one vector chunk holding its `subject predicate object` text, written through the same logged path as `add_vector_chunk`. The claim is validated, privacy-filtered and durably written first; the embedding is best effort and can never fail or undo that write. The tool result then carries `embedded`: `true` when the claim got a vector, `false` when the provider did not answer and the claim is keyword-only. Costs and limits:
+  - one embedding request per such write, bounded by `AVER_EMBEDDING_TIMEOUT_SECS`, made while the server holds its tool lock, so other calls to the same server wait for it;
+  - with the OpenAI-compatible provider the text of every such claim is sent to that endpoint;
+  - nothing retries a failed embedding, and claims written before the setting was turned on, by `aver extract`, or by consolidation are not embedded;
+  - each re-assertion of a triple adds another chunk with the same vector. Consolidation supersedes the duplicate claim but its chunk stays in the index, and recall filters to ACTIVE claims after the nearest-neighbour step, so a fact re-asserted very many times takes up room in the candidate pool (4 × `top_k`, at least 64).
 - When the provider does not answer within `AVER_EMBEDDING_TIMEOUT_SECS`, `recall` answers by keyword and a chunk write stores the text without a vector. Nothing embeds that chunk later: the backfill routine in `aver-core` is not exposed by any command or tool yet.
 - Recall compares the query vector with every stored vector and has no model filter. Vectors from different models are not comparable even at the same length, so do not change provider or model on a store that already holds embedded chunks; start a new store or re-create the chunks.
 
