@@ -22,7 +22,7 @@ Such hosts start MCP servers as child processes and talk to them over stdin/stdo
 - **Scope resolution.** There are no `X-Aver-Scope` headers. The session scope is `AVER_DEFAULT_SCOPE`, else `global` (ADR-0022 precedence without the header steps), resolved once at startup; a malformed value stops the process. A per-call `scope` parameter still wins.
 - **stdout is the protocol.** Only JSON-RPC frames are written to stdout. Every diagnostic goes to stderr.
 - **Lifetime.** The process ends when the parent closes stdin. A bad store path or setting ends it with a non-zero status and a message on stderr before any frame is written.
-- **Several children on one store** are supported the same way a CLI next to a running server is: SQLite WAL with a single writer, the log's advisory lock, and writer-minted ids (ADR-0026).
+- **Several children on one store** work the same way a CLI next to a running server does: SQLite WAL with a single writer, the log's advisory lock, and writer-minted ids (ADR-0026). One limit: the store must have been opened once before several children start at the same moment. On a fresh, empty store directory the initial schema migrations of two simultaneous starts race, and one child exits non-zero (the store stays healthy and the other child runs); the parent has to start it again. Initialise a new store with one start, or any `aver` command, first.
 - Writes are attributed to agent id `mcp` unless the call names one, as for any session without an OAuth client.
 
 ## Consequences

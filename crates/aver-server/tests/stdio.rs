@@ -129,10 +129,10 @@ fn remember(session: &mut Session, subject: &str, object: &str) -> i64 {
         .unwrap()
 }
 
-/// One session that exercises every stderr diagnostic reachable in stdio
-/// mode (invalid recency setting at startup, failed embedding on a chunk
-/// write and on recall) plus read, write and maintenance scopes, and still
-/// produces nothing but protocol frames on stdout.
+/// One session that triggers the stderr diagnostics reachable in stdio mode
+/// (invalid recency setting at startup, failed embedding on a chunk write)
+/// plus read, write and maintenance scopes, and still produces nothing but
+/// protocol frames on stdout.
 #[test]
 fn stdio_session_grants_every_scope_and_keeps_stdout_for_the_protocol() {
     let dir = tempfile::tempdir().unwrap();

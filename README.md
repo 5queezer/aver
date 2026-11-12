@@ -256,7 +256,7 @@ Agent hosts that start MCP servers as child processes can run Aver without HTTP 
 AVER_MEMORY_DIR=/path/to/store AVER_DEFAULT_SCOPE=proj/my-agent aver-server --stdio
 ```
 
-The server then speaks MCP on stdin/stdout to the process that spawned it and exits when stdin closes. No port is opened. The parent is the only client and holds every tool scope, so access control in this mode is the file permissions on the store directory. The session's memory scope is `AVER_DEFAULT_SCOPE` (else `global`); the embedding, recency, decision-model and extract settings from the table above apply unchanged. Only protocol frames are written to stdout; diagnostics go to stderr. A typical client entry:
+The server then speaks MCP on stdin/stdout to the process that spawned it and exits when stdin closes. No port is opened. The parent is the only client and holds every tool scope, so access control in this mode is the file permissions on the store directory. The session's memory scope is `AVER_DEFAULT_SCOPE` (else `global`); the embedding, recency, decision-model and extract settings from the table above apply unchanged. Only protocol frames are written to stdout; diagnostics go to stderr. Several children can share one store, but open a new store once (one start, or any `aver` command) before starting several at the same moment: on a fresh, empty store directory two simultaneous first starts race on the initial schema setup and one of them exits non-zero and must be started again. A typical client entry:
 
 ```yaml
 mcp_servers:
