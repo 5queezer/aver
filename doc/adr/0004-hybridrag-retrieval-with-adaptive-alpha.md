@@ -66,12 +66,13 @@ score = α · vector_score + (1 − α) · graph_score + w · exp(−age / τ)
 
 `last_verified_at` was set once, when the claim row was inserted. Asserting the same triple again writes a second row, and consolidation keeps the oldest row and supersedes the newer one, so the surviving claim kept only its original timestamps and a re-verified claim looked as stale as an abandoned one.
 
-Consolidation now appends a `reverify_claim` record (`ts`, `claim_id`, `verified_at`) for the surviving claim of a duplicate group when a later row of the group is newer than the survivor's current verification time. `verified_at` is the newest `COALESCE(last_verified_at, write_ts)` in the group.
+Consolidation now appends a `reverify_claim` record (`ts`, `claim_id`, `verified_at`) for the surviving claim of a duplicate group when a later row of the group is newer than the survivor's current verification time. `verified_at` is the newest `COALESCE(last_verified_at, write_ts)` among the group's rows that were not retired.
 
 - **Same claim** means what consolidation already merges: equal subject, predicate and object. The scope and agent of the later row are not compared, matching the existing source-reference merge.
 - **Outcome, not rule.** The record carries the resulting timestamp, like the other consolidation records (ADR-0005), and is appended before the projection update inside the same write transaction.
 - **Monotonic and idempotent.** Applying it sets `last_verified_at` to the larger of the current value and `verified_at`, never below the claim's write time. Replaying it twice, out of order, or after a later record changes nothing. A record is only written when it moves the survivor forward, so repeated consolidation appends nothing.
 - **ACTIVE survivors only.** A retired or superseded survivor is not refreshed by a later duplicate.
+- **Retired re-assertions do not count.** `verified_at` is taken over the group's ACTIVE and SUPERSEDED rows; a row that was retired (INVALIDATED) is not evidence and cannot refresh the survivor.
 - **Privacy.** The record holds ids and timestamps only. Claim content passed the privacy gate when its own `add_claim` line was written.
 - **Before consolidation** the re-assertion row is itself ACTIVE with a fresh write time, so recency already favours the triple.
 - **Older binaries** do not know the `reverify_claim` kind: strict replay stops with `replay: unknown record kind: reverify_claim`, lenient replay quarantines the line and the claim keeps its earlier verification time. A log that contains the record needs this version or later to replay strictly.

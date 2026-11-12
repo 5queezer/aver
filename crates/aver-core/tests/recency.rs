@@ -270,3 +270,47 @@ fn retired_claims_are_not_reverified() {
     assert_eq!(store.get_claim(1).unwrap().last_verified_at, Some(first));
     assert!(log_lines(dir.path(), "reverify_claim").is_empty());
 }
+
+/// A re-assertion that was itself retired is not evidence: it must not
+/// refresh the ACTIVE claim it duplicates.
+#[test]
+fn retired_reassertions_do_not_reverify_the_survivor() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = NOW - 600 * DAY;
+    let store = seeded_store(
+        dir.path(),
+        &[
+            claim_line(first, 1, "api-gateway", "envoy"),
+            claim_line(NOW - 12 * DAY, 3, "api-gateway", "envoy"),
+            serde_json::json!({"kind": "retire_claim", "ts": NOW - 11 * DAY, "claim_id": 3, "reason": "wrong"})
+                .to_string(),
+        ],
+    );
+    store.consolidate().unwrap();
+    let survivor = store.get_claim(1).unwrap();
+    assert_eq!(survivor.status, ClaimStatus::Active);
+    assert_eq!(survivor.last_verified_at, Some(first));
+    assert!(log_lines(dir.path(), "reverify_claim").is_empty());
+}
+
+/// A duplicate group whose rows were all retired has no verification time
+/// to take; consolidation must still succeed.
+#[test]
+fn consolidation_handles_a_fully_retired_duplicate_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let retire = |claim_id: i64| {
+        serde_json::json!({"kind": "retire_claim", "ts": NOW - DAY, "claim_id": claim_id, "reason": "wrong"})
+            .to_string()
+    };
+    let store = seeded_store(
+        dir.path(),
+        &[
+            claim_line(NOW - 600 * DAY, 1, "api-gateway", "envoy"),
+            claim_line(NOW - 12 * DAY, 3, "api-gateway", "envoy"),
+            retire(1),
+            retire(3),
+        ],
+    );
+    store.consolidate().unwrap();
+    assert!(log_lines(dir.path(), "reverify_claim").is_empty());
+}

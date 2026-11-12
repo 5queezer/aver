@@ -667,19 +667,21 @@ impl Store {
                 };
                 append_jsonl(&self.log_path, &record)?;
                 apply(&self.conn, &record)?;
-                // ADR-0004 recency: every row in the group asserted this
-                // triple, so the latest of them is when the surviving claim
-                // was last verified. Logged as an outcome, and only when it
-                // moves the survivor forward, so repeated consolidation
-                // appends nothing.
-                let latest: i64 = self.conn.query_row(
+                // ADR-0004 recency: every row in the group that still stands
+                // (ACTIVE or SUPERSEDED, not retired) asserted this triple,
+                // so the latest of them is when the surviving claim was last
+                // verified. Logged as an outcome, and only when it moves the
+                // survivor forward, so repeated consolidation appends nothing.
+                let latest: Option<i64> = self.conn.query_row(
                     "SELECT MAX(COALESCE(last_verified_at, write_ts))
                        FROM claims
-                      WHERE subject = ?1 AND predicate = ?2 AND object = ?3",
+                      WHERE subject = ?1 AND predicate = ?2 AND object = ?3
+                        AND status <> 'INVALIDATED'",
                     params![subject, predicate, object],
                     |row| row.get(0),
                 )?;
                 if survivor.status == ClaimStatus::Active
+                    && let Some(latest) = latest
                     && latest > survivor.last_verified_at.unwrap_or(survivor.write_ts)
                 {
                     let record = LogRecord::ReverifyClaim {
