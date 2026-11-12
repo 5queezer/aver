@@ -220,8 +220,10 @@ Default configuration:
 | `AVER_DECISION_MODEL` | *(unset)* | Ollama decision model (for example `tev1:4b`); setting it enables the ADR-0024 decision-model features. |
 | `AVER_DECISION_URL` | `http://localhost:11434` | Ollama base URL for the decision model. |
 | `AVER_DECISION_MIN_CONFIDENCE` | `0.6` | Confidence floor for decision-model choices; below it, or when the model reports no confidence, the deterministic behaviour applies (triage holds, suggestions fall back). |
-| `AVER_EMBEDDING_URL` | *(unset)* | Ollama base URL (for example `http://localhost:11434`) for embeddings; setting it makes MCP `recall` hybrid (ADR-0004) and makes `add_vector_chunk` store an embedding with each chunk. Requires the default `ollama` feature. |
-| `AVER_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model used with `AVER_EMBEDDING_URL` and recorded on vector chunks. |
+| `AVER_EMBEDDING_PROVIDER` | `ollama` | Embedding provider: `ollama` or `openai` (any OpenAI-compatible `POST /embeddings` endpoint). See [Embedding providers](#embedding-providers). |
+| `AVER_EMBEDDING_URL` | *(unset)*; `https://api.openai.com/v1` for `openai` | Provider base URL. With the `ollama` provider (for example `http://localhost:11434`) setting it is what enables embeddings: MCP `recall` becomes hybrid (ADR-0004) and `add_vector_chunk` stores an embedding with each chunk. Requires the default `ollama` feature. |
+| `AVER_EMBEDDING_MODEL` | `nomic-embed-text`; `text-embedding-3-small` for `openai` | Embedding model, recorded on vector chunks. |
+| `AVER_EMBEDDING_API_KEY_ENV` | `OPENAI_API_KEY` | Name of the environment variable that holds the API key for the `openai` provider. Without a key in that variable the provider stays off and recall is keyword-only. |
 | `AVER_EMBEDDING_TIMEOUT_SECS` | `10` | Timeout in whole seconds for one embedding request; on timeout `recall` falls back to keyword recall and chunk writes store text only. Zero or unparsable values are ignored. |
 | `AVER_RECALL_RECENCY_WEIGHT` | `0` | Opt-in recency weight `w` in `[0, 1]` for hybrid `recall` (ADR-0004 amendment): adds `w * exp(-age / tau)` to each claim's score, with age measured from `last_verified_at` (or the write time). `0` or unset keeps ranking unchanged; an invalid value is reported on stderr and leaves recency off. `0.08` passes the bundled timed fixture. |
 | `AVER_RECALL_RECENCY_TAU_DAYS` | `90` | Time constant `tau` in days for `AVER_RECALL_RECENCY_WEIGHT`; must be positive. |
@@ -266,6 +268,18 @@ mcp_servers:
     env:
       AVER_MEMORY_DIR: /path/to/store
 ```
+### Embedding providers
+
+Embeddings are off unless configured. One provider serves a store; there is no fallback chain between providers.
+
+- **Ollama (default).** Set `AVER_EMBEDDING_URL` to an Ollama base URL. Text stays on the machines you run.
+- **OpenAI-compatible.** Set `AVER_EMBEDDING_PROVIDER=openai` and put the API key in `OPENAI_API_KEY` (or the variable named by `AVER_EMBEDDING_API_KEY_ENV`). Requests go to `POST <AVER_EMBEDDING_URL>/embeddings` with `model`, `input`, `encoding_format: "float"` and `dimensions: 768`, so vectors fit the ANN index; a response of any other length is rejected. **With this provider the text of every vector chunk and of every recall query is sent to that endpoint.** The privacy filter still runs first, so text it rejects is never stored or sent. The key is used only as the bearer token: it is not logged, not written to the claim log, and provider error bodies are never echoed.
+
+What to expect either way:
+
+- `remember_claim` does not embed. Only `add_vector_chunk` stores an embedding, so hybrid recall (and the opt-in recency term) covers claims that have chunks.
+- When the provider does not answer within `AVER_EMBEDDING_TIMEOUT_SECS`, `recall` answers by keyword and a chunk write stores the text without a vector. Nothing embeds that chunk later: the backfill routine in `aver-core` is not exposed by any command or tool yet.
+- Recall compares the query vector with every stored vector and has no model filter. Vectors from different models are not comparable even at the same length, so do not change provider or model on a store that already holds embedded chunks; start a new store or re-create the chunks.
 
 ### Connecting an MCP client
 

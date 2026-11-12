@@ -268,6 +268,137 @@ impl EmbeddingClient for OllamaEmbeddingClient {
     }
 }
 
+/// OpenAI model used when the OpenAI-compatible provider is selected
+/// without an explicit model.
+pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-small";
+
+/// Client for an OpenAI-compatible `POST {base_url}/embeddings` endpoint
+/// (request: `input`, `model`, `encoding_format: "float"`, `dimensions`;
+/// response: `data[0].embedding`).
+///
+/// The API key is sent as a bearer token and appears nowhere else: `Debug`
+/// redacts it, and errors carry the HTTP status or transport error kind
+/// only, never the response body (an authentication error can echo part of
+/// the key) or the request.
+#[cfg(feature = "ollama")]
+#[derive(Clone)]
+pub struct OpenAiEmbeddingClient {
+    base_url: String,
+    model: String,
+    dimensions: usize,
+    api_key: String,
+    timeout: Duration,
+    agent: ureq::Agent,
+}
+
+#[cfg(feature = "ollama")]
+impl fmt::Debug for OpenAiEmbeddingClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenAiEmbeddingClient")
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("dimensions", &self.dimensions)
+            .field("api_key", &"<redacted>")
+            .field("timeout", &self.timeout)
+            .finish()
+    }
+}
+
+#[cfg(feature = "ollama")]
+impl OpenAiEmbeddingClient {
+    /// `dimensions` is requested from the provider and enforced on the
+    /// response, so every stored vector has the same length.
+    pub fn new(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        dimensions: usize,
+        api_key: impl Into<String>,
+    ) -> Self {
+        Self {
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+            model: model.into(),
+            dimensions,
+            api_key: api_key.into(),
+            timeout: DEFAULT_EMBEDDING_TIMEOUT,
+            agent: ureq::AgentBuilder::new()
+                .timeout(DEFAULT_EMBEDDING_TIMEOUT)
+                .build(),
+        }
+    }
+
+    /// Replaces the overall per-request timeout (connect + send + read).
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self.agent = ureq::AgentBuilder::new().timeout(timeout).build();
+        self
+    }
+
+    pub fn embeddings_url(&self) -> String {
+        format!("{}/embeddings", self.base_url)
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+}
+
+#[cfg(feature = "ollama")]
+impl EmbeddingClient for OpenAiEmbeddingClient {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        #[derive(serde::Deserialize)]
+        struct Response {
+            data: Vec<Item>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Item {
+            embedding: Vec<f32>,
+        }
+
+        let response = self
+            .agent
+            .post(&self.embeddings_url())
+            .set("Authorization", &format!("Bearer {}", self.api_key))
+            .send_json(serde_json::json!({
+                "input": text,
+                "model": self.model,
+                "encoding_format": "float",
+                "dimensions": self.dimensions,
+            }))
+            .map_err(|err| {
+                EmbeddingError::Http(match err {
+                    ureq::Error::Status(code, _) => {
+                        format!("embedding provider returned HTTP {code}")
+                    }
+                    ureq::Error::Transport(transport) => format!(
+                        "embedding request failed within {:.1}s limit: {}",
+                        self.timeout.as_secs_f64(),
+                        transport.kind()
+                    ),
+                })
+            })?
+            .into_string()?;
+        // A serde error can quote the offending value; keep provider output
+        // out of error text altogether.
+        let parsed: Response = serde_json::from_str(&response).map_err(|_| {
+            EmbeddingError::Http("embedding provider returned an unreadable response".into())
+        })?;
+        let embedding = parsed
+            .data
+            .into_iter()
+            .next()
+            .map(|item| item.embedding)
+            .ok_or_else(|| EmbeddingError::Http("embedding provider returned no data".into()))?;
+        if embedding.len() != self.dimensions {
+            return Err(EmbeddingError::Http(format!(
+                "embedding provider returned {} dimensions, expected {}",
+                embedding.len(),
+                self.dimensions
+            )));
+        }
+        Ok(embedding)
+    }
+}
+
 #[cfg(test)]
 mod timeout_tests {
     use super::*;

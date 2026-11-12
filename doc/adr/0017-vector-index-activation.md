@@ -137,3 +137,13 @@ The build adds one C compilation step. Crate-level `cc` already participates in 
 - (−) Migration `0003` does a backfill pass on existing installs. For a multi-year-old project, that is a one-time cost (bounded at 10s; degrades to lazy fill past that). Documented in the upgrade notes.
 - (−) The trigger-vs-explicit-write decision for keeping `vector_chunks` and `vector_index` in sync needs a small spike before the implementation PR. If `vec0` constraints force explicit writes, every embedding insert path must be audited (currently one site; verify before merge).
 - (−) Supersedes the vector-index portion of ADR-0006 and adds a build-time C dependency (`sqlite-vec`). ADR-0006's "no infra" claim is unchanged; the dependency is compiled in, not installed by the user.
+
+## Amendment (2026-11-12): OpenAI-compatible embedding provider
+
+The embedding client was Ollama-only. `AVER_EMBEDDING_PROVIDER=openai` selects a client for any OpenAI-compatible `POST /embeddings` endpoint instead, for installs with no local embedding model.
+
+- One provider per store, chosen by configuration. No fallback chain and no mixed-model routing: recall has no model filter, and vectors from different models are not comparable.
+- Vectors are requested with `dimensions` equal to the canonical index dimension (768) and a response of another length is rejected, so OpenAI vectors use the same `vec0` index as before.
+- The API key is read from the environment variable named by `AVER_EMBEDDING_API_KEY_ENV` (default `OPENAI_API_KEY`), sent only as the bearer token, redacted from `Debug`, and never part of an error: errors carry the HTTP status or transport error kind, not the response body.
+- Chunk text and query text leave the machine with this provider. The privacy filter still gates what is stored and therefore what is sent.
+- Unset, behaviour is unchanged. A missing key or unknown provider is reported on stderr and leaves recall on the keyword path.
