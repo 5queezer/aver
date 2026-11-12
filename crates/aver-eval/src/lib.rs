@@ -7,6 +7,7 @@
 
 pub mod beam;
 pub mod prompt_assertions;
+pub mod recency;
 pub mod tuning;
 
 use anyhow::Result;
