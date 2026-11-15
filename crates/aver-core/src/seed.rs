@@ -83,6 +83,10 @@ const PREDICATE_ONTOLOGY: &[(&str, Option<&str>)] = &[
     ("triggered_by", Some("concerns")),
     ("supersedes", Some("relates_to")),
     ("has_rationale", Some("concerns")),
+    // ADR-0032: evidence items name their context and when they closed; the
+    // evidence-since-confirmation count keys on both.
+    ("in_context", Some("relates_to")),
+    ("closed_at", Some("relates_to")),
 ];
 
 /// Predicates that hold one object per subject (migration 0010
@@ -96,6 +100,7 @@ const SINGLE_VALUED_PREDICATES: &[&str] = &[
     "binary_name",
     "impl_stays_in",
     "splits_by",
+    "closed_at",
 ];
 
 const CORE_ALIASES: &[(&str, &str)] = &[("about", "concerns"), ("is_a", "is")];

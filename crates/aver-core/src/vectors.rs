@@ -477,16 +477,23 @@ impl Store {
             }
         }
 
-        let mut ranked: Vec<(f64, Claim)> = candidates
-            .into_values()
-            .map(|claim| {
-                let vector_score = vector_scores.get(&claim.id).copied().unwrap_or(0.0);
-                let graph_score = graph_score_for_query_claim(query, &claim);
-                let score =
-                    weights.blend_with_age(vector_score, graph_score, claim.verified_age_secs(now));
-                (score, claim)
-            })
-            .collect();
+        let mut ranked: Vec<(f64, Claim)> = Vec::with_capacity(candidates.len());
+        for claim in candidates.into_values() {
+            let vector_score = vector_scores.get(&claim.id).copied().unwrap_or(0.0);
+            let graph_score = graph_score_for_query_claim(query, &claim);
+            let mut score =
+                weights.blend_with_age(vector_score, graph_score, claim.verified_age_secs(now));
+            // ADR-0032 opt-in: unexamined closed evidence lowers a
+            // contextual claim's rank; the stored confidence is untouched.
+            if weights.evidence_half_life > 0.0
+                && let Some(evidence) = self
+                    .claim_confirmation(&claim, now)?
+                    .evidence_since_confirmation
+            {
+                score = weights.damp_for_evidence(score, evidence);
+            }
+            ranked.push((score, claim));
+        }
         ranked.sort_by(|(a_score, a_claim), (b_score, b_claim)| {
             b_score
                 .total_cmp(a_score)

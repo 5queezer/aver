@@ -163,6 +163,71 @@ the store open with an error naming the file and entry. Keep the file in the
 store's backups: replay never rejects the log, so without the file extension
 predicates come back under `relates_to` as multi-valued.
 
+## Claim validity and confirmation
+
+A claim may carry one `context` (an opaque entity id, such as `context:<id>`)
+and a window `valid_from`/`valid_until` of the evidence that established it,
+in Unix seconds (ADR-0032). A window needs a context, and `valid_from` is not
+after `valid_until`. The same statement under two contexts is two claims: they
+never merge or supersede each other, while claims without a context behave as
+before.
+
+```json
+{"subject":"lesson:shade","predicate":"concerns","object":"topic:mulch","context":"context:dry","valid_from":1700000000,"valid_until":1700600000,"scope":"proj/garden"}
+```
+
+Evidence items are ordinary entities linked with core predicates:
+`<item> in_context <context>`, `<item> concerns <topic>`, and, once the item
+has an outcome, `<item> closed_at <time>` (single-valued; its value is
+informational).
+
+For a claim L with a context, `evidence_since_confirmation` counts distinct
+items with ACTIVE claims, all in L's scope or a scope below it, that are
+`in_context` L's context, `concerns` L's subject or one of the objects of L's
+subject's own ACTIVE `concerns` claims (same scope set), and whose `closed_at`
+claim was created in `(max(last_confirmed_at, valid_from), now]`. Predicates
+include their descendants and aliases. `valid_until` does not end counting:
+new evidence arrives after the window by nature. Arrival is the logged
+creation time of the `closed_at` claim, so a one-time import counts older
+closed items as new for claims confirmed earlier, and an item closed again
+with a new `closed_at` counts again. The count is derived on read; nothing is
+written and replay reproduces it.
+
+aver only counts. Whether new evidence supports or refutes a claim is the
+consumer's judgment: confirm with `reverify_claim` (CLI `aver reverify`), or
+refute with `contradict`.
+
+```json
+{"claim_id":123,"evidence":["event:45","item:7"],"agent_kind":"LLM","valid_until":1701200000}
+```
+
+A confirmation needs an ACTIVE claim, a request scope equal to the claim's
+scope, at least one evidence reference, and every `event:<id>`/`claim:<id>`
+reference must exist in the claim's scope or below it (not the claim itself).
+`valid_until` only extends a window the claim has. The record names its
+writer and evidence; `last_confirmed_at` is the latest explicit confirmation,
+else the claim's creation time. A re-assertion folded by `consolidate` moves
+`last_verified_at` (recency) but is not a confirmation. Recall returns
+`context`, `valid_from`, `valid_until`, `last_verified_at`,
+`last_confirmed_at`, `evidence_since_confirmation` and the latest confirmation
+(`at`, `agent_id`, `agent_kind`, `evidence`) only for claims with a context or
+a confirmation; `aver confirmations --claim-id N` lists them all. Recall also
+takes a `context` filter, and `AVER_RECALL_EVIDENCE_HALF_LIFE` opts hybrid
+ranking into `0.5^(count / half_life)`; stored confidence never changes.
+
+Replay may propose, live evidence confirms: hypotheses formed from replayed
+history live in their own top-level scope (for example `replay/<run>`) with
+their own evidence. Counting and confirmation stay within a claim's scope set,
+so replay evidence neither confirms nor decays a claim in a live scope, and a
+replay-scoped request cannot confirm one. A pre-declared out-of-sample test is
+a live claim whose window starts after its creation: only items that close
+after both its creation and the window start are counted.
+
+A store whose `ontology.json` declares `in_context` or `closed_at` with a
+different shape fails to open (ADR-0031); reconcile the file before upgrading.
+An older binary replaying a newer log silently drops context and evidence, so
+roll back by restoring the matching backup, never by replaying a newer log.
+
 ## Viewer
 
 See [the local graph viewer](../contrib/graph/README.md). No private store or

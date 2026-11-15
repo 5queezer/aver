@@ -24,6 +24,80 @@ pub struct Claim {
     /// ADR-0021 hierarchical memory scope (e.g. "global", "proj/aver",
     /// "proj/aver/branch/feat_x"). Defaults to "global" when unspecified.
     pub scope: String,
+    /// ADR-0032: the context entity the claim was established under.
+    pub context: Option<String>,
+    /// ADR-0032: window of the evidence that established the claim (Unix
+    /// seconds). Only with a context; `valid_until` only ever extends.
+    pub valid_from: Option<i64>,
+    pub valid_until: Option<i64>,
+}
+
+/// ADR-0032: one explicit confirmation of a claim (`reverify_claim`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Verification {
+    pub verified_at: i64,
+    pub agent_id: String,
+    pub agent_kind: AgentKind,
+    /// The evidence references an explicit confirmation cited.
+    pub evidence: Vec<String>,
+}
+
+/// ADR-0032: how recently a claim was confirmed and how much matching
+/// evidence has closed since. Derived from the projection on read.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaimConfirmation {
+    /// The latest explicit confirmation, else the claim's creation time.
+    pub last_confirmed_at: i64,
+    /// The latest explicit confirmation, if any.
+    pub latest: Option<Verification>,
+    /// Closed matching evidence in `(max(last_confirmed_at, valid_from), now]`;
+    /// `None` for a claim without a context.
+    pub evidence_since_confirmation: Option<i64>,
+}
+
+/// ADR-0032: an explicit re-confirmation of a claim by new evidence.
+/// Defaults: `agent_id` "local", `AgentKind::Human`, scope "global".
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReverifyWrite {
+    pub claim_id: i64,
+    /// At least one reference; `event:<id>` and `claim:<id>` must exist in
+    /// the claim's scope or a descendant scope.
+    pub evidence: Vec<String>,
+    pub agent_id: String,
+    pub agent_kind: AgentKind,
+    /// Extends the claim's window end; never shrinks it.
+    pub valid_until: Option<i64>,
+    /// The request scope; it must equal the claim's scope.
+    pub scope: String,
+}
+
+impl ReverifyWrite {
+    pub fn new(claim_id: i64, evidence: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            claim_id,
+            evidence: evidence.into_iter().map(Into::into).collect(),
+            agent_id: "local".to_string(),
+            agent_kind: AgentKind::Human,
+            valid_until: None,
+            scope: "global".to_string(),
+        }
+    }
+
+    pub fn agent(mut self, agent_id: impl Into<String>, agent_kind: AgentKind) -> Self {
+        self.agent_id = agent_id.into();
+        self.agent_kind = agent_kind;
+        self
+    }
+
+    pub fn valid_until(mut self, valid_until: i64) -> Self {
+        self.valid_until = Some(valid_until);
+        self
+    }
+
+    pub fn scope(mut self, scope: impl Into<String>) -> Self {
+        self.scope = scope.into();
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -344,6 +418,10 @@ pub struct ClaimWrite {
     pub confidence: f64,
     /// ADR-0021 memory scope; `"global"` unless set.
     pub scope: String,
+    /// ADR-0032 context entity and evidence window (Unix seconds).
+    pub context: Option<String>,
+    pub valid_from: Option<i64>,
+    pub valid_until: Option<i64>,
 }
 
 impl ClaimWrite {
@@ -389,7 +467,23 @@ impl ClaimWrite {
             provenance,
             confidence: provenance.policy_confidence(),
             scope: "global".to_string(),
+            context: None,
+            valid_from: None,
+            valid_until: None,
         }
+    }
+
+    /// ADR-0032: the context entity this claim was established under.
+    pub fn context(mut self, context: impl Into<String>) -> Self {
+        self.context = Some(context.into());
+        self
+    }
+
+    /// ADR-0032: the window of the evidence behind the claim; needs a context.
+    pub fn valid_window(mut self, valid_from: Option<i64>, valid_until: Option<i64>) -> Self {
+        self.valid_from = valid_from;
+        self.valid_until = valid_until;
+        self
     }
 
     pub fn event_id(mut self, event_id: i64) -> Self {
@@ -635,6 +729,8 @@ pub struct RecallFilters {
     /// `Some(status)` matches that status exactly. `None` means "any status"
     /// (drops the implicit `WHERE status='ACTIVE'` clause).
     pub status: Option<ClaimStatus>,
+    /// ADR-0032: only claims established under this context entity.
+    pub context: Option<String>,
 }
 
 impl Default for RecallFilters {
@@ -648,6 +744,7 @@ impl Default for RecallFilters {
             predicate_walk: PredicateWalk::Exact,
             min_confidence: None,
             status: Some(ClaimStatus::Active),
+            context: None,
         }
     }
 }

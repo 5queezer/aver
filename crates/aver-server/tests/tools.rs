@@ -27,6 +27,9 @@ fn remember_claim_tool_writes_claim_and_recall_returns_it() {
             agent_id: Some("claude".to_string()),
             agent_kind: Some("LLM".to_string()),
             scope: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
 
@@ -44,6 +47,7 @@ fn remember_claim_tool_writes_claim_and_recall_returns_it() {
             min_confidence: None,
             status: None,
             alpha: None,
+            context: None,
         })
         .unwrap();
 
@@ -72,6 +76,9 @@ fn remember_claim_unknown_predicate_typo_lists_vocabulary_and_suggestion() {
             agent_id: Some("llm_agent".to_string()),
             agent_kind: Some("LLM".to_string()),
             scope: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .expect_err("LLM claims with misspelled predicates should explain the vocabulary");
 
@@ -111,6 +118,9 @@ fn remember_claim_unknown_semantic_predicate_suggests_safe_retry() {
             agent_id: Some("llm_agent".to_string()),
             agent_kind: Some("LLM".to_string()),
             scope: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .expect_err("LLM claims with semantic predicate misses should explain repair");
 
@@ -144,6 +154,9 @@ fn adr0008_five_tool_surface_covers_claim_graph_lifecycle() {
             scope: None,
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
     tools
@@ -160,6 +173,9 @@ fn adr0008_five_tool_surface_covers_claim_graph_lifecycle() {
             scope: None,
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
 
@@ -177,6 +193,7 @@ fn adr0008_five_tool_surface_covers_claim_graph_lifecycle() {
             min_confidence: None,
             status: None,
             alpha: None,
+            context: None,
         })
         .unwrap();
     assert!(
@@ -355,6 +372,9 @@ fn add_triple_rejects_confidence_outside_unit_interval() {
             scope: None,
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .expect_err("invalid confidence should be rejected");
 
@@ -380,6 +400,9 @@ fn add_triple_persists_valid_confidence_override() {
             scope: None,
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
 
@@ -397,6 +420,7 @@ fn add_triple_persists_valid_confidence_override() {
             min_confidence: None,
             status: None,
             alpha: None,
+            context: None,
         })
         .unwrap();
 
@@ -445,6 +469,7 @@ fn recall_tool_rejects_zero_hops() {
             min_confidence: None,
             status: None,
             alpha: None,
+            context: None,
         })
         .expect_err("zero hops should be rejected");
 
@@ -470,6 +495,7 @@ fn recall_tool_rejects_zero_top_k() {
             min_confidence: None,
             status: None,
             alpha: None,
+            context: None,
         })
         .expect_err("zero top_k should be rejected");
 
@@ -495,6 +521,9 @@ fn recall_tool_returns_graph_context_for_entity_query() {
             scope: None,
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
 
@@ -512,6 +541,7 @@ fn recall_tool_returns_graph_context_for_entity_query() {
             min_confidence: None,
             status: None,
             alpha: None,
+            context: None,
         })
         .unwrap();
 
@@ -545,6 +575,9 @@ fn recall_tool_expands_graph_from_recalled_claim_subject_when_query_is_phrase() 
             scope: None,
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
 
@@ -562,6 +595,7 @@ fn recall_tool_expands_graph_from_recalled_claim_subject_when_query_is_phrase() 
             min_confidence: None,
             status: None,
             alpha: None,
+            context: None,
         })
         .unwrap();
 
@@ -595,6 +629,9 @@ fn recall_tool_reports_confidence_floor_for_returned_triples() {
             scope: None,
             agent_id: None,
             agent_kind: Some("HUMAN".to_string()),
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
 
@@ -612,6 +649,7 @@ fn recall_tool_reports_confidence_floor_for_returned_triples() {
             min_confidence: None,
             status: None,
             alpha: None,
+            context: None,
         })
         .unwrap();
 
@@ -638,6 +676,9 @@ fn recall_tool_confidence_floor_includes_subgraph_edges() {
             scope: None,
             agent_id: None,
             agent_kind: Some("HUMAN".to_string()),
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
     tools
@@ -654,6 +695,9 @@ fn recall_tool_confidence_floor_includes_subgraph_edges() {
             scope: None,
             agent_id: None,
             agent_kind: Some("HUMAN".to_string()),
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
 
@@ -671,6 +715,7 @@ fn recall_tool_confidence_floor_includes_subgraph_edges() {
             min_confidence: None,
             status: None,
             alpha: None,
+            context: None,
         })
         .unwrap();
 
@@ -772,6 +817,9 @@ fn add_triple_rejects_empty_subject() {
             scope: None,
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .expect_err("empty subjects should be rejected");
 
@@ -797,6 +845,9 @@ fn add_triple_rejects_empty_predicate() {
             scope: None,
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .expect_err("empty predicates should be rejected");
 
@@ -822,6 +873,9 @@ fn add_triple_rejects_empty_object() {
             scope: None,
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .expect_err("empty objects should be rejected");
 
@@ -847,6 +901,9 @@ fn remember_claim_rejects_empty_subject() {
             agent_id: None,
             agent_kind: None,
             scope: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .expect_err("empty subjects should be rejected");
 
@@ -872,6 +929,9 @@ fn remember_claim_rejects_empty_predicate() {
             agent_id: None,
             agent_kind: None,
             scope: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .expect_err("empty predicates should be rejected");
 
@@ -897,6 +957,9 @@ fn remember_claim_rejects_empty_object() {
             agent_id: None,
             agent_kind: None,
             scope: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .expect_err("empty objects should be rejected");
 

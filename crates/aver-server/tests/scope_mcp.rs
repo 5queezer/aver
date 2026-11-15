@@ -28,6 +28,9 @@ fn remember_claim_with_scope_is_persisted() {
             agent_id: Some("cc".to_string()),
             agent_kind: Some("LLM".to_string()),
             scope: Some("proj/aver".to_string()),
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
     assert_eq!(view.scope, "proj/aver");
@@ -52,6 +55,9 @@ fn remember_claim_without_scope_defaults_to_global() {
             agent_id: None,
             agent_kind: None,
             scope: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
     assert_eq!(view.scope, "global");
@@ -75,6 +81,9 @@ fn add_triple_with_scope_is_persisted() {
             scope: Some("proj/aver".to_string()),
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
     assert_eq!(view.status, "appended");
@@ -172,6 +181,9 @@ fn recall_with_scope_filters_by_walk() {
             scope: Some("proj/aver".to_string()),
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
     tools
@@ -188,6 +200,9 @@ fn recall_with_scope_filters_by_walk() {
             scope: Some("proj/other".to_string()),
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
 
@@ -205,6 +220,7 @@ fn recall_with_scope_filters_by_walk() {
             min_confidence: None,
             status: None,
             alpha: None,
+            context: None,
         })
         .unwrap();
     let scopes: Vec<String> = view.triples.iter().map(|c| c.scope.clone()).collect();
@@ -232,6 +248,9 @@ fn expand_with_scope_filters_edges() {
             scope: Some("proj/aver".to_string()),
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
     tools
@@ -248,6 +267,9 @@ fn expand_with_scope_filters_edges() {
             scope: None, // → "global"
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
 
@@ -289,6 +311,9 @@ fn add_vector_chunk_does_not_take_scope_param() {
             scope: Some("proj/aver".to_string()),
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
     let _ = tools

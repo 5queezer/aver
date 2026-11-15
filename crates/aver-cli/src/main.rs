@@ -1,4 +1,6 @@
-use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite, RecallQuery};
+use aver_core::{
+    CandidateWrite, ClaimWrite, EventWrite, ObservationWrite, RecallQuery, ReverifyWrite,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 
@@ -26,6 +28,30 @@ struct Cli {
     command: Command,
 }
 
+/// ADR-0032 claim validity flags shared by `remember` and `add-triple`.
+#[derive(Debug, clap::Args)]
+struct ValidityArgs {
+    /// Context entity the claim was established under.
+    #[arg(long)]
+    context: Option<String>,
+    /// Start of the evidence window (Unix seconds); needs --context.
+    #[arg(long)]
+    valid_from: Option<i64>,
+    /// End of the evidence window (Unix seconds); needs --context.
+    #[arg(long)]
+    valid_until: Option<i64>,
+}
+
+impl ValidityArgs {
+    fn apply(self, write: ClaimWrite) -> ClaimWrite {
+        let write = match self.context {
+            Some(context) => write.context(context),
+            None => write,
+        };
+        write.valid_window(self.valid_from, self.valid_until)
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Open the store and report readiness.
@@ -40,6 +66,8 @@ enum Command {
         /// ADR-0021 memory scope. Defaults to "global".
         #[arg(long)]
         scope: Option<String>,
+        #[command(flatten)]
+        validity: ValidityArgs,
     },
     /// Search active claims by keyword.
     Recall {
@@ -50,6 +78,33 @@ enum Command {
         /// Walk mode: exact | ancestors | descendants | any.
         #[arg(long)]
         scope_walk: Option<String>,
+        /// ADR-0032: only claims established under this context entity.
+        #[arg(long)]
+        context: Option<String>,
+    },
+    /// Confirm a claim with new evidence (ADR-0032 explicit reverify).
+    Reverify {
+        #[arg(long)]
+        claim_id: i64,
+        /// Evidence reference (repeatable): event:<id>, claim:<id> or an item id.
+        #[arg(long = "evidence", required = true)]
+        evidence: Vec<String>,
+        /// Extend the claim's window end (Unix seconds); never shrinks it.
+        #[arg(long)]
+        valid_until: Option<i64>,
+        /// The claim's scope. Defaults to "global".
+        #[arg(long)]
+        scope: Option<String>,
+        #[arg(long, default_value = "local")]
+        agent_id: String,
+        /// HUMAN, LLM, DETERMINISTIC_PARSER or EXTERNAL_TOOL.
+        #[arg(long, default_value = "HUMAN")]
+        agent_kind: String,
+    },
+    /// List every explicit confirmation of a claim, oldest first.
+    Confirmations {
+        #[arg(long)]
+        claim_id: i64,
     },
 
     /// Record an episodic event from the agent.
@@ -183,6 +238,8 @@ enum Command {
         confidence: Option<f64>,
         #[arg(long)]
         scope: Option<String>,
+        #[command(flatten)]
+        validity: ValidityArgs,
     },
 
     /// Record a contradiction for an existing claim.
@@ -354,20 +411,50 @@ fn main() -> anyhow::Result<()> {
             object,
             source,
             scope,
+            validity,
         } => {
-            let claim_id = match scope.as_deref() {
-                None => store.add_claim(ClaimWrite::new(&subject, &predicate, &object, &source))?,
-                Some(scope) => store.add_claim(
-                    ClaimWrite::new(&subject, &predicate, &object, &source).scope(scope),
-                )?,
-            };
+            let write = ClaimWrite::new(&subject, &predicate, &object, &source)
+                .scope(scope.as_deref().unwrap_or("global"));
+            let claim_id = store.add_claim(validity.apply(write))?;
             println!("claim_id={claim_id}");
+        }
+
+        Command::Reverify {
+            claim_id,
+            evidence,
+            valid_until,
+            scope,
+            agent_id,
+            agent_kind,
+        } => {
+            let mut write = ReverifyWrite::new(claim_id, evidence)
+                .agent(agent_id, agent_kind.parse()?)
+                .scope(scope.as_deref().unwrap_or("global"));
+            if let Some(valid_until) = valid_until {
+                write = write.valid_until(valid_until);
+            }
+            let verified_at = store.reverify_claim(write)?;
+            println!("claim_id={claim_id} verified_at={verified_at}");
+        }
+
+        Command::Confirmations { claim_id } => {
+            store.get_claim(claim_id)?;
+            for verification in store.claim_verifications(claim_id)? {
+                println!(
+                    "verified_at={} agent_id={} agent_kind={} evidence={}",
+                    verification.verified_at,
+                    verification.agent_id,
+                    verification.agent_kind.as_str(),
+                    verification.evidence.join(",")
+                );
+            }
         }
 
         Command::Recall {
             query,
             scope,
             scope_walk,
+            context,
         } => {
             let walk: ScopeWalk = match scope_walk.as_deref() {
                 None => {
@@ -380,11 +467,27 @@ fn main() -> anyhow::Result<()> {
                 Some(s) => s.parse()?,
             };
             let scope = scope.as_deref().unwrap_or("global");
-            for claim in store.recall_text(RecallQuery::new(&query).scope(scope, walk))? {
-                println!(
+            let mut recall = RecallQuery::new(&query).scope(scope, walk);
+            recall.filters.context = context;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_secs() as i64);
+            for claim in store.recall_text(recall)? {
+                let confirmation = store.claim_confirmation(&claim, now)?;
+                let mut line = format!(
                     "[{}] {} {} {}",
                     claim.scope, claim.subject, claim.predicate, claim.object
                 );
+                if let Some(context) = &claim.context {
+                    line.push_str(&format!(" context={context}"));
+                }
+                if let Some(count) = confirmation.evidence_since_confirmation {
+                    line.push_str(&format!(
+                        " last_confirmed_at={} evidence_since_confirmation={count}",
+                        confirmation.last_confirmed_at
+                    ));
+                }
+                println!("{line}");
             }
         }
 
@@ -636,18 +739,12 @@ fn main() -> anyhow::Result<()> {
             source,
             confidence,
             scope,
+            validity,
         } => {
-            let id = match scope.as_deref() {
-                None => store.add_claim(
-                    ClaimWrite::new(&subject, &predicate, &object, &source)
-                        .confidence(confidence.unwrap_or(0.95)),
-                )?,
-                Some(scope) => store.add_claim(
-                    ClaimWrite::new(&subject, &predicate, &object, &source)
-                        .confidence(confidence.unwrap_or(0.95))
-                        .scope(scope),
-                )?,
-            };
+            let write = ClaimWrite::new(&subject, &predicate, &object, &source)
+                .confidence(confidence.unwrap_or(0.95))
+                .scope(scope.as_deref().unwrap_or("global"));
+            let id = store.add_claim(validity.apply(write))?;
             println!("triple_id={id}");
         }
 

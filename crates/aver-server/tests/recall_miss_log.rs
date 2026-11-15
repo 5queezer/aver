@@ -23,6 +23,7 @@ fn recall_params(query: &str) -> RecallParams {
         min_confidence: None,
         status: None,
         alpha: None,
+        context: None,
     }
 }
 
@@ -50,6 +51,9 @@ fn add_claim(tools: &AverTools, subject: &str, object: &str, confidence: f64) {
             scope: None,
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
 }

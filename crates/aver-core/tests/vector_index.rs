@@ -154,6 +154,13 @@ fn migration_backfills_existing_vector_chunks_rows() {
              DROP TRIGGER IF EXISTS candidate_claims_scope_nonblank_update;
              DROP TRIGGER IF EXISTS candidate_claims_scope_charset_insert;
              DROP TRIGGER IF EXISTS candidate_claims_scope_charset_update;
+             DROP INDEX claims_scope_context;
+             DROP TRIGGER claims_validity_window_insert;
+             DROP TRIGGER claims_validity_window_update;
+             DROP TABLE claim_verifications;
+             ALTER TABLE claims DROP COLUMN valid_until;
+             ALTER TABLE claims DROP COLUMN valid_from;
+             ALTER TABLE claims DROP COLUMN context;
              ALTER TABLE claims DROP COLUMN scope;
              ALTER TABLE episodic_events DROP COLUMN scope;
              ALTER TABLE observations DROP COLUMN scope;

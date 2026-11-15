@@ -11,8 +11,9 @@ fn mcp_instructions_are_a_progressive_discovery_card() {
     let instructions = service.get_info().instructions.unwrap();
 
     assert!(instructions.contains(
-        "Aver exposes 23 MCP tools, but most sessions should start with the default active set."
+        "Aver exposes 24 MCP tools, but most sessions should start with the default active set."
     ));
+    assert!(instructions.contains("Review tools for a review step only: reverify_claim;"));
     assert!(instructions.contains(
         "Default active set: recall, remember_claim, record_event, record_observation, assemble_compaction_summary."
     ));

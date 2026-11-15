@@ -20,7 +20,7 @@ use crate::tools::{
     ObservationCoverageParams, PathParams, PromoteCandidateClaimParams,
     ProposeCandidateClaimParams, RecallObservationParams, RecallParams as CoreRecallParams,
     RecordEventParams, RecordObservationParams, RejectCandidateClaimParams, RetireClaimParams,
-    ShouldExtractMemoriesParams, TriageCandidateClaimParams,
+    ReverifyClaimParams, ShouldExtractMemoriesParams, TriageCandidateClaimParams,
 };
 
 /// Verifies the request's granted scopes (carried via `http::request::Parts`
@@ -74,6 +74,9 @@ pub struct RecallParams {
     /// query-intent classifier; ignored when recall runs on the keyword path.
     #[serde(default)]
     pub alpha: Option<f64>,
+    /// ADR-0032 filter: only claims established under this context entity.
+    #[serde(default)]
+    pub context: Option<String>,
 }
 
 fn default_top_k() -> usize {
@@ -206,6 +209,7 @@ impl AverMcpService {
         Self::ASSEMBLE_COMPACTION_SUMMARY,
         Self::RECORD_OBSERVATION,
         Self::RETIRE_CLAIM,
+        Self::REVERIFY_CLAIM,
         Self::EXTRACT,
     ];
 
@@ -589,6 +593,27 @@ impl AverMcpService {
         json_tool_result(&tools, result, "retire_claim")
     }
 
+    const REVERIFY_CLAIM: ToolScope = ToolScope::new("reverify_claim", Scope::ClaimsWrite);
+    #[tool(
+        description = "Review step: record that an ACTIVE claim was re-confirmed by new evidence. Cite at least one reference (event:<id> or claim:<id> from the claim's scope or below, or an item id); the request scope must equal the claim's scope, so evidence from another scope (for example a replay run) cannot confirm it. Records the writer (agent_id/agent_kind) and the evidence, resets the claim's evidence_since_confirmation, and may extend valid_until (never shrink it). Refute with contradict instead."
+    )]
+    async fn reverify_claim(
+        &self,
+        Parameters(mut params): Parameters<ReverifyClaimParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        require_scope(&ctx, self.local.as_ref(), Self::REVERIFY_CLAIM)?;
+        if params.scope.is_none() {
+            params.scope = Some(request_scope(&ctx, self.local.as_ref()).scope);
+        }
+        if params.agent_id.is_none() {
+            params.agent_id = Some(request_agent_id(&ctx));
+        }
+        let tools = self.lock_tools()?;
+        let result = tools.reverify_claim(params);
+        json_tool_result(&tools, result, "reverify_claim")
+    }
+
     const EXTRACT: ToolScope = ToolScope::new("extract", Scope::ClaimsWrite);
     #[tool(
         description = "Extract code facts (defines, calls, imports, tests, uses) with Tree-sitter from a source file or directory on the server and store them as EXTRACTED claims in the project scope (ADR-0027). The path must be absolute and inside the operator-configured AVER_EXTRACT_ROOT; use dry_run to count without writing."
@@ -645,6 +670,7 @@ impl AverMcpService {
                 min_confidence: None,
                 status: None,
                 alpha: params.alpha,
+                context: params.context,
             }
         };
         let result = tools.recall_for_agent(params, &request_agent_id(&ctx));
@@ -698,6 +724,7 @@ fn mcp_tool_instructions() -> String {
             "consolidate",
             "add_vector_chunk",
         ];
+        let review_tools = ["reverify_claim"];
 
         format!(
             concat!(
@@ -716,6 +743,7 @@ fn mcp_tool_instructions() -> String {
                 "Embedding on write: when a result of remember_claim, add_triple or promote_candidate_claim carries `embedded`, true means the claim is eligible for hybrid recall and false means it was saved keyword-only (not retried); without the field the server does not embed on write. ",
                 "Source-event audit: progressively load get_event only for a known event_id (from a claim or record_event). It requires claims:read and the exact event scope, defaulting to the request scope. Recall does not expand event payloads; use get_event to read rationale on demand. ",
                 "Code extraction: extract reads a source tree on the server (operator-configured root) and writes EXTRACTED code facts; use it for project code, not for chat or user facts. ",
+                "Claim validity: remember_claim and add_triple accept `context` (an opaque entity id the claim was established under) and a `valid_from`/`valid_until` window in Unix seconds. Evidence items link with `<item> in_context <context>`, `<item> concerns <topic>` and `<item> closed_at <time>` once they have an outcome. For a claim with a context or an explicit confirmation, recall also returns last_verified_at, last_confirmed_at, the latest confirmation and evidence_since_confirmation: closed matching items (same context; concerning the claim's subject or its own concerns topics) in the claim's scope or below since the later of its last confirmation and valid_from. Review tools for a review step only: {}; refute with contradict. ",
                 "Tool groups: event workflow {}. Observation workflow {}. Full tool index: {}.",
                 "Progressively load event-to-claim tools only when converting raw events into reviewed durable claims: {}. ",
                 "Progressively load observation audit tools only for handoff, compaction, or provenance checks: {}. ",
@@ -725,6 +753,7 @@ fn mcp_tool_instructions() -> String {
             primary_tools.join(", "),
             specialized_tools.join(", "),
             maintenance_tools.join(", "),
+            review_tools.join(", "),
             event_tools.join(", "),
             observation_tools.join(", "),
             AverMcpService::TOOLS
@@ -774,6 +803,7 @@ mod tests {
             ("consolidate", Scope::ClaimsWrite),
             ("add_vector_chunk", Scope::ClaimsWrite),
             ("retire_claim", Scope::ClaimsWrite),
+            ("reverify_claim", Scope::ClaimsWrite),
             ("record_event", Scope::EventsWrite),
             ("get_event", Scope::ClaimsRead),
             ("should_extract_memories", Scope::EventsWrite),
@@ -845,6 +875,9 @@ mod tests {
                         agent_id: None,
                         agent_kind: None,
                         scope: None,
+                        context: None,
+                        valid_from: None,
+                        valid_until: None,
                     })
                     .unwrap();
             });
@@ -864,6 +897,9 @@ mod tests {
                         agent_id: None,
                         agent_kind: None,
                         scope: None,
+                        context: None,
+                        valid_from: None,
+                        valid_until: None,
                     })
                     .unwrap();
             });
@@ -886,6 +922,7 @@ mod tests {
                 min_confidence: None,
                 status: None,
                 alpha: None,
+                context: None,
             })
             .unwrap();
         let subjects: Vec<&str> = recalled

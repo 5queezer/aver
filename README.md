@@ -190,7 +190,9 @@ Current CLI commands:
 | `compaction-summary` | Assemble a continuity summary including coverage gap warnings. |
 | `expand` | Expand an entity neighborhood from the local claim graph. |
 | `communities` | Print deterministic weighted graph communities with score and bridge nodes. |
-| `add-triple` | Append a confidence-bearing structured triple. |
+| `add-triple` | Append a confidence-bearing structured triple. `remember` and `add-triple` take `--context`, `--valid-from` and `--valid-until` (ADR-0032). |
+| `reverify` | Confirm a claim with new evidence (`--claim-id`, repeatable `--evidence`, `--scope` = the claim's scope, optional `--valid-until`, `--agent-id`/`--agent-kind`). |
+| `confirmations` | List every explicit confirmation of a claim (`--claim-id`), oldest first. |
 | `contradict` | Record a contradiction for a claim id and optional replacement claim. |
 | `consolidate` | Consolidate active duplicates/conflicts and apply confidence decay. |
 | `extract` | Extract Tree-sitter code facts from a file or directory into the project scope (`--scope`, `--dry-run`, `--lang`). |
@@ -228,6 +230,7 @@ Default configuration:
 | `AVER_EMBEDDING_TIMEOUT_SECS` | `10` | Timeout in whole seconds for one embedding request; on timeout `recall` falls back to keyword recall and chunk writes store text only. Zero or unparsable values are ignored. |
 | `AVER_RECALL_RECENCY_WEIGHT` | `0` | Opt-in recency weight `w` in `[0, 1]` for hybrid `recall` (ADR-0004 amendment): adds `w * exp(-age / tau)` to each claim's score, with age measured from `last_verified_at` (or the write time). `0` or unset keeps ranking unchanged; an invalid value is reported on stderr and leaves recency off. `0.08` passes the bundled timed fixture. |
 | `AVER_RECALL_RECENCY_TAU_DAYS` | `90` | Time constant `tau` in days for `AVER_RECALL_RECENCY_WEIGHT`; must be positive. |
+| `AVER_RECALL_EVIDENCE_HALF_LIFE` | unset | Opt-in ADR-0032 ranking for hybrid `recall`: a claim with a context scores `0.5^(n / half_life)` of its relevance, `n` being its closed matching evidence since the last confirmation. Unset or `0` keeps ranking unchanged; stored confidence is never rewritten; an invalid value is reported on stderr and leaves it off. |
 | `AVER_DECISION_TIMEOUT_SECS` | `30` | Timeout in whole seconds for one decision-model request; on timeout the deterministic behaviour applies. Zero or unparsable values are ignored. |
 | `AVER_EXTRACT_ROOT` | *(unset)* | Directory the MCP `extract` tool may read (ADR-0027). Unset, the tool refuses every path. Paths must be absolute and, after symlink resolution, inside this directory. |
 | `AVER_EXTRACT_MAX_FILES` | `2000` | Most source files one `extract` call may scan; larger trees are refused with an error naming this cap. |
@@ -306,7 +309,7 @@ Then run **MCP: Add Server** from the command palette and pick `aver`. VS Code d
 
 MCP writes are attributed to the client that made them: `remember_claim` and `record_event` default `agent_id` to the OAuth `client_id` the bearer token was issued to (`aver-<uuid>` from dynamic registration), so writes from different harnesses stay distinguishable. An explicit `agent_id` parameter overrides it, and tokens minted without a client fall back to `mcp`. Observations and promoted candidates inherit the `agent_id` of their source events; MCP `add_triple` and replacement claims also use the caller attribution. Ordinary MCP claims default to `agent_kind=LLM`, `provenance=INFERRED`, confidence 0.45 (new inferred writes are capped at 0.75). Explicit source-stated facts can request `EXTRACTED`; agent judgments must remain `INFERRED`.
 
-MCP currently exposes 23 tools through a progressive discovery card so agents keep the active choice set small:
+MCP currently exposes 24 tools through a progressive discovery card so agents keep the active choice set small:
 
 - **Default active set:** `recall`, `remember_claim`, `record_event`, `record_observation`, `assemble_compaction_summary`
 - **Event-to-claim workflow:** record rationale with `record_event`, then pass its returned `id` as `event_id` to `remember_claim`/`add_triple` in the same scope. For a staged review, progressively load `should_extract_memories`, `propose_candidate_claim`, `list_candidate_claims`, `promote_candidate_claim`, `reject_candidate_claim` only when converting raw events into reviewed durable claims
@@ -318,6 +321,7 @@ MCP currently exposes 23 tools through a progressive discovery card so agents ke
 - **Observation audit:** progressively load `recall_observation`, `observation_coverage` for handoff, compaction, or provenance checks
 - **Code extraction:** `extract` (`claims:write`) walks a source file or directory on the server with Tree-sitter and stores the facts as `EXTRACTED` claims (ADR-0027). Params: `path` (absolute, inside `AVER_EXTRACT_ROOT`), `scope` (default: the request's resolved scope; `global` is used with a note in the result), `lang`, `dry_run`. It returns `scope`, `files_scanned`, `files_failed`, `facts_extracted`, `facts_ingested`, `skipped` (`extends`, `implements`, `duplicate`, `privacy`, ...) and `dry_run`
 - **Maintenance/repair:** keep `contradict`, `retire_claim`, `consolidate`, `add_vector_chunk` hidden until there is an explicit repair or retrieval-tuning need
+- **Review:** `reverify_claim` (`claims:write`, not in the default set) lets a review step confirm an ACTIVE claim with cited evidence; the request scope must equal the claim's scope. See [claim validity](doc/structured-memory.md#claim-validity-and-confirmation) (ADR-0032)
 
 `recall` is hybrid when embeddings are configured (`AVER_EMBEDDING_URL`) and the store holds embedded vector chunks: it embeds the query once, ranks claims with the ADR-0004 vector/graph blend (`alpha` parameter, default from the query-intent classifier) with the scope and ADR-0023 filters (including `status`) applied while candidates are selected, and returns the matching chunk texts in `chunks`. Without embeddings or when the embedding call fails (or times out, `AVER_EMBEDDING_TIMEOUT_SECS`) it answers from keyword recall as before; the additive `retrieval` field (`"hybrid"` or `"keyword"`) says which path ran, and `alpha` is reported for hybrid results. With `AVER_RECALL_RECENCY_WEIGHT` set, hybrid ranking also prefers recently verified claims; a claim's verification time is refreshed when `consolidate` folds a later re-assertion of the same triple into it (logged as `reverify_claim`). Keyword recall and the default configuration are unaffected, and recall still writes nothing.
 
@@ -341,7 +345,10 @@ store backup, `aver migrate-literals` performs explicit append-only cleanup.
 
 Decisions use the strict ontology: `concerns` (`about`), `is` (`is_a`),
 `triggered_by`, `supersedes`, and `has_rationale` are multi-valued; use
-`event:<id>` for rationale. A deployment adds its own predicates, with parents,
+`event:<id>` for rationale. A claim may name the context it was established
+under and the window of its evidence; recall then reports how much closed
+matching evidence has arrived since its last explicit confirmation
+(ADR-0032, [claim validity](doc/structured-memory.md#claim-validity-and-confirmation)). A deployment adds its own predicates, with parents,
 aliases and cardinality, in an optional `ontology.json` next to the store
 (ADR-0031). Consolidation records supersession for corrected single-valued facts.
 

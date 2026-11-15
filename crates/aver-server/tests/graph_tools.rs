@@ -27,6 +27,9 @@ fn seeded(dir: &std::path::Path) -> AverTools {
                 scope: Some(scope.to_string()),
                 agent_id: None,
                 agent_kind: Some("HUMAN".to_string()),
+                context: None,
+                valid_from: None,
+                valid_until: None,
             })
             .unwrap();
     }
@@ -272,6 +275,9 @@ fn path_step_carries_core_claim_id_from_add_triple() {
             scope: None,
             agent_id: None,
             agent_kind: Some("HUMAN".to_string()),
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
 

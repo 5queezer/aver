@@ -9,7 +9,7 @@ use aver_core::vector::{DEFAULT_OPENAI_EMBEDDING_MODEL, EmbeddingClient, VectorI
 use aver_core::{
     AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, Error,
     ExtractionTriggerReason, GraphPathQuery, Observation, ObservationCoverage, ObservationRecall,
-    ObservationRelevance, PredicateWalk, RecallFilters, ScopeWalk, Store,
+    ObservationRelevance, PredicateWalk, RecallFilters, ReverifyWrite, ScopeWalk, Store,
 };
 use aver_extractor::LANGUAGES;
 use aver_extractor::bridge::extract_tree;
@@ -143,6 +143,33 @@ pub fn recency_from_env() -> (f64, f64) {
     }
 }
 
+/// Reads the opt-in ADR-0032 evidence ranking once:
+/// `AVER_RECALL_EVIDENCE_HALF_LIFE` (closed matching items since the last
+/// confirmation that halve a contextual claim's hybrid score; unset or `0` =
+/// off). An invalid value is reported on stderr and leaves it off.
+pub fn evidence_half_life_from_env() -> f64 {
+    let Some(value) = std::env::var("AVER_RECALL_EVIDENCE_HALF_LIFE")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && value != "0")
+    else {
+        return 0.0;
+    };
+    match value
+        .parse::<f64>()
+        .ok()
+        .and_then(|n| HybridWeights::default().with_evidence_half_life(n).ok())
+    {
+        Some(weights) => weights.evidence_half_life,
+        None => {
+            eprintln!(
+                "aver-server: ignoring AVER_RECALL_EVIDENCE_HALF_LIFE={value:?}: expected a positive number of evidence items"
+            );
+            0.0
+        }
+    }
+}
+
 #[cfg(feature = "ollama")]
 fn ollama_embedder(url: Option<String>, model: &str) -> Option<Embedder> {
     url.map(|url| {
@@ -193,6 +220,15 @@ pub struct RememberClaimParams {
     /// ADR-0021 hierarchical memory scope. Defaults to the caller's resolved scope when used through MCP.
     #[serde(default)]
     pub scope: Option<String>,
+    /// ADR-0032: the context entity this claim was established under (an opaque id such as `context:<id>`).
+    #[serde(default)]
+    pub context: Option<String>,
+    /// ADR-0032: start of the evidence window, Unix seconds. Needs `context`.
+    #[serde(default)]
+    pub valid_from: Option<i64>,
+    /// ADR-0032: end of the evidence window, Unix seconds. Needs `context`; reverify_claim can extend it.
+    #[serde(default)]
+    pub valid_until: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -236,6 +272,9 @@ pub struct RecallParams {
     /// gets `1 - alpha`). Defaults to the query-intent classifier.
     #[serde(default)]
     pub alpha: Option<f64>,
+    /// ADR-0032 filter: only claims established under this context entity.
+    #[serde(default)]
+    pub context: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -330,6 +369,15 @@ pub struct AddTripleParams {
     /// Agent kind for attribution: HUMAN, LLM (default), DETERMINISTIC_PARSER, EXTERNAL_TOOL.
     #[serde(default)]
     pub agent_kind: Option<String>,
+    /// ADR-0032: the context entity this claim was established under (an opaque id such as `context:<id>`).
+    #[serde(default)]
+    pub context: Option<String>,
+    /// ADR-0032: start of the evidence window, Unix seconds. Needs `context`.
+    #[serde(default)]
+    pub valid_from: Option<i64>,
+    /// ADR-0032: end of the evidence window, Unix seconds. Needs `context`; reverify_claim can extend it.
+    #[serde(default)]
+    pub valid_until: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -534,6 +582,46 @@ pub struct RetireClaimView {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct ReverifyClaimParams {
+    /// Claim to confirm. It must be ACTIVE and in the request scope.
+    pub claim_id: i64,
+    /// Evidence that confirms the claim (at least one): `event:<id>` or `claim:<id>` from the claim's scope or a scope below it, or an item id.
+    pub evidence: Vec<String>,
+    /// Extend the claim's window end to this Unix time. Never shrinks it; needs a claim with a context.
+    #[serde(default)]
+    pub valid_until: Option<i64>,
+    /// Agent identifier recorded as the confirming writer. Defaults to the authenticated OAuth client id when used through MCP.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// Agent kind recorded as the confirming writer: LLM (default), HUMAN, DETERMINISTIC_PARSER, EXTERNAL_TOOL.
+    #[serde(default)]
+    pub agent_kind: Option<String>,
+    /// ADR-0021 scope of the request; it must equal the claim's scope. Defaults to the caller's resolved scope when used through MCP.
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ReverifyClaimView {
+    pub claim_id: i64,
+    pub verified_at: i64,
+    pub agent_id: String,
+    pub agent_kind: String,
+    pub evidence: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<i64>,
+}
+
+/// ADR-0032: the latest explicit confirmation of a claim.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ConfirmationView {
+    pub at: i64,
+    pub agent_id: String,
+    pub agent_kind: String,
+    pub evidence: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ClaimView {
     pub provenance: String,
@@ -558,6 +646,24 @@ pub struct ClaimView {
     /// claim is keyword-only (nothing retries it).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embedded: Option<bool>,
+    /// ADR-0032 validity; omitted for claims without a context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<i64>,
+    /// Recall only, and only for a claim with a context or an explicit
+    /// confirmation: verification times, the closed matching evidence since
+    /// the last confirmation (context only) and that confirmation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_verified_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_confirmed_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_since_confirmation: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_confirmation: Option<ConfirmationView>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -763,7 +869,39 @@ impl From<Claim> for ClaimView {
             agent_kind: claim.agent_kind.as_str().to_string(),
             scope: claim.scope,
             embedded: None,
+            context: claim.context,
+            valid_from: claim.valid_from,
+            valid_until: claim.valid_until,
+            last_verified_at: None,
+            last_confirmed_at: None,
+            evidence_since_confirmation: None,
+            latest_confirmation: None,
         }
+    }
+}
+
+/// The optional ADR-0032 context and window of an MCP claim write.
+trait ContextWindow {
+    fn context_window(
+        self,
+        context: Option<String>,
+        valid_from: Option<i64>,
+        valid_until: Option<i64>,
+    ) -> Self;
+}
+
+impl ContextWindow for ClaimWrite {
+    fn context_window(
+        self,
+        context: Option<String>,
+        valid_from: Option<i64>,
+        valid_until: Option<i64>,
+    ) -> Self {
+        let write = match context {
+            Some(context) => self.context(context),
+            None => self,
+        };
+        write.valid_window(valid_from, valid_until)
     }
 }
 
@@ -920,6 +1058,9 @@ pub struct AverTools {
     /// ADR-0004 opt-in recency `(w, tau_secs)`; `w == 0` unless
     /// `AVER_RECALL_RECENCY_WEIGHT` opts in.
     recency: (f64, f64),
+    /// ADR-0032 opt-in evidence half-life; `0` unless
+    /// `AVER_RECALL_EVIDENCE_HALF_LIFE` opts in.
+    evidence_half_life: f64,
     /// `AVER_EMBED_ON_WRITE=1`: claim writes also store an embedded chunk.
     embed_on_write: bool,
 }
@@ -946,6 +1087,7 @@ impl AverTools {
             embedding_model,
             recall_miss_log,
             recency: recency_from_env(),
+            evidence_half_life: evidence_half_life_from_env(),
             embed_on_write: std::env::var("AVER_EMBED_ON_WRITE").is_ok_and(|v| v.trim() == "1"),
         })
     }
@@ -989,6 +1131,15 @@ impl AverTools {
     pub fn with_recency(mut self, weight: f64, tau_secs: f64) -> anyhow::Result<Self> {
         let weights = HybridWeights::default().with_recency(weight, tau_secs)?;
         self.recency = (weights.recency_weight, weights.recency_tau_secs);
+        Ok(self)
+    }
+
+    /// Replaces the evidence half-life read from the environment (tests
+    /// inject it here instead of setting `AVER_RECALL_EVIDENCE_HALF_LIFE`).
+    pub fn with_evidence_half_life(mut self, half_life: f64) -> anyhow::Result<Self> {
+        self.evidence_half_life = HybridWeights::default()
+            .with_evidence_half_life(half_life)?
+            .evidence_half_life;
         Ok(self)
     }
 
@@ -1075,7 +1226,12 @@ impl AverTools {
                 &params.object,
                 params.source.as_deref().unwrap_or("mcp"),
             )
-            .scope(params.scope.as_deref().unwrap_or("global")),
+            .scope(params.scope.as_deref().unwrap_or("global"))
+            .context_window(
+                params.context.clone(),
+                params.valid_from,
+                params.valid_until,
+            ),
             params.provenance.as_deref(),
             params.confidence,
             params.object_kind.as_deref(),
@@ -1222,6 +1378,7 @@ impl AverTools {
             predicate_walk,
             min_confidence: params.min_confidence,
             status,
+            context: params.context.clone(),
         };
         if let Some(min) = filters.min_confidence
             && !(0.0..=1.0).contains(&min)
@@ -1236,6 +1393,7 @@ impl AverTools {
         let weights = HybridWeights {
             recency_weight: self.recency.0,
             recency_tau_secs: self.recency.1,
+            evidence_half_life: self.evidence_half_life,
             ..weights
         };
         let (mut claims, chunks, retrieval, alpha) =
@@ -1267,8 +1425,13 @@ impl AverTools {
             .map(|claim| claim.confidence)
             .min_by(f64::total_cmp)
             .unwrap_or(0.0);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let triples = claims
+            .into_iter()
+            .map(|claim| self.confirmed_view(claim, now))
+            .collect::<anyhow::Result<Vec<_>>>()?;
         Ok(RecallView {
-            triples: claims.into_iter().map(ClaimView::from).collect(),
+            triples,
             chunks,
             subgraph: GraphView {
                 nodes: subgraph.nodes,
@@ -1445,7 +1608,12 @@ impl AverTools {
                 &params.object,
                 &params.source,
             )
-            .scope(params.scope.as_deref().unwrap_or("global")),
+            .scope(params.scope.as_deref().unwrap_or("global"))
+            .context_window(
+                params.context.clone(),
+                params.valid_from,
+                params.valid_until,
+            ),
             params.provenance.as_deref(),
             params.confidence,
             params.object_kind.as_deref(),
@@ -1713,6 +1881,53 @@ impl AverTools {
         Ok(CompactionSummaryView {
             summary: self.store.assemble_compaction_summary(&params.session_id)?,
             session_id: params.session_id,
+        })
+    }
+
+    /// ADR-0032: a recall triple with its confirmation state, filled only for
+    /// a claim with a context or an explicit confirmation.
+    fn confirmed_view(&self, claim: Claim, now: i64) -> anyhow::Result<ClaimView> {
+        let confirmation = self.store.claim_confirmation(&claim, now)?;
+        let shown = claim.context.is_some() || confirmation.latest.is_some();
+        let last_verified_at = claim.last_verified_at;
+        let mut view = ClaimView::from(claim);
+        if shown {
+            view.last_verified_at = last_verified_at;
+            view.last_confirmed_at = Some(confirmation.last_confirmed_at);
+            view.evidence_since_confirmation = confirmation.evidence_since_confirmation;
+            view.latest_confirmation = confirmation.latest.map(|latest| ConfirmationView {
+                at: latest.verified_at,
+                agent_id: latest.agent_id,
+                agent_kind: latest.agent_kind.as_str().to_string(),
+                evidence: latest.evidence,
+            });
+        }
+        Ok(view)
+    }
+
+    /// ADR-0032 `reverify_claim`: record that a claim was re-confirmed by the
+    /// cited evidence, naming the confirming writer.
+    pub fn reverify_claim(&self, params: ReverifyClaimParams) -> anyhow::Result<ReverifyClaimView> {
+        let (agent_id, agent_kind) = mcp_agent(
+            params.agent_id.as_deref(),
+            params.agent_kind.as_deref(),
+            "mcp",
+            AgentKind::Llm,
+        )?;
+        let mut write = ReverifyWrite::new(params.claim_id, params.evidence.clone())
+            .agent(agent_id, agent_kind)
+            .scope(params.scope.as_deref().unwrap_or("global"));
+        if let Some(valid_until) = params.valid_until {
+            write = write.valid_until(valid_until);
+        }
+        let verified_at = self.store.reverify_claim(write)?;
+        Ok(ReverifyClaimView {
+            claim_id: params.claim_id,
+            verified_at,
+            agent_id: agent_id.to_string(),
+            agent_kind: agent_kind.as_str().to_string(),
+            evidence: params.evidence,
+            valid_until: self.store.get_claim(params.claim_id)?.valid_until,
         })
     }
 

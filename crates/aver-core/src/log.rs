@@ -87,6 +87,13 @@ pub(crate) enum LogRecord {
         /// ADR-0021: lines written before scopes existed replay as "global".
         #[serde(default = "default_scope")]
         scope: String,
+        /// ADR-0032 validity; absent on older lines (no context).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        valid_from: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        valid_until: Option<i64>,
     },
     MigrateLiterals {
         ts: i64,
@@ -216,10 +223,21 @@ pub(crate) enum LogRecord {
     /// ADR-0004 recency: a re-assertion of an existing claim refreshes its
     /// `last_verified_at`. The outcome (`verified_at`) is logged, not the
     /// rule that derived it, and the record carries no claim content.
+    /// ADR-0032: an explicit `reverify_claim` also names its writer and the
+    /// evidence it cites, and may extend the window end. Consolidation's
+    /// records carry none of these, so their bytes are unchanged.
     ReverifyClaim {
         ts: i64,
         claim_id: i64,
         verified_at: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_kind: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        evidence: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        valid_until: Option<i64>,
     },
 }
 
@@ -716,6 +734,22 @@ mod record_tests {
     #[test]
     fn current_lines_parse_and_round_trip_byte_for_byte() {
         for line in CURRENT_LINES {
+            let record: LogRecord =
+                serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"));
+            assert_eq!(serde_json::to_string(&record).unwrap(), line);
+        }
+    }
+
+    /// ADR-0032 optional fields: an explicit reverify and a claim with a
+    /// context and window. Older lines above keep their exact bytes.
+    const VALIDITY_LINES: [&str; 2] = [
+        r#"{"kind":"reverify_claim","ts":12,"claim_id":1,"verified_at":12,"agent_id":"review","agent_kind":"LLM","evidence":["event:3","plot:7"],"valid_until":12}"#,
+        r#"{"kind":"add_claim","ts":13,"claim_id":2,"subject":"lesson:a","predicate":"concerns","object":"topic:b","event_id":3,"source":"s","agent_id":"mcp","agent_kind":"LLM","confidence":0.45,"provenance":"INFERRED","scope":"global","context":"context:c","valid_from":1,"valid_until":13}"#,
+    ];
+
+    #[test]
+    fn validity_lines_round_trip_exactly() {
+        for line in VALIDITY_LINES {
             let record: LogRecord =
                 serde_json::from_str(line).unwrap_or_else(|err| panic!("{line}: {err}"));
             assert_eq!(serde_json::to_string(&record).unwrap(), line);

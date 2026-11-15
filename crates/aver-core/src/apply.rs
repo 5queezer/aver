@@ -73,6 +73,9 @@ pub(crate) fn apply(conn: &Connection, record: &LogRecord) -> Result<Applied, Er
             confidence,
             provenance,
             scope,
+            context,
+            valid_from,
+            valid_until,
         } => {
             let agent_kind: AgentKind = agent_kind.parse()?;
             let provenance = match provenance {
@@ -96,6 +99,11 @@ pub(crate) fn apply(conn: &Connection, record: &LogRecord) -> Result<Applied, Er
                 *confidence,
                 provenance,
                 scope,
+                Validity {
+                    context: context.as_deref(),
+                    valid_from: *valid_from,
+                    valid_until: *valid_until,
+                },
             )
         }
         LogRecord::MigrateLiterals {
@@ -273,10 +281,25 @@ pub(crate) fn apply(conn: &Connection, record: &LogRecord) -> Result<Applied, Er
             ..
         } => embed_vector_chunk(conn, *chunk_id, embedding),
         LogRecord::ReverifyClaim {
+            ts,
             claim_id,
             verified_at,
-            ..
-        } => reverify_claim(conn, *claim_id, *verified_at),
+            agent_id,
+            agent_kind,
+            evidence,
+            valid_until,
+        } => reverify_claim(
+            conn,
+            *ts,
+            *claim_id,
+            *verified_at,
+            Confirmation {
+                agent_id: agent_id.as_deref(),
+                agent_kind: agent_kind.as_deref(),
+                evidence,
+                valid_until: *valid_until,
+            },
+        ),
     }
 }
 
@@ -354,6 +377,7 @@ fn add_claim(
     confidence: f64,
     provenance: Provenance,
     scope: &str,
+    validity: Validity<'_>,
 ) -> Result<Applied, Error> {
     // Only write-time immutable fields are compared: lifecycle records
     // (decay, merge, retire) legitimately change provenance/confidence/
@@ -376,10 +400,10 @@ fn add_claim(
         )
         .optional()?;
     if let Some(existing) = existing {
-        let existing_event: Option<i64> = conn.query_row(
-            "SELECT event_id FROM claims WHERE id = ?1",
+        let (existing_event, existing_context): (Option<i64>, Option<String>) = conn.query_row(
+            "SELECT event_id, context FROM claims WHERE id = ?1",
             [claim_id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         let matches = existing.0 == subject
             && existing.1 == predicate
@@ -387,7 +411,8 @@ fn add_claim(
             && existing.3 == agent_id
             && existing.4 == agent_kind.as_str()
             && existing.5 == scope
-            && existing_event == event_id;
+            && existing_event == event_id
+            && existing_context.as_deref() == validity.context;
         if !matches {
             return Err(duplicate(format!("claim_id={claim_id} content mismatch")));
         }
@@ -398,6 +423,9 @@ fn add_claim(
     ensure_entity_on(conn, subject, ts)?;
     if object_kind == crate::ObjectKind::Entity {
         ensure_entity_on(conn, object, ts)?;
+    }
+    if let Some(context) = validity.context {
+        ensure_entity_on(conn, context, ts)?;
     }
 
     let mut refs = vec![source.to_owned()];
@@ -411,9 +439,10 @@ fn add_claim(
     conn.execute(
         "INSERT INTO claims (id, subject, predicate, object, provenance, confidence,
                              status, source_refs, agent_id, agent_kind, write_ts,
-                             created_at, last_seen_at, last_verified_at, scope, object_kind, event_id)
+                             created_at, last_seen_at, last_verified_at, scope, object_kind, event_id,
+                             context, valid_from, valid_until)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACTIVE', ?7,
-                 ?8, ?9, ?10, ?10, ?10, ?10, ?11, ?12, ?13)",
+                 ?8, ?9, ?10, ?10, ?10, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             claim_id,
             subject,
@@ -427,10 +456,20 @@ fn add_claim(
             ts,
             scope,
             object_kind.as_str(),
-            event_id
+            event_id,
+            validity.context,
+            validity.valid_from,
+            validity.valid_until
         ],
     )?;
     Ok(Applied::Applied)
+}
+
+/// ADR-0032 claim validity as carried by an `add_claim` record.
+pub(crate) struct Validity<'a> {
+    pub(crate) context: Option<&'a str>,
+    pub(crate) valid_from: Option<i64>,
+    pub(crate) valid_until: Option<i64>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -969,7 +1008,17 @@ fn merge_source_refs(
 /// Monotonic and idempotent: `last_verified_at` only ever moves forward, and
 /// never below the claim's own write time (the `>= created_at` trigger), so
 /// replaying the record twice, or after a later one, changes nothing.
-fn reverify_claim(conn: &Connection, claim_id: i64, verified_at: i64) -> Result<Applied, Error> {
+///
+/// ADR-0032: an explicit record (one that cites evidence) also extends the
+/// window end monotonically and adds a `claim_verifications` row; the
+/// unique key makes a repeated record a no-op.
+fn reverify_claim(
+    conn: &Connection,
+    ts: i64,
+    claim_id: i64,
+    verified_at: i64,
+    confirmation: Confirmation<'_>,
+) -> Result<Applied, Error> {
     let rows_changed = conn.execute(
         "UPDATE claims
             SET last_verified_at = MAX(COALESCE(last_verified_at, write_ts), ?1)
@@ -981,7 +1030,44 @@ fn reverify_claim(conn: &Connection, claim_id: i64, verified_at: i64) -> Result<
             "reverify_claim references missing claim {claim_id}"
         )));
     }
+    if let Some(valid_until) = confirmation.valid_until {
+        conn.execute(
+            "UPDATE claims SET valid_until = MAX(COALESCE(valid_until, ?1), ?1) WHERE id = ?2",
+            params![valid_until, claim_id],
+        )?;
+    }
+    if confirmation.evidence.is_empty() {
+        return Ok(Applied::Applied);
+    }
+    let (Some(agent_id), Some(agent_kind)) = (confirmation.agent_id, confirmation.agent_kind)
+    else {
+        return Err(invalid(format!(
+            "reverify_claim for claim {claim_id} cites evidence without its writer"
+        )));
+    };
+    let agent_kind: AgentKind = agent_kind.parse()?;
+    conn.execute(
+        "INSERT OR IGNORE INTO claim_verifications
+             (claim_id, ts, verified_at, agent_id, agent_kind, evidence)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            claim_id,
+            ts,
+            verified_at,
+            agent_id,
+            agent_kind.as_str(),
+            serde_json::to_string(confirmation.evidence)?
+        ],
+    )?;
     Ok(Applied::Applied)
+}
+
+/// ADR-0032 explicit confirmation fields of a `reverify_claim` record.
+struct Confirmation<'a> {
+    agent_id: Option<&'a str>,
+    agent_kind: Option<&'a str>,
+    evidence: &'a [String],
+    valid_until: Option<i64>,
 }
 
 /// ADR-0017 §"Populate strategy": the `vec0` index only takes vectors of the

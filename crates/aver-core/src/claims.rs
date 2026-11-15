@@ -18,6 +18,7 @@ use crate::validation::{
     validate_agent_id, validate_claim_field, validate_contradiction_reason, validate_scope,
     validate_top_k,
 };
+use crate::validity::validate_validity;
 /// Bound parameters for a dynamically built claims query.
 pub(crate) type SqlParams = Vec<Box<dyn rusqlite::ToSql>>;
 
@@ -34,9 +35,10 @@ type ClaimRow = (
     String,
     i64,
     Option<i64>,
-    String,      // scope (ADR-0021)
-    String,      // object kind
-    Option<i64>, // direct source event
+    String,                                     // scope (ADR-0021)
+    String,                                     // object kind
+    Option<i64>,                                // direct source event
+    (Option<String>, Option<i64>, Option<i64>), // ADR-0032 context, valid_from, valid_until
 );
 
 impl Store {
@@ -125,6 +127,11 @@ impl Store {
         if write.strict_atomic && crate::ObjectKind::is_prose(&write.object) {
             return Err(Error::NonAtomicObject);
         }
+        validate_validity(write)?;
+        if let Some(context) = &write.context {
+            self.privacy_filter_recording(context)?;
+            self.privacy_filter_path_recording(context)?;
+        }
         if let Some(event_id) = write.event_id {
             let event = self.get_event(event_id).map_err(|e| match e {
                 Error::MissingEvent { .. } => Error::InvalidClaimEvent,
@@ -168,6 +175,9 @@ impl Store {
                 confidence: write.provenance.cap_confidence(write.confidence),
                 provenance: Some(write.provenance.as_str().to_string()),
                 scope: write.scope,
+                context: write.context,
+                valid_from: write.valid_from,
+                valid_until: write.valid_until,
             };
             append_jsonl(&self.log_path, &record)?;
             apply(&self.conn, &record)?;
@@ -277,11 +287,13 @@ impl Store {
             scope,
             object_kind,
             event_id,
+            (context, valid_from, valid_until),
         ): ClaimRow = self
             .conn
             .query_row(
                 "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs,
-                    agent_id, agent_kind, write_ts, last_verified_at, scope, object_kind, event_id
+                    agent_id, agent_kind, write_ts, last_verified_at, scope, object_kind, event_id,
+                    context, valid_from, valid_until
                FROM claims WHERE id = ?1",
                 [id],
                 |row| {
@@ -301,6 +313,7 @@ impl Store {
                         row.get(12)?,
                         row.get(13)?,
                         row.get(14)?,
+                        (row.get(15)?, row.get(16)?, row.get(17)?),
                     ))
                 },
             )
@@ -325,6 +338,9 @@ impl Store {
             write_ts,
             last_verified_at,
             scope,
+            context,
+            valid_from,
+            valid_until,
         })
     }
 
@@ -488,6 +504,11 @@ impl Store {
     /// Exponentially decay active `INFERRED` claims by elapsed time since
     /// `last_seen_at`. Claims seen after `now_ts` are left unchanged rather
     /// than amplified. Returns the number of claims processed.
+    ///
+    /// Deprecated (ADR-0032): nothing calls it. Relevance decay is the
+    /// evidence-since-confirmation count derived on read
+    /// ([`Store::claim_confirmation`]), which writes nothing and does not
+    /// depend on wall-clock days.
     pub fn decay_inferred_confidence_at(
         &self,
         now_ts: i64,
@@ -569,7 +590,7 @@ impl Store {
                   WHERE id NOT IN (
                         SELECT MIN(id)
                           FROM claims
-                         GROUP BY subject, predicate, object, object_kind, scope
+                         GROUP BY subject, predicate, object, object_kind, scope, context
                     )
                     AND status = 'ACTIVE'
                   ORDER BY id",
@@ -597,6 +618,7 @@ impl Store {
                          WHERE newer.subject = claims.subject
                            AND newer.predicate = claims.predicate
                            AND newer.scope = claims.scope
+                           AND newer.context IS claims.context
                            AND (newer.object <> claims.object OR newer.object_kind <> claims.object_kind)
                            AND newer.id > claims.id
                     )
@@ -645,9 +667,9 @@ impl Store {
 
     fn merge_duplicate_source_refs(&self) -> Result<usize, Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT subject, predicate, object, object_kind, scope, MIN(id)
+            "SELECT subject, predicate, object, object_kind, scope, context, MIN(id)
                FROM claims
-              GROUP BY subject, predicate, object, object_kind, scope
+              GROUP BY subject, predicate, object, object_kind, scope, context
              HAVING COUNT(*) > 1",
         )?;
         let groups = stmt
@@ -658,7 +680,8 @@ impl Store {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
-                    row.get::<_, i64>(5)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, i64>(6)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -671,16 +694,17 @@ impl Store {
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<usize, Error> {
             let mut merged_groups = 0;
-            for (subject, predicate, object, object_kind, scope, survivor_id) in groups {
+            for (subject, predicate, object, object_kind, scope, context, survivor_id) in groups {
                 let mut source_refs = Vec::new();
                 let mut refs_stmt = self.conn.prepare(
                     "SELECT source_refs
                        FROM claims
                       WHERE subject = ?1 AND predicate = ?2 AND object = ?3 AND object_kind = ?4 AND scope = ?5
+                        AND context IS ?6
                       ORDER BY id",
                 )?;
                 let refs_rows = refs_stmt.query_map(
-                    params![subject, predicate, object, object_kind, scope],
+                    params![subject, predicate, object, object_kind, scope, context],
                     |row| row.get::<_, String>(0),
                 )?;
                 for refs_json in refs_rows {
@@ -711,8 +735,8 @@ impl Store {
                     "SELECT MAX(COALESCE(last_verified_at, write_ts))
                        FROM claims
                       WHERE subject = ?1 AND predicate = ?2 AND object = ?3 AND object_kind = ?4 AND scope = ?5
-                        AND status <> 'INVALIDATED'",
-                    params![subject, predicate, object, object_kind, scope],
+                        AND context IS ?6 AND status <> 'INVALIDATED'",
+                    params![subject, predicate, object, object_kind, scope, context],
                     |row| row.get(0),
                 )?;
                 if survivor.status == ClaimStatus::Active
@@ -723,6 +747,10 @@ impl Store {
                         ts: now,
                         claim_id: survivor_id,
                         verified_at: latest,
+                        agent_id: None,
+                        agent_kind: None,
+                        evidence: Vec::new(),
+                        valid_until: None,
                     };
                     append_jsonl(&self.log_path, &record)?;
                     apply(&self.conn, &record)?;
@@ -865,6 +893,10 @@ impl Store {
             where_parts.push("agent_kind = ?".to_string());
             params.push(Box::new(agent_kind.as_str().to_string()));
         }
+        if let Some(context) = &filters.context {
+            where_parts.push("context = ?".to_string());
+            params.push(Box::new(context.clone()));
+        }
         // Predicate filter, optionally walking ADR-0010's closure.
         if let Some(predicate) = &filters.predicate {
             match filters.predicate_walk {
@@ -904,7 +936,8 @@ impl Store {
     ) -> Result<Vec<Claim>, Error> {
         let sql = format!(
             "SELECT id, subject, predicate, object, provenance, confidence, status, source_refs,
-                    agent_id, agent_kind, write_ts, last_verified_at, scope, object_kind, event_id
+                    agent_id, agent_kind, write_ts, last_verified_at, scope, object_kind, event_id,
+                    context, valid_from, valid_until
                FROM claims
               WHERE {where_sql}
               ORDER BY id"
@@ -929,6 +962,11 @@ impl Store {
                     row.get::<_, String>(12)?,
                     row.get::<_, String>(13)?,
                     row.get::<_, Option<i64>>(14)?,
+                    (
+                        row.get::<_, Option<String>>(15)?,
+                        row.get::<_, Option<i64>>(16)?,
+                        row.get::<_, Option<i64>>(17)?,
+                    ),
                 ))
             },
         )?;
@@ -950,6 +988,7 @@ impl Store {
                 scope,
                 object_kind,
                 event_id,
+                (context, valid_from, valid_until),
             ) = row?;
             claims.push(Claim {
                 id,
@@ -967,6 +1006,9 @@ impl Store {
                 write_ts,
                 last_verified_at,
                 scope,
+                context,
+                valid_from,
+                valid_until,
             });
         }
         Ok(claims)

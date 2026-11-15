@@ -94,6 +94,9 @@ fn failing_openai_provider_falls_back_to_keyword_and_text_only_chunks() {
             scope: None,
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap()
         .triple_id;
@@ -118,6 +121,7 @@ fn failing_openai_provider_falls_back_to_keyword_and_text_only_chunks() {
             min_confidence: None,
             status: None,
             alpha: None,
+            context: None,
         })
         .unwrap();
 

@@ -93,6 +93,10 @@ pub enum Error {
     UnknownPredicate { name: String },
     #[error("ontology extension {path}: {detail}")]
     OntologyFile { path: String, detail: String },
+    #[error("invalid claim validity: {detail}")]
+    InvalidClaimValidity { detail: String },
+    #[error("reverify_claim rejected: {detail}")]
+    InvalidReverify { detail: String },
     #[error("missing claim: claim {claim_id} does not exist")]
     MissingClaim { claim_id: i64 },
     #[error("missing hyperedge: hyperedge {hyperedge_id} does not exist")]

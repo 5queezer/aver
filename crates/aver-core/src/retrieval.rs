@@ -15,6 +15,8 @@ pub enum HybridWeightsParseError {
     RecencyWeightOutOfRange,
     #[error("recency tau must be a positive, finite number of seconds")]
     RecencyTauInvalid,
+    #[error("evidence half-life must be a positive, finite number of evidence items")]
+    EvidenceHalfLifeInvalid,
 }
 
 /// Default recency time constant: 90 days. Only used once a caller opts in
@@ -29,6 +31,10 @@ pub struct HybridWeights {
     pub recency_weight: f64,
     /// Recency time constant `tau` in seconds.
     pub recency_tau_secs: f64,
+    /// ADR-0032 opt-in: a claim with a context scores `0.5^(n / half_life)`
+    /// of its relevance, `n` being its closed evidence since confirmation.
+    /// `0.0`, the default, disables it.
+    pub evidence_half_life: f64,
 }
 
 impl Default for HybridWeights {
@@ -51,6 +57,28 @@ impl HybridWeights {
             alpha,
             recency_weight: 0.0,
             recency_tau_secs: DEFAULT_RECENCY_TAU_SECS,
+            evidence_half_life: 0.0,
+        }
+    }
+
+    /// Opt in to evidence-driven ranking (ADR-0032): `half_life` closed
+    /// matching items since confirmation halve a contextual claim's score.
+    pub fn with_evidence_half_life(self, half_life: f64) -> Result<Self, HybridWeightsParseError> {
+        if !(half_life.is_finite() && half_life > 0.0) {
+            return Err(HybridWeightsParseError::EvidenceHalfLifeInvalid);
+        }
+        Ok(Self {
+            evidence_half_life: half_life,
+            ..self
+        })
+    }
+
+    /// `score * 0.5^(evidence / half_life)`; unchanged when the term is off.
+    pub fn damp_for_evidence(self, score: f64, evidence: i64) -> f64 {
+        if self.evidence_half_life > 0.0 {
+            score * 0.5f64.powf(evidence.max(0) as f64 / self.evidence_half_life)
+        } else {
+            score
         }
     }
 

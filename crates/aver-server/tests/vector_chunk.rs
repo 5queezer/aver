@@ -24,6 +24,9 @@ fn add_vector_chunk_persists_and_is_retrievable() {
             scope: None,
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
 
@@ -58,6 +61,9 @@ fn add_vector_chunk_rejects_empty_text() {
             scope: None,
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
 
@@ -90,6 +96,9 @@ fn add_vector_chunk_rejects_secret_text() {
             scope: None,
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap();
 

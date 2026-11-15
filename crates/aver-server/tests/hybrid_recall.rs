@@ -45,6 +45,7 @@ fn recall_params(query: &str, alpha: Option<f64>) -> RecallParams {
         min_confidence: None,
         status: None,
         alpha,
+        context: None,
     }
 }
 
@@ -63,6 +64,9 @@ fn add_claim(tools: &AverTools, subject: &str, object: &str, scope: Option<&str>
             scope: scope.map(str::to_string),
             agent_id: None,
             agent_kind: None,
+            context: None,
+            valid_from: None,
+            valid_until: None,
         })
         .unwrap()
         .triple_id

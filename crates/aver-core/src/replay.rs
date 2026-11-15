@@ -167,6 +167,11 @@ pub fn replay_with_mode(
         if invalid_links != 0 {
             return Err(Error::InvalidClaimEvent);
         }
+        if crate::validity::invalid_evidence_links(&conn)? != 0 {
+            return Err(Error::InvalidReverify {
+                detail: "a confirmation cites evidence that is missing, itself or outside the claim's scope".into(),
+            });
+        }
         conn.execute_batch("PRAGMA optimize")?;
         conn.pragma_update(None, "wal_checkpoint", "TRUNCATE")?;
         Ok(report)

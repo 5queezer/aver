@@ -128,6 +128,7 @@ fn ontology_extensions_default_to_multi_valued() {
         singles,
         [
             "binary_name",
+            "closed_at",
             "impl_stays_in",
             "owned_by",
             "prefers",
@@ -153,7 +154,14 @@ fn existing_store_gains_cardinality_on_open() {
         // Simulate the complete pre-0010 schema, including removal of later
         // object typing/event-link columns before stepping the version back.
         conn.execute_batch(
-            "DROP INDEX claims_event_id;
+            "DROP INDEX claims_scope_context;
+            DROP TRIGGER claims_validity_window_insert;
+            DROP TRIGGER claims_validity_window_update;
+            DROP TABLE claim_verifications;
+            ALTER TABLE claims DROP COLUMN valid_until;
+            ALTER TABLE claims DROP COLUMN valid_from;
+            ALTER TABLE claims DROP COLUMN context;
+            DROP INDEX claims_event_id;
             ALTER TABLE claims DROP COLUMN event_id;
             ALTER TABLE claims DROP COLUMN object_kind;
             ALTER TABLE predicate_types DROP COLUMN cardinality",

@@ -181,6 +181,9 @@ impl Store {
                 confidence: provenance.cap_confidence(confidence),
                 provenance: Some(provenance.as_str().to_string()),
                 scope: candidate.scope,
+                context: None,
+                valid_from: None,
+                valid_until: None,
             };
             append_jsonl(&self.log_path, &claim)?;
             // The promotion marker joins the candidate in the episodic log

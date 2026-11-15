@@ -2,7 +2,7 @@
 //! JSONL alone is row-identical to the original, and two stores merge by
 //! concatenating their logs.
 
-use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite};
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite, ReverifyWrite};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -122,6 +122,21 @@ fn populate(dir: &Path, tag: &str) {
                 "notes",
             )
             .scope("proj/aver"),
+        )
+        .unwrap();
+    // ADR-0032: a claim with a context and window, explicitly confirmed.
+    let lesson = store
+        .add_claim(
+            ClaimWrite::new(format!("{tag}-lesson"), "concerns", "topic:x", "notes")
+                .context("context:x")
+                .valid_window(Some(1), Some(2)),
+        )
+        .unwrap();
+    store
+        .reverify_claim(
+            ReverifyWrite::new(lesson, ["item:1"])
+                .agent("review", AgentKind::Llm)
+                .valid_until(3),
         )
         .unwrap();
     store
