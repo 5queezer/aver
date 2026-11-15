@@ -1,0 +1,973 @@
+use std::path::Path;
+
+use base64::Engine;
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use url::Url;
+
+use crate::oauth::verify_pkce_s256;
+
+pub fn hash_token(token: &str) -> String {
+    let digest = Sha256::digest(token.as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegisteredClient {
+    pub client_id: String,
+    pub client_name: String,
+    pub redirect_uris: Vec<String>,
+}
+
+/// A live access token's row in `access_tokens`, as returned by
+/// [`AuthDb::access_token_grant`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessTokenGrant {
+    pub user_id: String,
+    pub client_id: Option<String>,
+    /// Space-separated scope list as persisted.
+    pub granted_scopes: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenPair {
+    pub access_token: String,
+    pub refresh_token: String,
+}
+
+/// Origin of an end user's identity record.
+///
+/// Slice 1 of ADR-0020 only persists `Local` users. The `Header` and `Oidc`
+/// variants are reserved for later slices that introduce reverse-proxy and
+/// OIDC-backed identity sources; they are not yet emitted or consumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UserKind {
+    /// Locally-authenticated user (the only kind written today).
+    Local,
+    /// Reserved: identity asserted by a trusted reverse-proxy header.
+    Header,
+    /// Reserved: identity from an OIDC issuer, identified by the issuer URL.
+    Oidc(String),
+}
+
+impl UserKind {
+    /// Encodes the kind into the two columns persisted in `users`:
+    /// `(kind, external_id)`.
+    fn to_columns(&self) -> (&'static str, Option<String>) {
+        match self {
+            UserKind::Local => ("local", None),
+            UserKind::Header => ("header", None),
+            UserKind::Oidc(issuer) => ("oidc", Some(issuer.clone())),
+        }
+    }
+
+    fn from_columns(kind: &str, external_id: Option<String>) -> anyhow::Result<Self> {
+        match kind {
+            "local" => Ok(UserKind::Local),
+            "header" => Ok(UserKind::Header),
+            "oidc" => {
+                let issuer = external_id
+                    .ok_or_else(|| anyhow::anyhow!("oidc user is missing external_id"))?;
+                Ok(UserKind::Oidc(issuer))
+            }
+            other => anyhow::bail!("unknown user kind {other:?}"),
+        }
+    }
+}
+
+/// Aver end user record. Time fields are seconds since the UNIX epoch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct User {
+    pub id: String,
+    pub kind: UserKind,
+    pub external_id: Option<String>,
+    pub created_at: i64,
+}
+
+/// Per-user, per-OAuth-client consent grant.
+///
+/// `granted_scopes` is a list of OAuth scope strings; persisted as a single
+/// space-separated string to match the OAuth scope convention.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientConsent {
+    pub user_id: String,
+    pub client_id: String,
+    pub granted_scopes: Vec<String>,
+    pub granted_at: i64,
+    pub last_used_at: Option<i64>,
+    pub revoked_at: Option<i64>,
+}
+
+/// Browser session bound to a user.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Session {
+    pub id: String,
+    pub user_id: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+}
+
+fn now_unix() -> i64 {
+    time::OffsetDateTime::now_utc().unix_timestamp()
+}
+
+/// Access-token lifetime, in seconds. Exposed so the token endpoint can
+/// report it as RFC 6749 §5.1 `expires_in`.
+pub const ACCESS_TOKEN_TTL_SECS: i64 = 60 * 60;
+const REFRESH_TOKEN_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+
+fn encode_scopes(scopes: &[String]) -> String {
+    scopes.join(" ")
+}
+
+fn decode_scopes(raw: &str) -> Vec<String> {
+    raw.split_ascii_whitespace().map(str::to_string).collect()
+}
+
+fn redirect_uri_allowed(uri: &str) -> bool {
+    let Ok(parsed) = Url::parse(uri) else {
+        return false;
+    };
+    match parsed.scheme() {
+        "https" => true,
+        "http" => parsed
+            .host_str()
+            .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1")),
+        _ => false,
+    }
+}
+
+/// Generates a 256-bit random session identifier.
+///
+/// Two `uuid::Uuid::new_v4()` values are concatenated (32 bytes total) and
+/// encoded as URL-safe base64 without padding. UUID v4 uses OS-provided
+/// randomness, so this matches the entropy budget the brief calls for.
+fn random_session_id() -> String {
+    let mut bytes = [0u8; 32];
+    bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    bytes[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// Applies an `ALTER TABLE ... ADD COLUMN` migration.
+///
+/// SQLite has no `ADD COLUMN IF NOT EXISTS`, so re-opening an already
+/// migrated database surfaces a duplicate-column error — that one case means
+/// "migration already ran" and is ignored. Every other error (syntax, I/O,
+/// permissions, corruption) is a real failure and propagates instead of
+/// being swallowed. rusqlite 0.32 has no dedicated error-code variant for
+/// duplicate columns: SQLite reports it as `SQLITE_ERROR` (extended code 1,
+/// mapped to [`rusqlite::ErrorCode::Unknown`]) with a
+/// `duplicate column name: <col>` message, so we match code and message.
+fn apply_column_migration(conn: &Connection, statement: &str) -> anyhow::Result<()> {
+    match conn.execute_batch(statement) {
+        Ok(()) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(err, Some(msg)))
+            if err.extended_code == 1 && msg.contains("duplicate column name") =>
+        {
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// Raw `refresh_tokens` row as loaded for the refresh grant.
+struct RefreshTokenRow {
+    user_id: String,
+    client_id: Option<String>,
+    family_id: String,
+    granted_scopes: String,
+    revoked_at: Option<i64>,
+    expires_at: i64,
+}
+
+pub struct AuthDb {
+    conn: Connection,
+}
+
+impl AuthDb {
+    pub fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        if let Some(parent) = path.as_ref().parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let conn = Connection::open(path)?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS access_tokens (
+                token_hash     TEXT PRIMARY KEY,
+                user_id        TEXT NOT NULL,
+                client_id      TEXT,
+                family_id      TEXT NOT NULL DEFAULT '',
+                created_at     INTEGER NOT NULL,
+                expires_at     INTEGER NOT NULL DEFAULT 0,
+                revoked_at     INTEGER,
+                granted_scopes TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS authorization_codes (
+                code           TEXT PRIMARY KEY,
+                client_id      TEXT NOT NULL,
+                user_id        TEXT NOT NULL,
+                code_challenge TEXT NOT NULL,
+                redirect_uri   TEXT NOT NULL DEFAULT '',
+                used_at        INTEGER,
+                expires_at     INTEGER NOT NULL DEFAULT 0,
+                created_at     INTEGER NOT NULL,
+                granted_scopes TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_clients (
+                client_id     TEXT PRIMARY KEY,
+                client_name   TEXT NOT NULL,
+                redirect_uris TEXT NOT NULL,
+                created_at    INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS refresh_tokens (
+                token_hash     TEXT PRIMARY KEY,
+                user_id        TEXT NOT NULL,
+                client_id      TEXT,
+                family_id      TEXT NOT NULL DEFAULT '',
+                created_at     INTEGER NOT NULL,
+                expires_at     INTEGER NOT NULL DEFAULT 0,
+                revoked_at     INTEGER,
+                granted_scopes TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS users (
+                id          TEXT PRIMARY KEY,
+                kind        TEXT NOT NULL,
+                external_id TEXT,
+                created_at  INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS client_consents (
+                user_id         TEXT NOT NULL,
+                client_id       TEXT NOT NULL,
+                granted_scopes  TEXT NOT NULL,
+                granted_at      INTEGER NOT NULL,
+                last_used_at    INTEGER,
+                revoked_at      INTEGER,
+                PRIMARY KEY (user_id, client_id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS sessions (
+                id         TEXT PRIMARY KEY,
+                user_id    TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS server_secrets (
+                name  TEXT PRIMARY KEY,
+                value BLOB NOT NULL
+            );",
+        )?;
+        // Migrate existing DBs that lack the new columns (SQLite has no
+        // `ADD COLUMN IF NOT EXISTS`; a duplicate-column error means the
+        // migration already ran).
+        apply_column_migration(
+            &conn,
+            "ALTER TABLE authorization_codes ADD COLUMN redirect_uri TEXT NOT NULL DEFAULT '';",
+        )?;
+        apply_column_migration(
+            &conn,
+            "ALTER TABLE authorization_codes ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0;",
+        )?;
+        // ADR-0020 slice 3: per-token scope persistence.
+        apply_column_migration(
+            &conn,
+            "ALTER TABLE authorization_codes ADD COLUMN granted_scopes TEXT NOT NULL DEFAULT '';",
+        )?;
+        apply_column_migration(
+            &conn,
+            "ALTER TABLE access_tokens ADD COLUMN granted_scopes TEXT NOT NULL DEFAULT '';",
+        )?;
+        apply_column_migration(
+            &conn,
+            "ALTER TABLE refresh_tokens ADD COLUMN granted_scopes TEXT NOT NULL DEFAULT '';",
+        )?;
+        for statement in [
+            "ALTER TABLE access_tokens ADD COLUMN client_id TEXT;",
+            "ALTER TABLE access_tokens ADD COLUMN family_id TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE access_tokens ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE access_tokens ADD COLUMN revoked_at INTEGER;",
+            "ALTER TABLE refresh_tokens ADD COLUMN client_id TEXT;",
+            "ALTER TABLE refresh_tokens ADD COLUMN family_id TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE refresh_tokens ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE refresh_tokens ADD COLUMN revoked_at INTEGER;",
+        ] {
+            apply_column_migration(&conn, statement)?;
+        }
+        let now = now_unix();
+        conn.execute(
+            "UPDATE access_tokens SET expires_at = ?1 WHERE expires_at = 0",
+            [now + ACCESS_TOKEN_TTL_SECS],
+        )?;
+        conn.execute(
+            "UPDATE refresh_tokens SET expires_at = ?1 WHERE expires_at = 0",
+            [now + REFRESH_TOKEN_TTL_SECS],
+        )?;
+        Ok(Self { conn })
+    }
+
+    pub fn register_client(
+        &self,
+        client_name: &str,
+        redirect_uris: &[String],
+    ) -> anyhow::Result<RegisteredClient> {
+        anyhow::ensure!(!client_name.trim().is_empty(), "client_name is required");
+        anyhow::ensure!(
+            !redirect_uris.is_empty(),
+            "at least one redirect_uri is required"
+        );
+        anyhow::ensure!(
+            redirect_uris.iter().all(|uri| redirect_uri_allowed(uri)),
+            "redirect_uris must be HTTPS URLs or loopback HTTP URLs"
+        );
+
+        let client = RegisteredClient {
+            client_id: format!("aver-{}", uuid::Uuid::new_v4()),
+            client_name: client_name.to_string(),
+            redirect_uris: redirect_uris.to_vec(),
+        };
+        let redirect_uris_json = serde_json::to_string(&client.redirect_uris)?;
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.conn.execute(
+            "INSERT INTO oauth_clients (client_id, client_name, redirect_uris, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                client.client_id,
+                client.client_name,
+                redirect_uris_json,
+                now
+            ],
+        )?;
+        Ok(client)
+    }
+
+    pub fn get_client(&self, client_id: &str) -> anyhow::Result<Option<RegisteredClient>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT client_id, client_name, redirect_uris FROM oauth_clients WHERE client_id = ?1",
+        )?;
+        let mut rows = stmt.query([client_id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let redirect_uris_json: String = row.get(2)?;
+        Ok(Some(RegisteredClient {
+            client_id: row.get(0)?,
+            client_name: row.get(1)?,
+            redirect_uris: serde_json::from_str(&redirect_uris_json)?,
+        }))
+    }
+
+    /// Returns the registration `created_at` of the named client, or `None`
+    /// if no such client exists. Used by the ADR-0020 consent screen.
+    pub fn client_created_at(&self, client_id: &str) -> anyhow::Result<Option<i64>> {
+        let row: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT created_at FROM oauth_clients WHERE client_id = ?1",
+                [client_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    pub fn client_allows_redirect_uri(
+        &self,
+        client_id: &str,
+        redirect_uri: &str,
+    ) -> anyhow::Result<bool> {
+        Ok(self
+            .get_client(client_id)?
+            .is_some_and(|client| client.redirect_uris.iter().any(|uri| uri == redirect_uri)))
+    }
+
+    /// Persists an access-token hash with its granted scope list.
+    ///
+    /// `granted_scopes` is encoded as a single space-separated string per the
+    /// OAuth scope-list convention. Pass an empty slice for "no scopes".
+    pub fn store_access_token_hash(
+        &self,
+        token_hash: &str,
+        user_id: &str,
+        granted_scopes: &[String],
+    ) -> anyhow::Result<()> {
+        self.store_access_token_hash_for_client(
+            token_hash,
+            user_id,
+            None,
+            &random_session_id(),
+            granted_scopes,
+        )
+    }
+
+    fn store_access_token_hash_for_client(
+        &self,
+        token_hash: &str,
+        user_id: &str,
+        client_id: Option<&str>,
+        family_id: &str,
+        granted_scopes: &[String],
+    ) -> anyhow::Result<()> {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let scopes = encode_scopes(granted_scopes);
+        self.conn.execute(
+            "INSERT OR REPLACE INTO access_tokens
+                (token_hash, user_id, client_id, family_id, created_at, expires_at, revoked_at, granted_scopes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
+            params![
+                token_hash,
+                user_id,
+                client_id,
+                family_id,
+                now,
+                now + ACCESS_TOKEN_TTL_SECS,
+                scopes
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Stores an authorization code carrying the consent's granted scopes.
+    /// The scopes propagate to the access/refresh tokens minted on exchange.
+    pub fn store_authorization_code(
+        &self,
+        client_id: &str,
+        user_id: &str,
+        code_challenge: &str,
+        redirect_uri: &str,
+        granted_scopes: &[String],
+    ) -> anyhow::Result<String> {
+        let code = random_session_id();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let expires_at = now + 600; // 10 minutes
+        let scopes = encode_scopes(granted_scopes);
+        self.conn.execute(
+            "INSERT INTO authorization_codes
+             (code, client_id, user_id, code_challenge, redirect_uri, expires_at, created_at, granted_scopes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                code,
+                client_id,
+                user_id,
+                code_challenge,
+                redirect_uri,
+                expires_at,
+                now,
+                scopes,
+            ],
+        )?;
+        Ok(code)
+    }
+
+    pub fn exchange_authorization_code(
+        &self,
+        code: &str,
+        client_id: &str,
+        code_verifier: &str,
+        redirect_uri: &str,
+    ) -> anyhow::Result<String> {
+        Ok(self
+            .exchange_authorization_code_for_tokens(code, client_id, code_verifier, redirect_uri)?
+            .access_token)
+    }
+
+    pub fn exchange_authorization_code_for_tokens(
+        &self,
+        code: &str,
+        client_id: &str,
+        code_verifier: &str,
+        redirect_uri: &str,
+    ) -> anyhow::Result<TokenPair> {
+        let (
+            stored_client_id,
+            user_id,
+            code_challenge,
+            stored_redirect_uri,
+            used_at,
+            expires_at,
+            granted_scopes,
+        ): (
+            String,
+            String,
+            String,
+            String,
+            Option<i64>,
+            i64,
+            String,
+        ) = self.conn.query_row(
+            "SELECT client_id, user_id, code_challenge, redirect_uri, used_at, expires_at, granted_scopes
+               FROM authorization_codes
+              WHERE code = ?1",
+            [code],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )?;
+
+        anyhow::ensure!(used_at.is_none(), "authorization code already used");
+        anyhow::ensure!(stored_client_id == client_id, "client_id mismatch");
+        anyhow::ensure!(
+            verify_pkce_s256(code_verifier, &code_challenge),
+            "PKCE verifier mismatch"
+        );
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        anyhow::ensure!(now < expires_at, "authorization code expired");
+        anyhow::ensure!(stored_redirect_uri == redirect_uri, "redirect_uri mismatch");
+
+        self.conn.execute(
+            "UPDATE authorization_codes SET used_at = ?1 WHERE code = ?2",
+            params![now, code],
+        )?;
+        let scopes = decode_scopes(&granted_scopes);
+        self.issue_token_pair(&user_id, Some(client_id), &scopes)
+    }
+
+    fn issue_token_pair(
+        &self,
+        user_id: &str,
+        client_id: Option<&str>,
+        granted_scopes: &[String],
+    ) -> anyhow::Result<TokenPair> {
+        let tx = self.conn.unchecked_transaction()?;
+        let tokens = Self::issue_token_pair_in(
+            &tx,
+            user_id,
+            client_id,
+            &random_session_id(),
+            granted_scopes,
+        )?;
+        tx.commit()?;
+        Ok(tokens)
+    }
+
+    fn issue_token_pair_in(
+        conn: &Connection,
+        user_id: &str,
+        client_id: Option<&str>,
+        family_id: &str,
+        granted_scopes: &[String],
+    ) -> anyhow::Result<TokenPair> {
+        let access_token = random_session_id();
+        let refresh_token = random_session_id();
+        let now = now_unix();
+        let scopes = encode_scopes(granted_scopes);
+        conn.execute(
+            "INSERT OR REPLACE INTO access_tokens
+                (token_hash, user_id, client_id, family_id, created_at, expires_at, revoked_at, granted_scopes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
+            params![
+                hash_token(&access_token),
+                user_id,
+                client_id,
+                family_id,
+                now,
+                now + ACCESS_TOKEN_TTL_SECS,
+                scopes,
+            ],
+        )?;
+        conn.execute(
+            "INSERT OR REPLACE INTO refresh_tokens
+                (token_hash, user_id, client_id, family_id, created_at, expires_at, revoked_at, granted_scopes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
+            params![
+                hash_token(&refresh_token),
+                user_id,
+                client_id,
+                family_id,
+                now,
+                now + REFRESH_TOKEN_TTL_SECS,
+                scopes,
+            ],
+        )?;
+        Ok(TokenPair {
+            access_token,
+            refresh_token,
+        })
+    }
+
+    pub fn refresh_access_token(&self, refresh_token: &str) -> anyhow::Result<TokenPair> {
+        let token_hash = hash_token(refresh_token);
+        let now = now_unix();
+        let row: Option<RefreshTokenRow> = self
+            .conn
+            .query_row(
+                "SELECT user_id, client_id, family_id, granted_scopes, revoked_at, expires_at
+                   FROM refresh_tokens
+                  WHERE token_hash = ?1",
+                params![token_hash],
+                |row| {
+                    Ok(RefreshTokenRow {
+                        user_id: row.get(0)?,
+                        client_id: row.get(1)?,
+                        family_id: row.get(2)?,
+                        granted_scopes: row.get(3)?,
+                        revoked_at: row.get(4)?,
+                        expires_at: row.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        let Some(row) = row else {
+            anyhow::bail!("unknown refresh token");
+        };
+        if row.revoked_at.is_some() {
+            // Reuse of an already-rotated (or revoked) refresh token signals
+            // potential theft. Revoke only this login's inherited lineage.
+            self.revoke_token_family(&row.family_id)?;
+            anyhow::bail!("refresh token reuse detected; token family revoked");
+        }
+        anyhow::ensure!(now < row.expires_at, "refresh token expired");
+
+        // Rotation is all-or-nothing: the presented token remains usable if
+        // either replacement insert fails.
+        let tx = self.conn.unchecked_transaction()?;
+        let affected = tx.execute(
+            "UPDATE refresh_tokens
+                SET revoked_at = ?2
+              WHERE token_hash = ?1 AND revoked_at IS NULL",
+            params![token_hash, now],
+        )?;
+        anyhow::ensure!(affected == 1, "refresh token was already rotated");
+        let scopes = decode_scopes(&row.granted_scopes);
+        let tokens = Self::issue_token_pair_in(
+            &tx,
+            &row.user_id,
+            row.client_id.as_deref(),
+            &row.family_id,
+            &scopes,
+        )?;
+        tx.commit()?;
+        Ok(tokens)
+    }
+
+    /// Revokes every live access and refresh token in one refresh-token lineage.
+    fn revoke_token_family(&self, family_id: &str) -> anyhow::Result<()> {
+        let now = now_unix();
+        let tx = self.conn.unchecked_transaction()?;
+        for table in ["access_tokens", "refresh_tokens"] {
+            tx.execute(
+                &format!(
+                    "UPDATE {table}
+                        SET revoked_at = ?2
+                      WHERE family_id = ?1 AND revoked_at IS NULL"
+                ),
+                params![family_id, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Returns the access-token row's `(user_id, granted_scopes_raw)` if the
+    /// hash matches a live token. The raw granted-scopes string is the
+    /// space-separated form persisted in the row; callers parse it via
+    /// [`crate::scopes::parse_scope_list_lossy`] to tolerate stale tokens
+    /// minted by older versions.
+    pub fn validate_access_token(
+        &self,
+        token_hash: &str,
+    ) -> anyhow::Result<Option<(String, String)>> {
+        Ok(self
+            .access_token_grant(token_hash)?
+            .map(|grant| (grant.user_id, grant.granted_scopes)))
+    }
+
+    /// Like [`AuthDb::validate_access_token`], plus the OAuth `client_id` the
+    /// token was issued to (`None` for tokens minted without a client, e.g.
+    /// by [`AuthDb::store_access_token_hash`] or before the column existed).
+    pub fn access_token_grant(&self, token_hash: &str) -> anyhow::Result<Option<AccessTokenGrant>> {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let mut stmt = self.conn.prepare(
+            "SELECT user_id, client_id, granted_scopes
+               FROM access_tokens
+              WHERE token_hash = ?1 AND revoked_at IS NULL AND expires_at > ?2",
+        )?;
+        let mut rows = stmt.query(params![token_hash, now])?;
+        Ok(match rows.next()? {
+            Some(row) => Some(AccessTokenGrant {
+                user_id: row.get(0)?,
+                client_id: row.get(1)?,
+                granted_scopes: row.get(2)?,
+            }),
+            None => None,
+        })
+    }
+
+    /// Inserts the user if absent or updates `kind`/`external_id` in place.
+    ///
+    /// `created_at` is preserved on update so existing records are not
+    /// retro-dated. The supplied `User` is stored verbatim on insert.
+    pub fn upsert_user(&self, user: &User) -> anyhow::Result<()> {
+        anyhow::ensure!(!user.id.trim().is_empty(), "user id is required");
+        anyhow::ensure!(user.created_at > 0, "user created_at must be positive");
+        let (kind_str, encoded_external_id) = user.kind.to_columns();
+        // Prefer the encoded external_id from the kind variant when present
+        // (e.g. Oidc carries the issuer), otherwise fall back to the explicit
+        // field so callers that build a `User` by hand still round-trip.
+        let external_id = encoded_external_id.or_else(|| user.external_id.clone());
+        self.conn.execute(
+            "INSERT INTO users (id, kind, external_id, created_at)
+                  VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET
+                  kind = excluded.kind,
+                  external_id = excluded.external_id",
+            params![user.id, kind_str, external_id, user.created_at],
+        )?;
+        Ok(())
+    }
+
+    /// Loads a user by id, or returns `None` if no such user exists.
+    pub fn get_user(&self, user_id: &str) -> anyhow::Result<Option<User>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, kind, external_id, created_at FROM users WHERE id = ?1",
+                [user_id],
+                |row| {
+                    let id: String = row.get(0)?;
+                    let kind: String = row.get(1)?;
+                    let external_id: Option<String> = row.get(2)?;
+                    let created_at: i64 = row.get(3)?;
+                    Ok((id, kind, external_id, created_at))
+                },
+            )
+            .optional()?;
+        let Some((id, kind, external_id, created_at)) = row else {
+            return Ok(None);
+        };
+        let user_kind = UserKind::from_columns(&kind, external_id.clone())?;
+        Ok(Some(User {
+            id,
+            kind: user_kind,
+            external_id,
+            created_at,
+        }))
+    }
+
+    /// Records (or refreshes) a client's consent for a user.
+    ///
+    /// On update, `granted_scopes` and `granted_at` are overwritten and any
+    /// prior `revoked_at` is cleared, modelling re-grant after revocation.
+    /// `last_used_at` is left untouched here; advance it via
+    /// [`AuthDb::touch_consent_last_used`].
+    pub fn record_consent(
+        &self,
+        user_id: &str,
+        client_id: &str,
+        granted_scopes: &[String],
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(!user_id.trim().is_empty(), "user_id is required");
+        anyhow::ensure!(!client_id.trim().is_empty(), "client_id is required");
+        let now = now_unix();
+        let scopes = encode_scopes(granted_scopes);
+        self.conn.execute(
+            "INSERT INTO client_consents
+                    (user_id, client_id, granted_scopes, granted_at, last_used_at, revoked_at)
+                  VALUES (?1, ?2, ?3, ?4, NULL, NULL)
+             ON CONFLICT(user_id, client_id) DO UPDATE SET
+                    granted_scopes = excluded.granted_scopes,
+                    granted_at = excluded.granted_at,
+                    revoked_at = NULL",
+            params![user_id, client_id, scopes, now],
+        )?;
+        Ok(())
+    }
+
+    /// Loads the consent record for a `(user, client)` pair, if any.
+    ///
+    /// Returns `Some` even when the record has been revoked; callers are
+    /// expected to inspect `revoked_at` to decide whether the grant is live.
+    pub fn get_consent(
+        &self,
+        user_id: &str,
+        client_id: &str,
+    ) -> anyhow::Result<Option<ClientConsent>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT user_id, client_id, granted_scopes, granted_at, last_used_at, revoked_at
+                   FROM client_consents
+                  WHERE user_id = ?1 AND client_id = ?2",
+                params![user_id, client_id],
+                |row| {
+                    let user_id: String = row.get(0)?;
+                    let client_id: String = row.get(1)?;
+                    let scopes: String = row.get(2)?;
+                    let granted_at: i64 = row.get(3)?;
+                    let last_used_at: Option<i64> = row.get(4)?;
+                    let revoked_at: Option<i64> = row.get(5)?;
+                    Ok((
+                        user_id,
+                        client_id,
+                        scopes,
+                        granted_at,
+                        last_used_at,
+                        revoked_at,
+                    ))
+                },
+            )
+            .optional()?;
+        Ok(row.map(
+            |(user_id, client_id, scopes, granted_at, last_used_at, revoked_at)| ClientConsent {
+                user_id,
+                client_id,
+                granted_scopes: decode_scopes(&scopes),
+                granted_at,
+                last_used_at,
+                revoked_at,
+            },
+        ))
+    }
+
+    /// Marks a consent record as revoked at the current time. No-op if the
+    /// `(user, client)` pair has never been granted.
+    pub fn revoke_consent(&self, user_id: &str, client_id: &str) -> anyhow::Result<()> {
+        let now = now_unix();
+        let transaction = self.conn.unchecked_transaction()?;
+        transaction.execute(
+            "UPDATE client_consents
+                SET revoked_at = ?3
+              WHERE user_id = ?1 AND client_id = ?2",
+            params![user_id, client_id, now],
+        )?;
+        transaction.execute(
+            "UPDATE access_tokens
+                SET revoked_at = ?3
+              WHERE user_id = ?1 AND client_id = ?2 AND revoked_at IS NULL",
+            params![user_id, client_id, now],
+        )?;
+        transaction.execute(
+            "UPDATE refresh_tokens
+                SET revoked_at = ?3
+              WHERE user_id = ?1 AND client_id = ?2 AND revoked_at IS NULL",
+            params![user_id, client_id, now],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Advances `last_used_at` to the current time for an active consent.
+    /// No-op if no matching record exists.
+    pub fn touch_consent_last_used(&self, user_id: &str, client_id: &str) -> anyhow::Result<()> {
+        let now = now_unix();
+        self.conn.execute(
+            "UPDATE client_consents
+                SET last_used_at = ?3
+              WHERE user_id = ?1 AND client_id = ?2",
+            params![user_id, client_id, now],
+        )?;
+        Ok(())
+    }
+
+    /// Creates a new browser session with a 256-bit random id.
+    ///
+    /// `ttl_secs` must be positive. The returned [`Session`] carries the
+    /// generated id; callers persist it client-side as a cookie value.
+    pub fn create_session(&self, user_id: &str, ttl_secs: i64) -> anyhow::Result<Session> {
+        anyhow::ensure!(!user_id.trim().is_empty(), "user_id is required");
+        anyhow::ensure!(ttl_secs > 0, "session ttl must be positive");
+        let id = random_session_id();
+        let created_at = now_unix();
+        let expires_at = created_at + ttl_secs;
+        self.conn.execute(
+            "INSERT INTO sessions (id, user_id, created_at, expires_at)
+                  VALUES (?1, ?2, ?3, ?4)",
+            params![id, user_id, created_at, expires_at],
+        )?;
+        Ok(Session {
+            id,
+            user_id: user_id.to_string(),
+            created_at,
+            expires_at,
+        })
+    }
+
+    /// Returns the session if it exists and has not yet expired.
+    ///
+    /// Expired sessions are reported as `None` without being deleted; pruning
+    /// is a separate concern.
+    pub fn get_session(&self, session_id: &str) -> anyhow::Result<Option<Session>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, user_id, created_at, expires_at FROM sessions WHERE id = ?1",
+                [session_id],
+                |row| {
+                    let id: String = row.get(0)?;
+                    let user_id: String = row.get(1)?;
+                    let created_at: i64 = row.get(2)?;
+                    let expires_at: i64 = row.get(3)?;
+                    Ok(Session {
+                        id,
+                        user_id,
+                        created_at,
+                        expires_at,
+                    })
+                },
+            )
+            .optional()?;
+        let Some(session) = row else {
+            return Ok(None);
+        };
+        if now_unix() >= session.expires_at {
+            return Ok(None);
+        }
+        Ok(Some(session))
+    }
+
+    /// Removes a session. No-op if the id is unknown.
+    pub fn delete_session(&self, session_id: &str) -> anyhow::Result<()> {
+        self.conn
+            .execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
+        Ok(())
+    }
+
+    /// Returns the named 32-byte server secret, generating and persisting it
+    /// on first call. Used by ADR-0020 slice 2 for the anti-CSRF HMAC key.
+    pub fn get_or_create_server_secret(&self, name: &str) -> anyhow::Result<Vec<u8>> {
+        anyhow::ensure!(!name.trim().is_empty(), "secret name is required");
+        let existing: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT value FROM server_secrets WHERE name = ?1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(value) = existing {
+            return Ok(value);
+        }
+        // Two UUID v4 values (16 bytes each) give 32 bytes of OS-random entropy
+        // without requiring an extra dependency on `rand`.
+        let mut value = [0u8; 32];
+        value[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        value[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        self.conn.execute(
+            "INSERT OR IGNORE INTO server_secrets (name, value) VALUES (?1, ?2)",
+            params![name, value.as_slice()],
+        )?;
+        // Race-safe re-read: another connection may have inserted concurrently.
+        let stored: Vec<u8> = self.conn.query_row(
+            "SELECT value FROM server_secrets WHERE name = ?1",
+            [name],
+            |row| row.get(0),
+        )?;
+        Ok(stored)
+    }
+}

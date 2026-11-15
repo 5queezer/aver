@@ -1,0 +1,11 @@
+/target
+.aver/
+.worktrees/
+**/*.rs.bk
+Cargo.lock.bak
+.karta/
+graphify-out/
+
+
+# Local agent tool state, not project source.
+.pi/

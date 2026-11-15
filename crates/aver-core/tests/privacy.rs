@@ -1,0 +1,732 @@
+//! T72 — v0.4 starts with a pre-write privacy detector for obvious secrets.
+
+use aver_core::ClaimWrite;
+use aver_core::{Error, PrivacyRejection, Store, privacy_filter, privacy_filter_path};
+
+fn synthetic_token(parts: &[&str]) -> String {
+    parts.concat()
+}
+
+#[test]
+fn privacy_filter_rejects_aws_access_key() {
+    let token = synthetic_token(&["AK", "IA", "ABCDEFGHIJKLMNOP"]);
+    let result = privacy_filter(&format!("deploy key {token} should never persist"));
+
+    assert_eq!(result, Err(PrivacyRejection::AwsAccessKey));
+}
+
+#[test]
+fn privacy_filter_rejects_github_pat() {
+    let token = synthetic_token(&["gh", "p_", "abcdefghijklmnopqrstuvwxyz1234567890abcd"]);
+    let result = privacy_filter(&format!("token {token}"));
+
+    assert_eq!(result, Err(PrivacyRejection::GitHubPat));
+}
+
+#[test]
+fn privacy_filter_rejects_fine_grained_github_pat() {
+    let token = synthetic_token(&["github", "_pat_", "11ABCDEFG0abcdefghijklmnopqrstuvwxyz"]);
+    let result = privacy_filter(&format!("token {token}"));
+
+    assert_eq!(result, Err(PrivacyRejection::GitHubFineGrainedPat));
+}
+
+#[test]
+fn privacy_filter_rejects_jwt() {
+    let token = synthetic_token(&[
+        "eyJhbGciOiJIUzI1NiJ9",
+        ".",
+        "eyJzdWIiOiIxMjM0NTY3ODkw",
+        ".signature123",
+    ]);
+    let result = privacy_filter(&format!("bearer {token}"));
+
+    assert_eq!(result, Err(PrivacyRejection::Jwt));
+}
+
+#[test]
+fn privacy_filter_rejects_openai_key() {
+    let token = synthetic_token(&["sk", "-", "abcdefghijklmnopqrstuvwxyz1234567890"]);
+    let result = privacy_filter(&format!("OPENAI_API_KEY={token}"));
+
+    assert_eq!(result, Err(PrivacyRejection::OpenAiKey));
+}
+
+#[test]
+fn privacy_filter_rejects_anthropic_key() {
+    let token = synthetic_token(&["sk", "-ant-", "abcdefghijklmnopqrstuvwxyz1234567890"]);
+    let result = privacy_filter(&format!("ANTHROPIC_API_KEY={token}"));
+
+    assert_eq!(result, Err(PrivacyRejection::AnthropicKey));
+}
+
+#[test]
+fn privacy_filter_rejects_stripe_live_key() {
+    let token = synthetic_token(&["sk", "_live_", "abcdefghijklmnopqrstuvwxyz123456"]);
+    let result = privacy_filter(&format!("STRIPE_SECRET={token}"));
+
+    assert_eq!(result, Err(PrivacyRejection::StripeLiveKey));
+}
+
+#[test]
+fn privacy_filter_rejects_private_key_header() {
+    let marker = synthetic_token(&["-----BEGIN ", "PRIVATE KEY-----"]);
+    let result = privacy_filter(&format!("{marker}\nabc\n-----END PRIVATE KEY-----"));
+
+    assert_eq!(result, Err(PrivacyRejection::PrivateKey));
+}
+
+#[test]
+fn privacy_filter_rejects_high_entropy_token() {
+    let result = privacy_filter("secret q7Zp9Lm2Kx8Vn4Rb6Ty0Wc3Ae5Gu");
+
+    assert_eq!(result, Err(PrivacyRejection::HighEntropy));
+}
+
+#[test]
+fn privacy_filter_path_rejects_secrets_dir() {
+    let result = privacy_filter_path("/home/alice/.secrets.d/openai");
+
+    assert_eq!(result, Err(PrivacyRejection::SecretsPath));
+}
+
+#[test]
+fn privacy_filter_path_rejects_env_file() {
+    let result = privacy_filter_path("/project/.env.local");
+
+    assert_eq!(result, Err(PrivacyRejection::EnvPath));
+}
+
+#[test]
+fn privacy_filter_path_rejects_ssh_dir() {
+    let result = privacy_filter_path("/home/alice/.ssh/id_ed25519");
+
+    assert_eq!(result, Err(PrivacyRejection::SshPath));
+}
+
+#[test]
+fn privacy_filter_path_rejects_aws_credentials_file() {
+    let result = privacy_filter_path("/home/alice/.aws/credentials");
+
+    assert_eq!(result, Err(PrivacyRejection::AwsCredentialsPath));
+}
+
+#[test]
+fn privacy_filter_path_rejects_config_dir() {
+    let result = privacy_filter_path("/home/alice/.config/gh/hosts.yml");
+
+    assert_eq!(result, Err(PrivacyRejection::ConfigPath));
+}
+
+#[test]
+fn privacy_filter_path_rejects_pem_file() {
+    let result = privacy_filter_path("/project/certs/prod.pem");
+
+    assert_eq!(result, Err(PrivacyRejection::KeyPath));
+}
+
+#[test]
+fn privacy_filter_rejects_memory_ignore_marker() {
+    let result = privacy_filter("normal note\n# memory:ignore\nsecret context");
+
+    assert_eq!(result, Err(PrivacyRejection::MemoryIgnore));
+}
+
+#[test]
+fn privacy_filter_rejects_top_of_file_html_memory_ignore_marker() {
+    let result = privacy_filter("<!-- memory:ignore -->\nproject notes");
+
+    assert_eq!(result, Err(PrivacyRejection::MemoryIgnore));
+}
+
+#[test]
+fn add_claim_rejects_secret_before_episodic_log_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let token = synthetic_token(&["AK", "IA", "ABCDEFGHIJKLMNOP"]);
+    let result = store.add_claim(ClaimWrite::new(
+        "deployment",
+        "uses_key",
+        &token,
+        "test_session",
+    ));
+
+    assert!(matches!(
+        result,
+        Err(Error::Privacy(PrivacyRejection::AwsAccessKey))
+    ));
+    assert!(!dir.path().join("log.jsonl").exists());
+    assert_eq!(
+        store
+            .privacy_rejection_count(PrivacyRejection::AwsAccessKey)
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn privacy_rejection_telemetry_never_stores_secret_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+
+    let token = synthetic_token(&["gh", "p_", "abcdefghijklmnopqrstuvwxyz1234567890abcd"]);
+    let _ = store.add_claim(ClaimWrite::new(
+        "deployment",
+        "uses_key",
+        &token,
+        "test_session",
+    ));
+
+    let db_bytes = std::fs::read(dir.path().join("db.sqlite")).unwrap();
+    let db_text = String::from_utf8_lossy(&db_bytes);
+    assert_eq!(
+        store
+            .privacy_rejection_count(PrivacyRejection::GitHubPat)
+            .unwrap(),
+        1
+    );
+    assert!(!db_text.contains(&token));
+    assert!(!dir.path().join("log.jsonl").exists());
+}
+
+#[test]
+fn privacy_filter_path_rejects_relative_env_file() {
+    assert_eq!(
+        privacy_filter_path(".env").unwrap_err(),
+        PrivacyRejection::EnvPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_relative_ssh_dir() {
+    assert_eq!(
+        privacy_filter_path(".ssh/id_rsa").unwrap_err(),
+        PrivacyRejection::SshPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_relative_aws_credentials_file() {
+    assert_eq!(
+        privacy_filter_path(".aws/credentials").unwrap_err(),
+        PrivacyRejection::AwsCredentialsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_relative_config_dir() {
+    assert_eq!(
+        privacy_filter_path(".config/aver/secrets.toml").unwrap_err(),
+        PrivacyRejection::ConfigPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_relative_secrets_dir() {
+    assert_eq!(
+        privacy_filter_path(".secrets.d/token").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_envrc_file() {
+    assert_eq!(
+        privacy_filter_path(".envrc").unwrap_err(),
+        PrivacyRejection::EnvPath
+    );
+}
+
+#[test]
+fn privacy_filter_rejects_openssh_private_key_header() {
+    let content = synthetic_token(&["-----BEGIN ", "OPENSSH PRIVATE KEY-----"]);
+
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}
+
+#[test]
+fn privacy_filter_rejects_rsa_private_key_header() {
+    let content = synthetic_token(&["-----BEGIN ", "RSA PRIVATE KEY-----"]);
+
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}
+
+#[test]
+fn privacy_filter_rejects_ec_private_key_header() {
+    let content = synthetic_token(&["-----BEGIN ", "EC PRIVATE KEY-----"]);
+
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}
+
+#[test]
+fn privacy_filter_rejects_dsa_private_key_header() {
+    let content = synthetic_token(&["-----BEGIN ", "DSA PRIVATE KEY-----"]);
+
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}
+
+#[test]
+fn privacy_filter_rejects_encrypted_private_key_header() {
+    let content = synthetic_token(&["-----BEGIN ", "ENCRYPTED PRIVATE KEY-----"]);
+
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}
+
+#[test]
+fn privacy_filter_rejects_pgp_private_key_block_header() {
+    let content = synthetic_token(&["-----BEGIN ", "PGP PRIVATE KEY BLOCK-----"]);
+
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_pkcs12_file() {
+    assert_eq!(
+        privacy_filter_path("certs/client-identity.p12").unwrap_err(),
+        PrivacyRejection::KeyPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_pfx_file() {
+    assert_eq!(
+        privacy_filter_path("certs/client-identity.pfx").unwrap_err(),
+        PrivacyRejection::KeyPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_java_keystore_file() {
+    assert_eq!(
+        privacy_filter_path("certs/production-keystore.jks").unwrap_err(),
+        PrivacyRejection::KeyPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_keystore_file() {
+    assert_eq!(
+        privacy_filter_path("android/release.keystore").unwrap_err(),
+        PrivacyRejection::KeyPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_password_database_file() {
+    assert_eq!(
+        privacy_filter_path("vault/team-passwords.kdbx").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_legacy_password_database_file() {
+    assert_eq!(
+        privacy_filter_path("vault/team-passwords.kdb").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_rejects_putty_private_key_header() {
+    let content = synthetic_token(&["PuTTY-User-Key-", "File-3: ssh-rsa"]);
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}
+
+#[test]
+fn privacy_filter_rejects_ssh2_private_key_header() {
+    let content = synthetic_token(&["---- BEGIN SSH2 ENCRYPTED ", "PRIVATE KEY ----"]);
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_putty_key_file() {
+    assert_eq!(
+        privacy_filter_path("keys/deploy.ppk").unwrap_err(),
+        PrivacyRejection::KeyPath
+    );
+}
+
+#[test]
+fn privacy_filter_rejects_age_secret_key() {
+    let content = synthetic_token(&[
+        "AGE-SECRET-KEY-",
+        "1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ",
+    ]);
+    assert_eq!(
+        privacy_filter(&content).unwrap_err(),
+        PrivacyRejection::PrivateKey
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_age_identity_dir() {
+    assert_eq!(
+        privacy_filter_path(".age/keys.txt").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_gnupg_private_keys_dir() {
+    assert_eq!(
+        privacy_filter_path(".gnupg/private-keys-v1.d/keygrip").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_netrc_file() {
+    assert_eq!(
+        privacy_filter_path(".netrc").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_npmrc_file() {
+    assert_eq!(
+        privacy_filter_path(".npmrc").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_cargo_credentials_file() {
+    assert_eq!(
+        privacy_filter_path(".cargo/credentials.toml").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_yarnrc_file() {
+    assert_eq!(
+        privacy_filter_path(".yarnrc.yml").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_docker_config_credentials() {
+    assert_eq!(
+        privacy_filter_path(".docker/config.json").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_kube_config_credentials() {
+    assert_eq!(
+        privacy_filter_path(".kube/config").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_azure_access_tokens() {
+    assert_eq!(
+        privacy_filter_path(".azure/accessTokens.json").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_aws_config_file() {
+    assert_eq!(
+        privacy_filter_path(".aws/config").unwrap_err(),
+        PrivacyRejection::AwsCredentialsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_terraform_credentials() {
+    assert_eq!(
+        privacy_filter_path(".terraform.d/credentials.tfrc.json").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_git_credentials_file() {
+    assert_eq!(
+        privacy_filter_path(".git-credentials").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_pypirc_file() {
+    assert_eq!(
+        privacy_filter_path(".pypirc").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_rubygems_credentials() {
+    assert_eq!(
+        privacy_filter_path(".gem/credentials").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_oci_config_file() {
+    assert_eq!(
+        privacy_filter_path(".oci/config").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_vault_token_file() {
+    assert_eq!(
+        privacy_filter_path(".vault-token").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_pulumi_credentials() {
+    assert_eq!(
+        privacy_filter_path(".pulumi/credentials.json").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_sentry_cli_config() {
+    assert_eq!(
+        privacy_filter_path(".sentryclirc").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_rejects_slack_bot_token() {
+    let token = synthetic_token(&[
+        "xo",
+        "xb-",
+        "111111111111-",
+        "222222222222-",
+        "aaaaaaaaaaaaaaaaaaaaaaaa",
+    ]);
+    assert!(privacy_filter(&format!("SLACK_BOT_TOKEN={token}")).is_err());
+}
+
+#[test]
+fn privacy_filter_rejects_slack_user_token() {
+    let token = synthetic_token(&[
+        "xo",
+        "xp-",
+        "111111111111-",
+        "222222222222-",
+        "aaaaaaaaaaaaaaaaaaaaaaaa",
+    ]);
+    assert!(privacy_filter(&format!("SLACK_USER_TOKEN={token}")).is_err());
+}
+
+#[test]
+fn privacy_filter_rejects_slack_app_token() {
+    let token = synthetic_token(&[
+        "xa",
+        "pp-",
+        "111111111111-",
+        "222222222222-",
+        "aaaaaaaaaaaaaaaaaaaaaaaa",
+    ]);
+    assert!(privacy_filter(&format!("SLACK_APP_TOKEN={token}")).is_err());
+}
+
+#[test]
+fn privacy_filter_rejects_gitlab_pat() {
+    let token = synthetic_token(&["gl", "pat-", "aaaaaaaaaaaaaaaaaaaa"]);
+    assert!(privacy_filter(&format!("GITLAB_TOKEN={token}")).is_err());
+}
+
+#[test]
+fn privacy_filter_rejects_huggingface_token() {
+    let token = synthetic_token(&["hf", "_", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+    assert!(privacy_filter(&format!("HF_TOKEN={token}")).is_err());
+}
+
+#[test]
+fn privacy_filter_rejects_linear_api_key() {
+    let token = synthetic_token(&["lin", "_api_", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+    assert!(privacy_filter(&format!("LINEAR_API_KEY={token}")).is_err());
+}
+
+#[test]
+fn privacy_filter_rejects_npm_access_token() {
+    let token = synthetic_token(&["npm", "_", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+    assert!(privacy_filter(&format!("NPM_TOKEN={token}")).is_err());
+}
+
+#[test]
+fn privacy_filter_path_rejects_pnpmrc_file() {
+    assert_eq!(
+        privacy_filter_path(".pnpmrc").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_rejects_mesh_vpn_auth_key() {
+    let token = synthetic_token(&["ts", "key-auth-", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+    assert!(privacy_filter(&format!("VPN_AUTHKEY={token}")).is_err());
+}
+
+#[test]
+fn privacy_filter_rejects_mesh_vpn_api_key() {
+    let token = synthetic_token(&["ts", "key-api-", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+    assert!(privacy_filter(&format!("VPN_API_KEY={token}")).is_err());
+}
+
+#[test]
+fn privacy_filter_path_rejects_composer_auth_file() {
+    assert_eq!(
+        privacy_filter_path("auth.json").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_nuget_config_file() {
+    assert_eq!(
+        privacy_filter_path(".nuget/NuGet/NuGet.Config").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_maven_settings_file() {
+    assert_eq!(
+        privacy_filter_path(".m2/settings.xml").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_gradle_properties_file() {
+    assert_eq!(
+        privacy_filter_path(".gradle/gradle.properties").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_bundle_config_file() {
+    assert_eq!(
+        privacy_filter_path(".bundle/config").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_gcloud_adc_file() {
+    assert_eq!(
+        privacy_filter_path("gcloud/application_default_credentials.json").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_aws_sso_cache_file() {
+    assert_eq!(
+        privacy_filter_path(".aws/sso/cache/token.json").unwrap_err(),
+        PrivacyRejection::AwsCredentialsPath
+    );
+}
+
+#[test]
+fn privacy_filter_path_rejects_azure_msal_cache_file() {
+    assert_eq!(
+        privacy_filter_path(".azure/msal_token_cache.json").unwrap_err(),
+        PrivacyRejection::SecretsPath
+    );
+}
+
+#[test]
+fn privacy_filter_rejects_github_oauth_token() {
+    let token = synthetic_token(&["gh", "o_", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+    assert!(privacy_filter(&format!("GITHUB_OAUTH_TOKEN={token}")).is_err());
+}
+
+#[test]
+fn privacy_filter_rejects_github_user_to_server_token() {
+    let token = synthetic_token(&["gh", "u_", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]);
+    assert!(privacy_filter(&format!("GITHUB_USER_SERVER_TOKEN={token}")).is_err());
+}
+
+#[test]
+fn privacy_filter_rejects_json_quoted_github_pat() {
+    let token = synthetic_token(&["gh", "p_", "abcdefghijklmnopqrstuvwxyz1234567890abcd"]);
+    // The quote before the token must not shield it from detection.
+    let result = privacy_filter(&format!(r#"{{"token":"{token}"}}"#));
+
+    assert_eq!(result, Err(PrivacyRejection::GitHubPat));
+}
+
+#[test]
+fn privacy_filter_rejects_json_quoted_openai_key() {
+    let token = synthetic_token(&["sk", "-", "abcdefghijklmnopqrstuvwxyz1234567890"]);
+    let result = privacy_filter(&format!(r#"{{"OPENAI_API_KEY":"{token}"}}"#));
+
+    assert_eq!(result, Err(PrivacyRejection::OpenAiKey));
+}
+
+#[test]
+fn privacy_filter_rejects_json_quoted_jwt() {
+    let token = synthetic_token(&[
+        "eyJhbGciOiJIUzI1NiJ9",
+        ".",
+        "eyJzdWIiOiIxMjM0NTY3ODkw",
+        ".signature123",
+    ]);
+    let result = privacy_filter(&format!(r#"{{"Authorization":"Bearer {token}"}}"#));
+
+    assert_eq!(result, Err(PrivacyRejection::Jwt));
+}
+
+#[test]
+fn privacy_filter_path_allows_environment_suffix() {
+    // `/.environment` (and similar suffixes) are benign: only `.env`,
+    // `.envrc`, and `.env.*` segments are environment files.
+    assert!(privacy_filter_path("/project/.environment").is_ok());
+    assert!(privacy_filter_path("config/.envrc.bak").is_ok());
+    // Guard against over-tightening: real env paths still reject.
+    assert_eq!(
+        privacy_filter_path("config/.env.production"),
+        Err(PrivacyRejection::EnvPath)
+    );
+    assert_eq!(
+        privacy_filter_path(".env.local"),
+        Err(PrivacyRejection::EnvPath)
+    );
+}

@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Aver memory graph</title>
+<style>
+:root{color-scheme:dark;font:15px system-ui,sans-serif;background:#10151c;color:#e0e8ef}*{box-sizing:border-box}body{margin:0}
+header{padding:14px 24px;border-bottom:1px solid #34424f;display:flex;gap:14px;align-items:center;flex-wrap:wrap}h1{font-size:22px;margin:0}label{display:flex;gap:8px;align-items:center}
+input,select,button{font:inherit;background:#18232e;color:inherit;border:1px solid #526575;border-radius:4px;padding:6px}button{cursor:pointer}
+main{display:grid;grid-template-columns:minmax(360px,1fr) 360px;min-height:80vh}section{padding:14px 20px;min-width:0}aside{border-left:1px solid #34424f;padding:16px;overflow-wrap:anywhere}
+[role=tablist]{display:flex;gap:4px;border-bottom:1px solid #34424f;margin:6px 0 12px}[role=tab]{border:0;border-bottom:3px solid transparent;border-radius:0;background:none;padding:8px 14px}[role=tab][aria-selected=true]{border-bottom-color:#f4bc69;font-weight:600}
+.controls{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:10px}.scroll{overflow:auto;max-height:74vh;border:1px solid #34424f;border-radius:4px}
+table{border-collapse:collapse;font-size:13px;width:max-content;min-width:100%}thead{position:sticky;top:0;background:#18232e;z-index:1}th,td{padding:5px 8px;border-bottom:1px solid #26323d;text-align:left;vertical-align:top;max-width:280px}
+th{white-space:nowrap}th button{background:none;border:0;padding:0;font-weight:600}th select{font-size:12px;padding:2px;max-width:150px}tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus{background:#1b2733}
+.v{display:block}.old{color:#7d8c99;text-decoration:line-through}.hint{color:#f4bc69;font-size:11px;margin-left:4px}.badge{font-size:11px;border:1px solid #b4a5db;color:#b4a5db;border-radius:9px;padding:0 6px;margin-left:6px}
+.muted{color:#a5b6c5}.fact{padding:10px 0;border-bottom:1px solid #34424f;cursor:pointer}.fact strong{color:#90c5da}.fact p{margin:6px 0 0;white-space:pre-wrap}.faded{opacity:.55}
+svg text{fill:#e0e8ef;font:12px system-ui;paint-order:stroke;stroke:#10151c;stroke-width:4px;stroke-linejoin:round}svg text.sub{fill:#a5b6c5;font-size:11px}svg text.head{font-size:13px;font-weight:600}
+svg line{stroke:#536c80;stroke-width:1.5}svg line.ev{stroke:#b4a5db;stroke-dasharray:5 4}svg .gone{opacity:.4}circle,path{stroke:#10151c;stroke-width:2}g.node{cursor:pointer}g.node:focus{outline:none}g.node:focus circle,g.node:focus path{stroke:#f4bc69;stroke-width:3}
+.whole g.node text{visibility:hidden}.whole g.node:hover text,.whole g.node:focus text,.whole g.node.on text{visibility:visible}.whole line{stroke-opacity:.45}.whole line.on{stroke:#f4bc69;stroke-opacity:1}
+pre{white-space:pre-wrap;font:12px ui-monospace,monospace;line-height:1.5}#error{color:#ffbaaa}@media(max-width:850px){main{grid-template-columns:1fr}aside{border-left:0;border-top:1px solid #34424f}}
+</style>
+<header><h1>Aver memory graph</h1><label>Local export <input id="file" type="file" accept="application/json,.json"></label><label>Status <select id="status"><option value="ACTIVE">Active</option><option value="any">All history</option></select></label><label>Filter <input id="filter" type="search" size="18" placeholder="Name, predicate or text"></label><label>Created <input id="from" type="date" aria-label="Created from"> – <input id="to" type="date" aria-label="Created to"></label></header>
+<main><section><p class="muted">Open a JSON file made by export.py, or reload the page served by <code>aver-server --graph-view</code> for a live read-only snapshot. Opened as a file, the page makes no network requests.</p><p id="error" role="alert"></p><p id="summary" aria-live="polite">No export loaded.</p>
+<div role="tablist"><button role="tab" id="tab-entities" aria-controls="entities" aria-selected="true">Entities</button><button role="tab" id="tab-notes" aria-controls="notes" aria-selected="false">Notes</button><button role="tab" id="tab-graph" aria-controls="graph-panel" aria-selected="false">Graph</button></div>
+<div id="entities" role="tabpanel"><div class="controls"><label>Group <select id="group"></select></label><span class="muted">One row per subject; columns are its predicates (← incoming), most frequent first. <span class="hint">*</span> stored as entity, shown as a value because most facts of that predicate are literal.</span></div><div class="scroll"><table id="table"></table></div></div>
+<div id="notes" role="tabpanel" hidden><p class="muted">Claims whose object is free text (ADR-0029's prose rule) stay out of the table and graph.</p><div id="note-list"></div></div>
+<div id="graph-panel" role="tabpanel" hidden><div class="controls"><label>View <select id="mode"><option value="focus">Focus</option><option value="whole">Whole store</option></select></label><label>Hops <select id="hops"><option>1</option><option>2</option></select></label><span class="muted">Circles are entities, diamonds source events; values stay in the table and detail panel. Click a node to focus it.</span></div><div class="scroll" id="graph-wrap"><svg id="graph" aria-label="Memory entities and source events"></svg></div></div>
+</section><aside><h2>Inspect memory</h2><div id="detail"><p class="muted">Select a row, value, note or node to inspect provenance and source events.</p></div></aside></main>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const NS = 'http://www.w3.org/2000/svg';
+const MAX = 34, CH = 7, ROW = 44, LINE = 18;
+let data = {entities: [], claims: [], events: [], contradictions: [], predicates: []};
+let kinds = new Map(), ui = {tab: 'entities', group: null, sort: ['time', -1], filters: {}, focus: null, first: null, nodes: new Map()};
+function make(tag, attrs = {}, text, svg) {
+  const node = svg ? document.createElementNS(NS, tag) : document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+const s = (tag, attrs, text) => make(tag, attrs, text, true);
+const clip = (text, max = MAX) => { text = String(text); return text.length > max ? text.slice(0, max - 1) + '…' : text; };
+const when = ts => ts == null ? '' : new Date(ts * 1000).toISOString().slice(0, 16).replace('T', ' ');
+function activate(node, action) {
+  node.setAttribute('tabindex', '0');
+  node.addEventListener('click', e => { e.stopPropagation(); action(); });
+  node.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); action(); } });
+  return node;
+}
+// Exact port of aver-core ObjectKind::is_prose (ADR-0029); testdata/prose_cases.json pins both.
+const WS = /\p{White_Space}/u, CC = /\p{Cc}/u;
+function prose(value) {
+  const object = String(value);
+  try { // A quoted JSON string is judged by its content (serde_json rejects lone surrogates).
+    const decoded = JSON.parse(object);
+    if (typeof decoded === 'string' && !/\p{Cs}/u.test(decoded)) return prose(decoded);
+  } catch { /* not a JSON string */ }
+  const text = object.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, ''), length = [...text].length;
+  const colon = text.indexOf(':');
+  // A short single-token path or URI may end in sentence punctuation.
+  if (!WS.test(text) && !CC.test(object) && length <= 160 && (text === '.' || text === '..' || text.includes('/') ||
+    text.includes('\\') || (colon > 0 && /^[A-Za-z0-9+.-]+$/.test(text.slice(0, colon))))) return false;
+  return length > 160 || CC.test(object) || text.split(/\p{White_Space}+/u).filter(Boolean).length > 8 ||
+    (WS.test(text) && /[!?;。！？]/.test(text)) || text.includes('. ') || /[.!?。！？]$/.test(text);
+}
+// The ontology declares cardinality but no object kind, so a predicate's kind is
+// the majority of its stored facts; on a tie each fact keeps its own stored kind.
+function inferKinds() {
+  const votes = new Map();
+  for (const c of data.claims) { const v = votes.get(c.predicate) || [0, 0]; v[c.object_kind === 'literal' ? 0 : 1]++; votes.set(c.predicate, v); }
+  kinds = new Map([...votes].filter(([, v]) => v[0] !== v[1]).map(([p, v]) => [p, v[0] > v[1] ? 'literal' : 'entity']));
+}
+const literal = c => (kinds.get(c.predicate) || c.object_kind) === 'literal';
+const asEntity = c => literal(c) && c.object_kind !== 'literal';
+const note = c => prose(c.object);
+const predicate = name => data.predicates.find(p => p.name === name);
+function reason(c) {
+  if (c.status === 'ACTIVE') return '';
+  const marker = (c.source_refs || []).find(r => typeof r === 'string' && r.startsWith('retired:'));
+  const contradiction = data.contradictions.find(x => x.claim_id === c.id);
+  return c.status.toLowerCase() + (marker ? ': ' + marker.slice(8) : contradiction ? ': ' + contradiction.reason : '');
+}
+const day = (value, add) => value ? Date.parse(value + 'T00:00:00Z') / 1000 + add : null;
+function view() {
+  const from = day($('from').value, 0), to = day($('to').value, 86400);
+  return data.claims.filter(c => ($('status').value === 'any' || c.status === 'ACTIVE') &&
+    (c.created_at == null || ((from == null || c.created_at >= from) && (to == null || c.created_at < to))));
+}
+function matches(...texts) { const q = $('filter').value.trim().toLowerCase(); return !q || texts.some(t => String(t ?? '').toLowerCase().includes(q)); }
+const cmp = (x, y) => (typeof x === 'number' || (x !== '' && y !== '' && !isNaN(x) && !isNaN(y))) ? (+x > +y) - (+x < +y) : String(x).localeCompare(String(y));
+function detail(title, ...parts) { $('detail').replaceChildren(make('h3', {}, title), ...parts); }
+const pre = value => make('pre', {}, JSON.stringify(value, null, 2));
+function inspectClaim(c) {
+  detail('Claim ' + c.id, pre({claim: c, kind: literal(c) ? 'literal' : 'entity', kind_note: asEntity(c) ? 'stored as entity; the kind is inferred from the stored facts of this predicate' : undefined,
+    predicate: predicate(c.predicate), retired: reason(c) || undefined, source_events: data.events.filter(e => (c.event_ids || []).includes(e.id)),
+    contradictions: data.contradictions.filter(x => x.claim_id === c.id || x.new_claim_id === c.id)}));
+}
+function claimLine(c, label, value) {
+  const line = make('div', {'class': 'fact' + (c.status === 'ACTIVE' ? '' : ' faded')});
+  line.append(make('strong', {}, label));
+  if (note(c)) line.append(make('span', {'class': 'badge'}, 'unstructured'));
+  if (asEntity(c)) line.append(make('span', {'class': 'hint', title: 'kind inferred from the stored facts'}, 'stored as entity'));
+  line.append(make('div', {}, clip(value, 240)), make('div', {'class': 'muted'}, [when(c.created_at), c.provenance + ' ' + c.confidence, reason(c)].filter(Boolean).join(' · ')));
+  return activate(line, () => inspectClaim(c));
+}
+function inspectSubject(name) {
+  const claims = view(), button = make('button', {type: 'button'}, 'Focus in graph');
+  button.addEventListener('click', () => { ui.focus = name; showTab('graph'); });
+  detail(name, button, ...claims.filter(c => c.subject === name).map(c => claimLine(c, c.predicate, c.object)),
+    ...claims.filter(c => c.object === name && !literal(c)).map(c => claimLine(c, '← ' + c.predicate, c.subject)));
+}
+function inspectEvent(e) {
+  detail('event:' + e.id, pre(e), ...data.claims.filter(c => (c.event_ids || []).includes(e.id) || c.object === 'event:' + e.id)
+    .map(c => claimLine(c, c.subject + ' → ' + c.predicate, c.object)));
+}
+const prefix = name => name.includes(':') ? name.slice(0, name.indexOf(':') + 1) : '(no prefix)';
+function renderTable(claims) {
+  const facts = claims.filter(c => !note(c)), groups = new Map();
+  const add = (key, label, subject) => { if (!groups.has(key)) groups.set(key, {label, subjects: new Set()}); groups.get(key).subjects.add(subject); };
+  for (const c of facts) {
+    add('prefix ' + prefix(c.subject), prefix(c.subject) + '*', c.subject);
+    if (c.predicate === 'is' && !literal(c)) add('is ' + c.object, 'is ' + c.object, c.subject);
+  }
+  const keys = [...groups.keys()].sort((a, b) => groups.get(b).subjects.size - groups.get(a).subjects.size || a.startsWith('is ') - b.startsWith('is ') || a.localeCompare(b));
+  if (!groups.has(ui.group)) { ui.group = keys[0] ?? null; ui.filters = {}; }
+  $('group').replaceChildren(...keys.map(k => { const o = make('option', {value: k}, `${groups.get(k).label} (${groups.get(k).subjects.size})`); o.selected = k === ui.group; return o; }));
+  $('table').replaceChildren(); ui.first = null;
+  if (!ui.group) return;
+  const subjects = groups.get(ui.group).subjects, cells = new Map([...subjects].map(sub => [sub, new Map()]));
+  const put = (sub, column, claim, value) => { const row = cells.get(sub); if (!row.has(column)) row.set(column, []); row.get(column).push({claim, value}); };
+  for (const c of facts) {
+    if (subjects.has(c.subject)) put(c.subject, c.predicate, c, c.object);
+    if (subjects.has(c.object) && !literal(c)) put(c.object, '← ' + c.predicate, c, c.subject);
+  }
+  const freq = new Map();
+  for (const row of cells.values()) for (const column of row.keys()) freq.set(column, (freq.get(column) || 0) + 1);
+  const columns = ['subject', 'time', ...[...freq.keys()].sort((a, b) => freq.get(b) - freq.get(a) || a.localeCompare(b))];
+  const all = [...subjects].map(sub => {
+    const times = facts.filter(c => c.subject === sub && c.created_at != null).map(c => c.created_at);
+    return {sub, time: times.length ? Math.min(...times) : null, row: cells.get(sub)};
+  });
+  const values = (r, column) => column === 'subject' ? [r.sub] : column === 'time' ? [when(r.time)] : (r.row.get(column) || []).map(v => String(v.value));
+  const [sortColumn, direction] = ui.sort;
+  const key = r => sortColumn === 'time' ? r.time ?? -Infinity : values(r, sortColumn)[0] ?? '';
+  const rows = all.filter(r => matches(r.sub, ...[...r.row.values()].flat().map(v => v.value + ' ' + v.claim.predicate)))
+    .filter(r => Object.entries(ui.filters).every(([column, value]) => !value || values(r, column).includes(value)))
+    .sort((a, b) => direction * cmp(key(a), key(b)) || a.sub.localeCompare(b.sub));
+  const head = make('tr'), filters = make('tr');
+  for (const column of columns) {
+    const sort = make('button', {type: 'button', title: column.startsWith('← ') || !predicate(column) ? 'Sort' : `Sort (${predicate(column).cardinality}-valued)`},
+      column + (sortColumn === column ? (direction > 0 ? ' ▲' : ' ▼') : ''));
+    sort.addEventListener('click', () => { ui.sort = [column, sortColumn === column ? -direction : 1]; render(); });
+    head.appendChild(make('th')).append(sort);
+    const cell = filters.appendChild(make('th'));
+    if (column === 'subject' || column === 'time') continue;
+    const select = make('select', {'aria-label': 'Filter ' + column});
+    select.append(make('option', {value: ''}, 'all'));
+    for (const v of [...new Set(all.flatMap(r => values(r, column)))].sort(cmp).slice(0, 200)) { const o = make('option', {}, clip(v, 40)); o.value = v; o.selected = ui.filters[column] === v; select.append(o); }
+    select.addEventListener('change', () => { ui.filters[column] = select.value; render(); });
+    cell.append(select);
+  }
+  const body = make('tbody');
+  for (const r of rows.slice(0, 1000)) {
+    const tr = activate(make('tr'), () => { ui.focus = r.sub; inspectSubject(r.sub); showTab('graph'); });
+    for (const column of columns) {
+      const td = tr.appendChild(make('td'));
+      if (column === 'subject') td.append(make('strong', {}, r.sub));
+      else if (column === 'time') td.textContent = when(r.time);
+      else for (const v of (r.row.get(column) || []).sort((a, b) => (a.claim.status !== 'ACTIVE') - (b.claim.status !== 'ACTIVE'))) {
+        const span = make('span', {'class': 'v' + (v.claim.status === 'ACTIVE' ? '' : ' old'), title: reason(v.claim) || v.claim.provenance + ' ' + v.claim.confidence}, clip(v.value, 60));
+        if (asEntity(v.claim) && v.claim.subject === r.sub) span.append(make('span', {'class': 'hint', title: 'stored as entity; kind inferred from the stored facts'}, '*'));
+        td.append(activate(span, () => inspectClaim(v.claim)));
+      }
+    }
+    body.append(tr);
+  }
+  ui.first = rows[0]?.sub ?? null;
+  $('table').append(make('thead'), body); $('table').tHead.append(head, filters);
+}
+function renderNotes(claims) {
+  const notes = claims.filter(c => note(c) && matches(c.subject, c.predicate, c.object));
+  $('note-list').replaceChildren(...notes.map(c => { const line = claimLine(c, c.subject + ' → ' + c.predicate, ''); line.append(make('p', {}, c.object)); return line; }));
+  if (!notes.length) $('note-list').append(make('p', {'class': 'muted'}, 'No unstructured notes in view.'));
+  return notes.length;
+}
+// Entities and events are one node set: `event:<id>` objects are the event diamonds.
+function graph(claims) {
+  const nodes = new Map(), edges = new Map();
+  const node = name => {
+    if (!nodes.has(name)) { const id = /^event:(\d+)$/.exec(name); nodes.set(name, {name, event: id ? data.events.find(e => e.id === +id[1]) || {id: +id[1]} : null, out: new Map(), in: new Map()}); }
+    return nodes.get(name);
+  };
+  const link = (c, to, label) => {
+    const a = node(c.subject), b = node(to), key = a.name + '\n' + b.name;
+    const e = edges.get(key) || {from: a, to: b, labels: new Set(), active: false};
+    if (label) e.labels.add(label);
+    e.active ||= c.status === 'ACTIVE'; edges.set(key, e); a.out.set(b.name, e); b.in.set(a.name, e);
+  };
+  for (const c of claims) {
+    if (note(c)) continue;
+    if (literal(c)) node(c.subject); else link(c, c.object, c.predicate);
+    for (const id of c.event_ids || []) link(c, 'event:' + id, '');
+  }
+  return {nodes, edges};
+}
+const nodeLabel = n => n.event ? 'event:' + n.event.id + (n.event.kind ? ' · ' + n.event.kind : '') : n.name;
+function drawEdge(svg, e, a, b, extra = '') {
+  const line = s('line', {x1: a.x, y1: a.y, x2: b.x, y2: b.y, 'class': (e.labels.size ? '' : 'ev ') + (e.active ? '' : 'gone ') + extra});
+  line.append(s('title', {}, e.from.name + ' → ' + ([...e.labels].join(', ') || 'source event') + ' → ' + e.to.name));
+  svg.append(line);
+}
+function drawNode(svg, n, p, lines = [], anchor = 'start', extra = '') {
+  const g = s('g', {'class': 'node ' + extra, role: 'button', 'aria-label': n.name});
+  g.append(n.event ? s('path', {d: `M ${p.x} ${p.y - 10} l 10 10 -10 10 -10 -10 Z`, fill: '#b4a5db'}) : s('circle', {cx: p.x, cy: p.y, r: extra.includes('center') ? 11 : 8, fill: '#78b5ca'}));
+  const dx = anchor === 'start' ? 14 : anchor === 'end' ? -14 : 0, dy = anchor === 'middle' ? 28 : 4;
+  lines.forEach(([text, cls], i) => g.append(s('text', {x: p.x + dx, y: p.y + dy + i * LINE, 'text-anchor': anchor, 'class': cls || ''}, clip(text))));
+  g.append(s('title', {}, nodeLabel(n)));
+  ui.nodes.set(n.name, g);
+  svg.append(activate(g, () => { ui.focus = n.name; n.event ? inspectEvent(n.event) : inspectSubject(n.name); renderGraph(true); }));
+}
+const width = items => items.length ? Math.max(...items.map(i => Math.min(MAX, Math.max(nodeLabel(i.node).length, i.sub.length)))) * CH : 0;
+// Focus view: incoming neighbours in columns to the left, outgoing to the right, labels pointing outward.
+function renderFocus(svg, g, claims, available) {
+  const center = g.nodes.get(ui.focus) || g.nodes.get(ui.first) || g.nodes.values().next().value;
+  if (!center) return null;
+  const placed = new Set([center.name]), item = (node, edge, parent, side) => {
+    placed.add(node.name);
+    const right = (side > 0) === (edge.from === parent), labels = [...edge.labels].join(', ') || 'source event';
+    return {node, edge, parent, sub: right ? labels + ' →' : '← ' + labels};
+  };
+  const R1 = [...center.out.values()].sort((a, b) => a.to.name.localeCompare(b.to.name)).map(e => item(e.to, e, center, 1));
+  const L1 = [...center.in.values()].filter(e => !placed.has(e.from.name)).sort((a, b) => a.from.name.localeCompare(b.from.name)).map(e => item(e.from, e, center, -1));
+  const second = (column, side) => $('hops').value !== '2' ? [] : column.flatMap(p => [...[...p.node.out.values()].map(e => [e.to, e]), ...[...p.node.in.values()].map(e => [e.from, e])]
+    .sort(([a], [b]) => a.name.localeCompare(b.name)).flatMap(([n, e]) => placed.has(n.name) ? [] : [item(n, e, p.node, side)]));
+  const R2 = second(R1, 1), L2 = second(L1, -1);
+  const attrs = claims.filter(c => c.subject === center.name && literal(c) && !note(c)).sort((a, b) => (a.status !== 'ACTIVE') - (b.status !== 'ACTIVE') || a.predicate.localeCompare(b.predicate))
+    .slice(0, 10).map(c => [c.predicate + ': ' + c.object + (c.status === 'ACTIVE' ? '' : ' (' + c.status.toLowerCase() + ')'), 'sub']);
+  const centerWidth = Math.min(MAX, Math.max(nodeLabel(center).length, ...attrs.map(a => a[0].length))) * CH;
+  const gap = Math.max(150, centerWidth / 2 + 50), xR2 = gap + 14 + width(R1) + 70, xL2 = -(gap + 14 + width(L1) + 70);
+  const left = (L2.length ? xL2 - 14 - width(L2) : L1.length ? -gap - 14 - width(L1) : -centerWidth / 2) - 24;
+  const right = (R2.length ? xR2 + 14 + width(R2) : R1.length ? gap + 14 + width(R1) : centerWidth / 2) + 24;
+  const W = Math.max(available, right - left), H = Math.max(460, ROW * Math.max(R1.length, L1.length, R2.length, L2.length) + 60, 2 * (40 + LINE * attrs.length) + 40);
+  const cx = (W - (right - left)) / 2 - left, cy = H / 2, at = new Map([[center.name, {x: cx, y: cy}]]);
+  for (const [column, x, anchor] of [[R1, cx + gap, 'start'], [L1, cx - gap, 'end'], [R2, cx + xR2, 'start'], [L2, cx + xL2, 'end']])
+    column.forEach((it, i) => {
+      // Second-hop edges leave a first-hop node after its label, so they never cross it.
+      it.p = {x, y: cy + (i - (column.length - 1) / 2) * ROW}; it.anchor = anchor;
+      at.set(it.node.name, {x: x + (anchor === 'start' ? 1 : -1) * (20 + width([it])), y: it.p.y});
+    });
+  for (const it of [...R1, ...L1, ...R2, ...L2]) drawEdge(svg, it.edge, at.get(it.parent.name), it.p);
+  drawNode(svg, center, at.get(center.name), [[nodeLabel(center), 'head'], ...attrs], 'middle', 'center');
+  for (const it of [...R1, ...L1, ...R2, ...L2]) drawNode(svg, it.node, it.p, [[nodeLabel(it.node)], [it.sub, 'sub']], it.anchor);
+  return [W, H];
+}
+// Whole store: deterministic layers by edge direction (longest path to a sink, cycles cut), labels on hover or focus.
+function renderWhole(svg, g, available) {
+  const depth = new Map(), visiting = new Set();
+  const level = n => {
+    if (depth.has(n.name)) return depth.get(n.name);
+    if (visiting.has(n.name)) return 0;
+    visiting.add(n.name); let d = 0;
+    for (const e of n.out.values()) d = Math.max(d, level(e.to) + 1);
+    visiting.delete(n.name); depth.set(n.name, d); return d;
+  };
+  const nodes = [...g.nodes.values()].sort((a, b) => a.name.localeCompare(b.name)), top = Math.max(0, ...nodes.map(level));
+  const columns = Array.from({length: top + 1}, (_, i) => nodes.filter(n => depth.get(n.name) === top - i));
+  for (let sweep = 0; sweep < 4; sweep++) {
+    const order = new Map(columns.flatMap(column => column.map((n, i) => [n.name, i])));
+    for (const column of columns) {
+      const center = n => { const near = [...n.out.keys(), ...n.in.keys()].map(k => order.get(k)); return near.length ? near.reduce((x, y) => x + y, 0) / near.length : order.get(n.name); };
+      const weights = new Map(column.map(n => [n.name, center(n)]));
+      column.sort((a, b) => weights.get(a.name) - weights.get(b.name) || a.name.localeCompare(b.name));
+    }
+  }
+  const step = Math.max(200, (available - 280) / Math.max(1, top)), W = Math.max(available, 280 + step * top), H = Math.max(420, 22 * Math.max(...columns.map(c => c.length)) + 60);
+  const at = new Map(), focus = g.nodes.get(ui.focus), near = new Set(focus ? [focus.name, ...focus.out.keys(), ...focus.in.keys()] : []);
+  columns.forEach((column, i) => column.forEach((n, j) => at.set(n.name, {x: 60 + i * step, y: 30 + j * 22 + (H - 60 - 22 * column.length) / 2})));
+  for (const e of g.edges.values()) drawEdge(svg, e, at.get(e.from.name), at.get(e.to.name), focus && (e.from === focus || e.to === focus) ? 'on' : '');
+  columns.forEach((column, i) => column.forEach(n => drawNode(svg, n, at.get(n.name), [[nodeLabel(n)]], i === top && top > 0 ? 'end' : 'start', near.has(n.name) ? 'on' : '')));
+  return [W, H];
+}
+function renderGraph(keepFocus) {
+  const svg = $('graph'), claims = view(), g = graph(claims), whole = $('mode').value === 'whole';
+  svg.replaceChildren(); ui.nodes = new Map(); svg.classList.toggle('whole', whole);
+  const available = Math.max(600, $('graph-wrap').clientWidth - 4);
+  const size = whole ? renderWhole(svg, g, available) : renderFocus(svg, g, claims, available);
+  const [W, H] = size || [available, 120];
+  if (!size) svg.append(s('text', {x: 20, y: 40}, 'No entities in view.'));
+  svg.setAttribute('width', W); svg.setAttribute('height', H); svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  if (keepFocus) ui.nodes.get(ui.focus)?.focus({preventScroll: true});
+}
+function render() {
+  const claims = view(), notes = renderNotes(claims);
+  renderTable(claims);
+  if (ui.tab === 'graph') renderGraph();
+  const subjects = new Set(claims.filter(c => !note(c)).map(c => c.subject)).size;
+  $('summary').textContent = `${claims.length} claims in view · ${subjects} subjects · ${notes} unstructured ${notes === 1 ? 'note' : 'notes'} · ${new Set(claims.flatMap(c => c.event_ids || [])).size} linked events`;
+}
+function showTab(tab) {
+  ui.tab = tab;
+  for (const [name, panel] of [['entities', 'entities'], ['notes', 'notes'], ['graph', 'graph-panel']]) { $('tab-' + name).setAttribute('aria-selected', name === tab); $(panel).hidden = name !== tab; }
+  render();
+}
+function load(parsed) {
+  if (parsed.format!=='aver-graph-v1' || !['entities','claims','events','contradictions'].every(k=>Array.isArray(parsed[k]))) throw new Error('Expected an aver-graph-v1 export.');
+  data = {...parsed, predicates: Array.isArray(parsed.predicates) ? parsed.predicates : []};
+  inferKinds(); ui = {...ui, group: null, filters: {}, focus: null}; render();
+}
+$('file').addEventListener('change',async e=>{
+  $('error').textContent='';
+  try { load(JSON.parse(await e.target.files[0].text())); }
+  catch (error) { $('error').textContent='Cannot load export: '+error.message; }
+});
+// Live mode: only when aver-server --graph-view serves this page over HTTP.
+// OAuth PKCE against the server's own routes; the token stays in sessionStorage.
+const b64url = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const randomString = () => b64url(crypto.getRandomValues(new Uint8Array(32)));
+const redirectUri = () => location.origin + location.pathname;
+async function authorize() {
+  let client = localStorage.getItem('aver_graph_client');
+  if (!client) {
+    const r = await fetch('/oauth/register',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({client_name:'Aver graph view',redirect_uris:[redirectUri()]})});
+    if (!r.ok) throw new Error('client registration failed: HTTP '+r.status);
+    client = (await r.json()).client_id; localStorage.setItem('aver_graph_client',client);
+  }
+  const verifier = randomString(), state = randomString();
+  sessionStorage.setItem('aver_graph_verifier',verifier); sessionStorage.setItem('aver_graph_state',state);
+  sessionStorage.setItem('aver_graph_pending','1');
+  const challenge = b64url(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier)));
+  location.assign('/oauth/authorize?'+new URLSearchParams({response_type:'code',client_id:client,redirect_uri:redirectUri(),
+    code_challenge:challenge,code_challenge_method:'S256',scope:'claims:read',state}));
+}
+// A failed or abandoned authorization forgets the cached client, so the next
+// reload registers a fresh one (for example after the server's auth DB reset).
+function authFailed(message) {
+  localStorage.removeItem('aver_graph_client');
+  throw new Error(message+'; reload to retry');
+}
+async function live() {
+  const params = new URLSearchParams(location.search);
+  const pending = sessionStorage.getItem('aver_graph_pending');
+  sessionStorage.removeItem('aver_graph_pending');
+  const fresh = params.has('code');
+  if (params.has('error') || fresh) history.replaceState(null,'',location.pathname);
+  if (params.has('error')) authFailed('authorization '+params.get('error'));
+  if (fresh) {
+    if (params.get('state')!==sessionStorage.getItem('aver_graph_state')) throw new Error('authorization state mismatch; reload to retry');
+    const r = await fetch('/oauth/token',{method:'POST',body:new URLSearchParams({grant_type:'authorization_code',code:params.get('code'),
+      client_id:localStorage.getItem('aver_graph_client'),code_verifier:sessionStorage.getItem('aver_graph_verifier'),redirect_uri:redirectUri()})});
+    if (!r.ok) authFailed('token exchange failed: HTTP '+r.status);
+    sessionStorage.setItem('aver_graph_token',(await r.json()).access_token);
+  } else if (pending) authFailed('authorization did not finish');
+  const token = sessionStorage.getItem('aver_graph_token');
+  if (!token) return authorize();
+  const r = await fetch('/api/graph',{headers:{authorization:'Bearer '+token},cache:'no-store'});
+  if (r.status===401) {
+    sessionStorage.removeItem('aver_graph_token');
+    // One retry: a token rejected right after its exchange is an error, not a redirect loop.
+    if (fresh) throw new Error('new token was rejected; reload to retry');
+    return authorize();
+  }
+  if (!r.ok) throw new Error('live snapshot failed: HTTP '+r.status);
+  load(await r.json());
+}
+if (location.protocol.startsWith('http')) {
+  $('summary').textContent='Loading live snapshot…';
+  live().catch(error=>{ $('error').textContent='Live view: '+error.message; });
+}
+for (const id of ['status', 'from', 'to', 'mode', 'hops']) $(id).addEventListener('change', render);
+$('filter').addEventListener('input', render);
+$('group').addEventListener('change', () => { ui.group = $('group').value; ui.filters = {}; render(); });
+for (const name of ['entities', 'notes', 'graph']) $('tab-' + name).addEventListener('click', () => showTab(name));
+addEventListener('resize', () => { if (ui.tab === 'graph') renderGraph(); });
+</script>
+</html>

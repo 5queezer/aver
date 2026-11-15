@@ -1,0 +1,13 @@
+{
+  "name": "abstention",
+  "version": 1,
+  "description": "Queries with no relevant memory should reward abstaining instead of forcing recall",
+  "claims": [
+    {"subject": "project", "predicate": "language", "object": "Rust"},
+    {"subject": "meeting", "predicate": "attendee", "object": "Alice"}
+  ],
+  "queries": [
+    {"query": "Go", "relevant_indices": [], "top_k": 5},
+    {"query": "Charlie", "relevant_indices": [], "top_k": 5}
+  ]
+}

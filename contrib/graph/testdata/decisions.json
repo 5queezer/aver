@@ -1,0 +1,2051 @@
+{
+  "format": "aver-graph-v1",
+  "entities": [
+    {
+      "id": "Approval",
+      "label": "Approval"
+    },
+    {
+      "id": "Deferral",
+      "label": "Deferral"
+    },
+    {
+      "id": "Rejection",
+      "label": "Rejection"
+    },
+    {
+      "id": "decision:1857577a",
+      "label": "decision:1857577a"
+    },
+    {
+      "id": "decision:1ad6d789",
+      "label": "decision:1ad6d789"
+    },
+    {
+      "id": "decision:27384096",
+      "label": "decision:27384096"
+    },
+    {
+      "id": "decision:38c28f14",
+      "label": "decision:38c28f14"
+    },
+    {
+      "id": "decision:4d6ee284",
+      "label": "decision:4d6ee284"
+    },
+    {
+      "id": "decision:6c0c5c0a",
+      "label": "decision:6c0c5c0a"
+    },
+    {
+      "id": "decision:790bca9d",
+      "label": "decision:790bca9d"
+    },
+    {
+      "id": "decision:7a170a06",
+      "label": "decision:7a170a06"
+    },
+    {
+      "id": "decision:92ab01f1",
+      "label": "decision:92ab01f1"
+    },
+    {
+      "id": "decision:95dcc1cf",
+      "label": "decision:95dcc1cf"
+    },
+    {
+      "id": "decision:a43e4ba9",
+      "label": "decision:a43e4ba9"
+    },
+    {
+      "id": "decision:a8ed1739",
+      "label": "decision:a8ed1739"
+    },
+    {
+      "id": "decision:b23bf998",
+      "label": "decision:b23bf998"
+    },
+    {
+      "id": "decision:bc084586",
+      "label": "decision:bc084586"
+    },
+    {
+      "id": "decision:e57c131f",
+      "label": "decision:e57c131f"
+    },
+    {
+      "id": "event:1",
+      "label": "event:1"
+    },
+    {
+      "id": "event:10",
+      "label": "event:10"
+    },
+    {
+      "id": "event:11",
+      "label": "event:11"
+    },
+    {
+      "id": "event:12",
+      "label": "event:12"
+    },
+    {
+      "id": "event:13",
+      "label": "event:13"
+    },
+    {
+      "id": "event:14",
+      "label": "event:14"
+    },
+    {
+      "id": "event:15",
+      "label": "event:15"
+    },
+    {
+      "id": "event:2",
+      "label": "event:2"
+    },
+    {
+      "id": "event:3",
+      "label": "event:3"
+    },
+    {
+      "id": "event:4",
+      "label": "event:4"
+    },
+    {
+      "id": "event:5",
+      "label": "event:5"
+    },
+    {
+      "id": "event:6",
+      "label": "event:6"
+    },
+    {
+      "id": "event:7",
+      "label": "event:7"
+    },
+    {
+      "id": "event:8",
+      "label": "event:8"
+    },
+    {
+      "id": "event:9",
+      "label": "event:9"
+    },
+    {
+      "id": "high",
+      "label": "high"
+    },
+    {
+      "id": "option:in-house",
+      "label": "option:in-house"
+    },
+    {
+      "id": "option:north-site",
+      "label": "option:north-site"
+    },
+    {
+      "id": "option:south-site",
+      "label": "option:south-site"
+    },
+    {
+      "id": "option:vendor-a",
+      "label": "option:vendor-a"
+    },
+    {
+      "id": "option:vendor-b",
+      "label": "option:vendor-b"
+    },
+    {
+      "id": "request:1ef0fcf3",
+      "label": "request:1ef0fcf3"
+    },
+    {
+      "id": "request:8db561d2",
+      "label": "request:8db561d2"
+    },
+    {
+      "id": "request:911a06ae",
+      "label": "request:911a06ae"
+    },
+    {
+      "id": "request:ba6f978e",
+      "label": "request:ba6f978e"
+    },
+    {
+      "id": "request:fbe130ca",
+      "label": "request:fbe130ca"
+    },
+    {
+      "id": "team:planning",
+      "label": "team:planning"
+    }
+  ],
+  "claims": [
+    {
+      "id": 1,
+      "subject": "decision:7a170a06",
+      "predicate": "is",
+      "object": "Approval",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767225600,
+      "event_ids": []
+    },
+    {
+      "id": 2,
+      "subject": "decision:7a170a06",
+      "predicate": "concerns",
+      "object": "option:north-site",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767225610,
+      "event_ids": []
+    },
+    {
+      "id": 3,
+      "subject": "decision:7a170a06",
+      "predicate": "triggered_by",
+      "object": "request:1ef0fcf3",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767225620,
+      "event_ids": []
+    },
+    {
+      "id": 4,
+      "subject": "decision:7a170a06",
+      "predicate": "has_rationale",
+      "object": "event:1",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:1"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 1,
+      "created_at": 1767225630,
+      "event_ids": [
+        1
+      ]
+    },
+    {
+      "id": 5,
+      "subject": "decision:7a170a06",
+      "predicate": "has_priority",
+      "object": "high",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767225640,
+      "event_ids": []
+    },
+    {
+      "id": 6,
+      "subject": "decision:7a170a06",
+      "predicate": "has_outcome",
+      "object": "accepted",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767225650,
+      "event_ids": []
+    },
+    {
+      "id": 7,
+      "subject": "decision:7a170a06",
+      "predicate": "has_estimate",
+      "object": "0.5",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767225660,
+      "event_ids": []
+    },
+    {
+      "id": 8,
+      "subject": "decision:27384096",
+      "predicate": "is",
+      "object": "Rejection",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767315600,
+      "event_ids": []
+    },
+    {
+      "id": 9,
+      "subject": "decision:27384096",
+      "predicate": "concerns",
+      "object": "option:vendor-a",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767315610,
+      "event_ids": []
+    },
+    {
+      "id": 10,
+      "subject": "decision:27384096",
+      "predicate": "triggered_by",
+      "object": "request:911a06ae",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767315620,
+      "event_ids": []
+    },
+    {
+      "id": 11,
+      "subject": "decision:27384096",
+      "predicate": "has_rationale",
+      "object": "event:2",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:2"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 2,
+      "created_at": 1767315630,
+      "event_ids": [
+        2
+      ]
+    },
+    {
+      "id": 12,
+      "subject": "decision:27384096",
+      "predicate": "has_priority",
+      "object": "medium",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767315640,
+      "event_ids": []
+    },
+    {
+      "id": 13,
+      "subject": "decision:27384096",
+      "predicate": "has_outcome",
+      "object": "declined",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767315650,
+      "event_ids": []
+    },
+    {
+      "id": 14,
+      "subject": "decision:27384096",
+      "predicate": "has_estimate",
+      "object": "2.25",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767315660,
+      "event_ids": []
+    },
+    {
+      "id": 15,
+      "subject": "decision:95dcc1cf",
+      "predicate": "is",
+      "object": "Deferral",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767405600,
+      "event_ids": []
+    },
+    {
+      "id": 16,
+      "subject": "decision:95dcc1cf",
+      "predicate": "concerns",
+      "object": "option:in-house",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767405610,
+      "event_ids": []
+    },
+    {
+      "id": 17,
+      "subject": "decision:95dcc1cf",
+      "predicate": "triggered_by",
+      "object": "request:ba6f978e",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767405620,
+      "event_ids": []
+    },
+    {
+      "id": 18,
+      "subject": "decision:95dcc1cf",
+      "predicate": "has_rationale",
+      "object": "event:3",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:3"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 3,
+      "created_at": 1767405630,
+      "event_ids": [
+        3
+      ]
+    },
+    {
+      "id": 19,
+      "subject": "decision:95dcc1cf",
+      "predicate": "has_priority",
+      "object": "low",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767405640,
+      "event_ids": []
+    },
+    {
+      "id": 20,
+      "subject": "decision:95dcc1cf",
+      "predicate": "has_outcome",
+      "object": "pending",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767405650,
+      "event_ids": []
+    },
+    {
+      "id": 21,
+      "subject": "decision:95dcc1cf",
+      "predicate": "has_estimate",
+      "object": "1.5",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767405660,
+      "event_ids": []
+    },
+    {
+      "id": 22,
+      "subject": "decision:6c0c5c0a",
+      "predicate": "is",
+      "object": "Approval",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767495600,
+      "event_ids": []
+    },
+    {
+      "id": 23,
+      "subject": "decision:6c0c5c0a",
+      "predicate": "concerns",
+      "object": "option:south-site",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767495610,
+      "event_ids": []
+    },
+    {
+      "id": 24,
+      "subject": "decision:6c0c5c0a",
+      "predicate": "triggered_by",
+      "object": "request:fbe130ca",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767495620,
+      "event_ids": []
+    },
+    {
+      "id": 25,
+      "subject": "decision:6c0c5c0a",
+      "predicate": "has_rationale",
+      "object": "event:4",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:4"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 4,
+      "created_at": 1767495630,
+      "event_ids": [
+        4
+      ]
+    },
+    {
+      "id": 26,
+      "subject": "decision:6c0c5c0a",
+      "predicate": "has_priority",
+      "object": "high",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767495640,
+      "event_ids": []
+    },
+    {
+      "id": 27,
+      "subject": "decision:6c0c5c0a",
+      "predicate": "has_outcome",
+      "object": "accepted",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767495650,
+      "event_ids": []
+    },
+    {
+      "id": 28,
+      "subject": "decision:6c0c5c0a",
+      "predicate": "has_estimate",
+      "object": "0.75",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767495660,
+      "event_ids": []
+    },
+    {
+      "id": 29,
+      "subject": "decision:a8ed1739",
+      "predicate": "is",
+      "object": "Rejection",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767585600,
+      "event_ids": []
+    },
+    {
+      "id": 30,
+      "subject": "decision:a8ed1739",
+      "predicate": "concerns",
+      "object": "option:vendor-b",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767585610,
+      "event_ids": []
+    },
+    {
+      "id": 31,
+      "subject": "decision:a8ed1739",
+      "predicate": "triggered_by",
+      "object": "request:8db561d2",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767585620,
+      "event_ids": []
+    },
+    {
+      "id": 32,
+      "subject": "decision:a8ed1739",
+      "predicate": "has_rationale",
+      "object": "event:5",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:5"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 5,
+      "created_at": 1767585630,
+      "event_ids": [
+        5
+      ]
+    },
+    {
+      "id": 33,
+      "subject": "decision:a8ed1739",
+      "predicate": "has_priority",
+      "object": "medium",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767585640,
+      "event_ids": []
+    },
+    {
+      "id": 34,
+      "subject": "decision:a8ed1739",
+      "predicate": "has_outcome",
+      "object": "accepted",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "INVALIDATED",
+      "source_refs": [
+        "retired:entered for the wrong decision"
+      ],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767585650,
+      "event_ids": []
+    },
+    {
+      "id": 35,
+      "subject": "decision:a8ed1739",
+      "predicate": "has_outcome",
+      "object": "declined",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767592800,
+      "event_ids": []
+    },
+    {
+      "id": 36,
+      "subject": "decision:790bca9d",
+      "predicate": "is",
+      "object": "Deferral",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767657600,
+      "event_ids": []
+    },
+    {
+      "id": 37,
+      "subject": "decision:790bca9d",
+      "predicate": "concerns",
+      "object": "option:north-site",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767657610,
+      "event_ids": []
+    },
+    {
+      "id": 38,
+      "subject": "decision:790bca9d",
+      "predicate": "triggered_by",
+      "object": "request:1ef0fcf3",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767657620,
+      "event_ids": []
+    },
+    {
+      "id": 39,
+      "subject": "decision:790bca9d",
+      "predicate": "has_rationale",
+      "object": "event:6",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:6"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 6,
+      "created_at": 1767657630,
+      "event_ids": [
+        6
+      ]
+    },
+    {
+      "id": 40,
+      "subject": "decision:790bca9d",
+      "predicate": "has_priority",
+      "object": "low",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767657640,
+      "event_ids": []
+    },
+    {
+      "id": 41,
+      "subject": "decision:790bca9d",
+      "predicate": "has_outcome",
+      "object": "pending",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767657650,
+      "event_ids": []
+    },
+    {
+      "id": 42,
+      "subject": "decision:790bca9d",
+      "predicate": "has_estimate",
+      "object": "1.75",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767657660,
+      "event_ids": []
+    },
+    {
+      "id": 43,
+      "subject": "decision:4d6ee284",
+      "predicate": "is",
+      "object": "Approval",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767747600,
+      "event_ids": []
+    },
+    {
+      "id": 44,
+      "subject": "decision:4d6ee284",
+      "predicate": "concerns",
+      "object": "option:vendor-a",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767747610,
+      "event_ids": []
+    },
+    {
+      "id": 45,
+      "subject": "decision:4d6ee284",
+      "predicate": "triggered_by",
+      "object": "request:911a06ae",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767747620,
+      "event_ids": []
+    },
+    {
+      "id": 46,
+      "subject": "decision:4d6ee284",
+      "predicate": "has_rationale",
+      "object": "event:7",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:7"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 7,
+      "created_at": 1767747630,
+      "event_ids": [
+        7
+      ]
+    },
+    {
+      "id": 47,
+      "subject": "decision:4d6ee284",
+      "predicate": "has_priority",
+      "object": "high",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767747640,
+      "event_ids": []
+    },
+    {
+      "id": 48,
+      "subject": "decision:4d6ee284",
+      "predicate": "has_outcome",
+      "object": "accepted",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767747650,
+      "event_ids": []
+    },
+    {
+      "id": 49,
+      "subject": "decision:4d6ee284",
+      "predicate": "has_estimate",
+      "object": "1.0",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767747660,
+      "event_ids": []
+    },
+    {
+      "id": 50,
+      "subject": "decision:a43e4ba9",
+      "predicate": "is",
+      "object": "Rejection",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767837600,
+      "event_ids": []
+    },
+    {
+      "id": 51,
+      "subject": "decision:a43e4ba9",
+      "predicate": "concerns",
+      "object": "option:in-house",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767837610,
+      "event_ids": []
+    },
+    {
+      "id": 52,
+      "subject": "decision:a43e4ba9",
+      "predicate": "triggered_by",
+      "object": "request:ba6f978e",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767837620,
+      "event_ids": []
+    },
+    {
+      "id": 53,
+      "subject": "decision:a43e4ba9",
+      "predicate": "has_rationale",
+      "object": "event:8",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:8"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 8,
+      "created_at": 1767837630,
+      "event_ids": [
+        8
+      ]
+    },
+    {
+      "id": 54,
+      "subject": "decision:a43e4ba9",
+      "predicate": "has_priority",
+      "object": "medium",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767837640,
+      "event_ids": []
+    },
+    {
+      "id": 55,
+      "subject": "decision:a43e4ba9",
+      "predicate": "has_outcome",
+      "object": "declined",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767837650,
+      "event_ids": []
+    },
+    {
+      "id": 56,
+      "subject": "decision:a43e4ba9",
+      "predicate": "has_estimate",
+      "object": "2.75",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767837660,
+      "event_ids": []
+    },
+    {
+      "id": 57,
+      "subject": "decision:92ab01f1",
+      "predicate": "is",
+      "object": "Deferral",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767927600,
+      "event_ids": []
+    },
+    {
+      "id": 58,
+      "subject": "decision:92ab01f1",
+      "predicate": "concerns",
+      "object": "option:south-site",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767927610,
+      "event_ids": []
+    },
+    {
+      "id": 59,
+      "subject": "decision:92ab01f1",
+      "predicate": "triggered_by",
+      "object": "request:fbe130ca",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767927620,
+      "event_ids": []
+    },
+    {
+      "id": 60,
+      "subject": "decision:92ab01f1",
+      "predicate": "has_rationale",
+      "object": "event:9",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:9"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 9,
+      "created_at": 1767927630,
+      "event_ids": [
+        9
+      ]
+    },
+    {
+      "id": 61,
+      "subject": "decision:92ab01f1",
+      "predicate": "has_priority",
+      "object": "low",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767927640,
+      "event_ids": []
+    },
+    {
+      "id": 62,
+      "subject": "decision:92ab01f1",
+      "predicate": "has_outcome",
+      "object": "pending",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767927650,
+      "event_ids": []
+    },
+    {
+      "id": 63,
+      "subject": "decision:92ab01f1",
+      "predicate": "has_estimate",
+      "object": "2.0",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767927660,
+      "event_ids": []
+    },
+    {
+      "id": 64,
+      "subject": "decision:b23bf998",
+      "predicate": "is",
+      "object": "Approval",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768017600,
+      "event_ids": []
+    },
+    {
+      "id": 65,
+      "subject": "decision:b23bf998",
+      "predicate": "concerns",
+      "object": "option:vendor-b",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768017610,
+      "event_ids": []
+    },
+    {
+      "id": 66,
+      "subject": "decision:b23bf998",
+      "predicate": "triggered_by",
+      "object": "request:8db561d2",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768017620,
+      "event_ids": []
+    },
+    {
+      "id": 67,
+      "subject": "decision:b23bf998",
+      "predicate": "has_rationale",
+      "object": "event:10",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:10"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 10,
+      "created_at": 1768017630,
+      "event_ids": [
+        10
+      ]
+    },
+    {
+      "id": 68,
+      "subject": "decision:b23bf998",
+      "predicate": "has_priority",
+      "object": "low",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "SUPERSEDED",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1768017640,
+      "event_ids": []
+    },
+    {
+      "id": 69,
+      "subject": "decision:b23bf998",
+      "predicate": "has_priority",
+      "object": "high",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1768021200,
+      "event_ids": []
+    },
+    {
+      "id": 70,
+      "subject": "decision:b23bf998",
+      "predicate": "has_outcome",
+      "object": "accepted",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1768017650,
+      "event_ids": []
+    },
+    {
+      "id": 71,
+      "subject": "decision:b23bf998",
+      "predicate": "has_estimate",
+      "object": "1.25",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1768017660,
+      "event_ids": []
+    },
+    {
+      "id": 72,
+      "subject": "decision:e57c131f",
+      "predicate": "is",
+      "object": "Rejection",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768089600,
+      "event_ids": []
+    },
+    {
+      "id": 73,
+      "subject": "decision:e57c131f",
+      "predicate": "concerns",
+      "object": "option:north-site",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768089610,
+      "event_ids": []
+    },
+    {
+      "id": 74,
+      "subject": "decision:e57c131f",
+      "predicate": "triggered_by",
+      "object": "request:1ef0fcf3",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768089620,
+      "event_ids": []
+    },
+    {
+      "id": 75,
+      "subject": "decision:e57c131f",
+      "predicate": "has_rationale",
+      "object": "event:11",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:11"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 11,
+      "created_at": 1768089630,
+      "event_ids": [
+        11
+      ]
+    },
+    {
+      "id": 76,
+      "subject": "decision:e57c131f",
+      "predicate": "has_priority",
+      "object": "medium",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1768089640,
+      "event_ids": []
+    },
+    {
+      "id": 77,
+      "subject": "decision:e57c131f",
+      "predicate": "has_outcome",
+      "object": "declined",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1768089650,
+      "event_ids": []
+    },
+    {
+      "id": 78,
+      "subject": "decision:e57c131f",
+      "predicate": "has_estimate",
+      "object": "0.5",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1768089660,
+      "event_ids": []
+    },
+    {
+      "id": 79,
+      "subject": "decision:38c28f14",
+      "predicate": "is",
+      "object": "Deferral",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768179600,
+      "event_ids": []
+    },
+    {
+      "id": 80,
+      "subject": "decision:38c28f14",
+      "predicate": "concerns",
+      "object": "option:vendor-a",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768179610,
+      "event_ids": []
+    },
+    {
+      "id": 81,
+      "subject": "decision:38c28f14",
+      "predicate": "triggered_by",
+      "object": "request:911a06ae",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768179620,
+      "event_ids": []
+    },
+    {
+      "id": 82,
+      "subject": "decision:38c28f14",
+      "predicate": "has_rationale",
+      "object": "event:12",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:12"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 12,
+      "created_at": 1768179630,
+      "event_ids": [
+        12
+      ]
+    },
+    {
+      "id": 83,
+      "subject": "decision:38c28f14",
+      "predicate": "has_priority",
+      "object": "low",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1768179640,
+      "event_ids": []
+    },
+    {
+      "id": 84,
+      "subject": "decision:38c28f14",
+      "predicate": "has_outcome",
+      "object": "pending",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1768179650,
+      "event_ids": []
+    },
+    {
+      "id": 85,
+      "subject": "decision:38c28f14",
+      "predicate": "has_estimate",
+      "object": "2.25",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1768179660,
+      "event_ids": []
+    },
+    {
+      "id": 86,
+      "subject": "decision:bc084586",
+      "predicate": "is",
+      "object": "Approval",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768269600,
+      "event_ids": []
+    },
+    {
+      "id": 87,
+      "subject": "decision:bc084586",
+      "predicate": "concerns",
+      "object": "option:in-house",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768269610,
+      "event_ids": []
+    },
+    {
+      "id": 88,
+      "subject": "decision:bc084586",
+      "predicate": "triggered_by",
+      "object": "request:ba6f978e",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768269620,
+      "event_ids": []
+    },
+    {
+      "id": 89,
+      "subject": "decision:bc084586",
+      "predicate": "has_rationale",
+      "object": "event:13",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:13"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 13,
+      "created_at": 1768269630,
+      "event_ids": [
+        13
+      ]
+    },
+    {
+      "id": 90,
+      "subject": "decision:bc084586",
+      "predicate": "has_priority",
+      "object": "high",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1768269640,
+      "event_ids": []
+    },
+    {
+      "id": 91,
+      "subject": "decision:1ad6d789",
+      "predicate": "is",
+      "object": "Rejection",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768359600,
+      "event_ids": []
+    },
+    {
+      "id": 92,
+      "subject": "decision:1ad6d789",
+      "predicate": "concerns",
+      "object": "option:south-site",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768359610,
+      "event_ids": []
+    },
+    {
+      "id": 93,
+      "subject": "decision:1ad6d789",
+      "predicate": "triggered_by",
+      "object": "request:fbe130ca",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768359620,
+      "event_ids": []
+    },
+    {
+      "id": 94,
+      "subject": "decision:1ad6d789",
+      "predicate": "has_rationale",
+      "object": "event:14",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:14"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 14,
+      "created_at": 1768359630,
+      "event_ids": [
+        14
+      ]
+    },
+    {
+      "id": 95,
+      "subject": "decision:1ad6d789",
+      "predicate": "has_priority",
+      "object": "medium",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1768359640,
+      "event_ids": []
+    },
+    {
+      "id": 96,
+      "subject": "decision:1857577a",
+      "predicate": "is",
+      "object": "Deferral",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768449600,
+      "event_ids": []
+    },
+    {
+      "id": 97,
+      "subject": "decision:1857577a",
+      "predicate": "concerns",
+      "object": "option:vendor-b",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768449610,
+      "event_ids": []
+    },
+    {
+      "id": 98,
+      "subject": "decision:1857577a",
+      "predicate": "triggered_by",
+      "object": "request:8db561d2",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768449620,
+      "event_ids": []
+    },
+    {
+      "id": 99,
+      "subject": "decision:1857577a",
+      "predicate": "has_rationale",
+      "object": "event:15",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:15"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 15,
+      "created_at": 1768449630,
+      "event_ids": [
+        15
+      ]
+    },
+    {
+      "id": 100,
+      "subject": "decision:1857577a",
+      "predicate": "has_priority",
+      "object": "low",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1768449640,
+      "event_ids": []
+    },
+    {
+      "id": 101,
+      "subject": "decision:a43e4ba9",
+      "predicate": "supersedes",
+      "object": "decision:4d6ee284",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767830500,
+      "event_ids": []
+    },
+    {
+      "id": 102,
+      "subject": "decision:bc084586",
+      "predicate": "supersedes",
+      "object": "decision:38c28f14",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1768262500,
+      "event_ids": []
+    },
+    {
+      "id": 103,
+      "subject": "decision:95dcc1cf",
+      "predicate": "has_outcome",
+      "object": "accepted",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "SUPERSEDED",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767399300,
+      "event_ids": []
+    },
+    {
+      "id": 104,
+      "subject": "team:planning",
+      "predicate": "has",
+      "object": "The planning group meets weekly. Decisions record the option they concern, the request that triggered them and a rationale event; outcomes are filled in later.",
+      "provenance": "USER_ASSERTED",
+      "confidence": 1.0,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1767229200,
+      "event_ids": []
+    },
+    {
+      "id": 105,
+      "subject": "team:planning",
+      "predicate": "owns",
+      "object": "option:in-house",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": null,
+      "created_at": 1767229300,
+      "event_ids": []
+    }
+  ],
+  "events": [
+    {
+      "id": 1,
+      "session_id": "invented-session",
+      "kind": "decision",
+      "payload": "Invented rationale 1: the team compared the options and chose this one.",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1767225480,
+      "scope": "proj/example"
+    },
+    {
+      "id": 2,
+      "session_id": "invented-session",
+      "kind": "decision",
+      "payload": "Invented rationale 2: the team compared the options and chose this one.",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1767315480,
+      "scope": "proj/example"
+    },
+    {
+      "id": 3,
+      "session_id": "invented-session",
+      "kind": "decision",
+      "payload": "Invented rationale 3: the team compared the options and chose this one.",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1767405480,
+      "scope": "proj/example"
+    },
+    {
+      "id": 4,
+      "session_id": "invented-session",
+      "kind": "decision",
+      "payload": "Invented rationale 4: the team compared the options and chose this one.",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1767495480,
+      "scope": "proj/example"
+    },
+    {
+      "id": 5,
+      "session_id": "invented-session",
+      "kind": "decision",
+      "payload": "Invented rationale 5: the team compared the options and chose this one.",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1767585480,
+      "scope": "proj/example"
+    },
+    {
+      "id": 6,
+      "session_id": "invented-session",
+      "kind": "decision",
+      "payload": "Invented rationale 6: the team compared the options and chose this one.",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1767657480,
+      "scope": "proj/example"
+    },
+    {
+      "id": 7,
+      "session_id": "invented-session",
+      "kind": "decision",
+      "payload": "Invented rationale 7: the team compared the options and chose this one.",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1767747480,
+      "scope": "proj/example"
+    },
+    {
+      "id": 8,
+      "session_id": "invented-session",
+      "kind": "decision",
+      "payload": "Invented rationale 8: the team compared the options and chose this one.",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1767837480,
+      "scope": "proj/example"
+    },
+    {
+      "id": 9,
+      "session_id": "invented-session",
+      "kind": "decision",
+      "payload": "Invented rationale 9: the team compared the options and chose this one.",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1767927480,
+      "scope": "proj/example"
+    },
+    {
+      "id": 10,
+      "session_id": "invented-session",
+      "kind": "decision",
+      "payload": "Invented rationale 10: the team compared the options and chose this one.",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1768017480,
+      "scope": "proj/example"
+    },
+    {
+      "id": 11,
+      "session_id": "invented-session",
+      "kind": "decision",
+      "payload": "Invented rationale 11: the team compared the options and chose this one.",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1768089480,
+      "scope": "proj/example"
+    },
+    {
+      "id": 12,
+      "session_id": "invented-session",
+      "kind": "decision",
+      "payload": "Invented rationale 12: the team compared the options and chose this one.",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1768179480,
+      "scope": "proj/example"
+    },
+    {
+      "id": 13,
+      "session_id": "invented-session",
+      "kind": "decision",
+      "payload": "Invented rationale 13: the team compared the options and chose this one.",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1768269480,
+      "scope": "proj/example"
+    },
+    {
+      "id": 14,
+      "session_id": "invented-session",
+      "kind": "decision",
+      "payload": "Invented rationale 14: the team compared the options and chose this one.",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1768359480,
+      "scope": "proj/example"
+    },
+    {
+      "id": 15,
+      "session_id": "invented-session",
+      "kind": "decision",
+      "payload": "Invented rationale 15: the team compared the options and chose this one.",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1768449480,
+      "scope": "proj/example"
+    }
+  ],
+  "contradictions": [
+    {
+      "id": 1,
+      "claim_id": 103,
+      "reason": "invented conflicting evidence",
+      "new_claim_id": null
+    }
+  ],
+  "predicates": [
+    {
+      "name": "concerns",
+      "parent": null,
+      "cardinality": "multi"
+    },
+    {
+      "name": "has",
+      "parent": null,
+      "cardinality": "multi"
+    },
+    {
+      "name": "has_estimate",
+      "parent": null,
+      "cardinality": "single"
+    },
+    {
+      "name": "has_outcome",
+      "parent": null,
+      "cardinality": "single"
+    },
+    {
+      "name": "has_priority",
+      "parent": null,
+      "cardinality": "single"
+    },
+    {
+      "name": "has_rationale",
+      "parent": null,
+      "cardinality": "multi"
+    },
+    {
+      "name": "is",
+      "parent": null,
+      "cardinality": "multi"
+    },
+    {
+      "name": "owns",
+      "parent": null,
+      "cardinality": "multi"
+    },
+    {
+      "name": "supersedes",
+      "parent": null,
+      "cardinality": "multi"
+    },
+    {
+      "name": "triggered_by",
+      "parent": null,
+      "cardinality": "multi"
+    }
+  ]
+}

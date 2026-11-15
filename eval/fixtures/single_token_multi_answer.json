@@ -1,0 +1,14 @@
+{
+  "name": "single_token_multi_answer",
+  "version": 1,
+  "description": "Single-token query where multiple claims are intentionally relevant, guarding against over-aggressive one-word caps",
+  "claims": [
+    {"subject": "project", "predicate": "language", "object": "Rust"},
+    {"subject": "user", "predicate": "likes", "object": "Rust"},
+    {"subject": "benchmark", "predicate": "language", "object": "Rust"},
+    {"subject": "project", "predicate": "name", "object": "Aver"}
+  ],
+  "queries": [
+    {"query": "Rust", "relevant_indices": [0, 1, 2], "top_k": 5}
+  ]
+}

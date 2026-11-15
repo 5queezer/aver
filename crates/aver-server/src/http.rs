@@ -1,0 +1,602 @@
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+
+use anyhow::Context;
+
+use axum::{
+    Form, Json, Router,
+    body::Body,
+    extract::{ConnectInfo, Query, rejection::FormRejection},
+    http::{HeaderValue, Request, StatusCode, header},
+    middleware::Next,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use rmcp::transport::{
+    StreamableHttpServerConfig,
+    streamable_http_server::{session::local::LocalSessionManager, tower::StreamableHttpService},
+};
+use serde::Deserialize;
+use tower_http::cors::{Any as CorsAny, CorsLayer};
+use url::Url;
+
+use crate::{
+    auth::{ACCESS_TOKEN_TTL_SECS, AuthDb, hash_token},
+    config::ServerConfig,
+    consent::{
+        ConsentDeps, handle_authorize_decision, handle_loopback_get_authorize,
+        handle_revoke_consent,
+    },
+    mcp::AverMcpService,
+    oauth::authorization_server_metadata,
+    scope_resolution::resolve_scope,
+    scopes::parse_scope_list_lossy,
+    tools::AverTools,
+};
+
+/// Per-request bag of OAuth scopes granted by the bearer token. Inserted as
+/// an Axum extension by [`validate_bearer_token`] and read inside the MCP
+/// service via the `http::request::Parts` extension forwarded by rmcp.
+#[derive(Debug, Clone, Default)]
+pub struct GrantedScopes(pub Vec<crate::scopes::Scope>);
+
+/// OAuth `client_id` the bearer token was issued to. Inserted by
+/// [`validate_bearer_token`] only when the token row carries one; the MCP
+/// service stamps it as the default `agent_id` on writes.
+#[derive(Debug, Clone)]
+pub struct AuthenticatedClient(pub String);
+
+#[derive(Clone)]
+struct HttpState {
+    config: ServerConfig,
+    auth_db: Arc<Mutex<AuthDb>>,
+    consent_deps: Arc<ConsentDeps>,
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    if matches!(host, "localhost" | "127.0.0.1" | "::1") {
+        return true;
+    }
+    Url::parse(&format!("http://{host}"))
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1"))
+}
+
+pub fn build_router(config: ServerConfig) -> anyhow::Result<Router> {
+    let tools = AverTools::open(&config.memory_dir)?;
+    build_router_with_tools(config, tools)
+}
+
+/// [`build_router`] over an already-open [`AverTools`], so tests and the BEAM
+/// parity harness can inject clients (for example a deterministic
+/// embedding client) that the environment would otherwise configure.
+pub fn build_router_with_tools(config: ServerConfig, tools: AverTools) -> anyhow::Result<Router> {
+    let state = http_state(config)?;
+    let protected_api = Router::new().route("/api/health", get(health)).route_layer(
+        axum::middleware::from_fn_with_state(state.clone(), validate_bearer_token),
+    );
+
+    // Open ONE memory store for the whole process and share it across MCP
+    // sessions. `StreamableHttpService::new` runs the factory once per
+    // session; opening the store inside the factory would give every session
+    // its own SQLite connection on the same `memory_dir`, breaking the
+    // single-writer invariant (log rotation and claim-id pre-allocation
+    // race). rusqlite connections are Send-but-not-Sync, so the store sits
+    // behind the same `Arc<Mutex<_>>` pattern used for `AuthDb`; per-session
+    // state is limited to auth/scope context carried in request extensions.
+    let shared_tools = Arc::new(Mutex::new(tools));
+    let base_url = state.config.base_url.clone();
+    let mcp_service: StreamableHttpService<AverMcpService, LocalSessionManager> =
+        StreamableHttpService::new(
+            move || {
+                Ok(AverMcpService::from_shared_tools(
+                    shared_tools.clone(),
+                    base_url.clone(),
+                ))
+            },
+            LocalSessionManager::default().into(),
+            StreamableHttpServerConfig::default(),
+        );
+    let cors = CorsLayer::new()
+        .allow_methods(CorsAny)
+        .allow_headers(CorsAny);
+    let cors = if state.config.cors_origins.is_empty() {
+        if is_loopback_host(&state.config.host) {
+            cors.allow_origin(CorsAny)
+        } else {
+            cors.allow_origin(state.config.base_url.parse::<HeaderValue>()?)
+        }
+    } else {
+        let origins = state
+            .config
+            .cors_origins
+            .iter()
+            .map(|origin| origin.parse::<HeaderValue>())
+            .collect::<Result<Vec<_>, _>>()?;
+        cors.allow_origin(origins)
+    };
+    let protected_mcp = Router::new()
+        .nest_service("/mcp", mcp_service)
+        .route_layer(axum::middleware::from_fn(resolve_request_scope))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            validate_bearer_token,
+        ))
+        .layer(cors);
+
+    Ok(oauth_routes()
+        .merge(protected_api)
+        .merge(protected_mcp)
+        .with_state(state))
+}
+
+fn http_state(config: ServerConfig) -> anyhow::Result<HttpState> {
+    let auth_db = Arc::new(Mutex::new(AuthDb::open(&config.auth_db_path)?));
+    let consent_deps = Arc::new(ConsentDeps {
+        auth_db: auth_db.clone(),
+        base_url: config.base_url.clone(),
+        trusted_auth_header: config.trusted_auth_header.clone(),
+    });
+    Ok(HttpState {
+        config,
+        auth_db,
+        consent_deps,
+    })
+}
+
+/// Discovery, OAuth and liveness routes shared by the MCP server and the
+/// graph view.
+fn oauth_routes() -> Router<HttpState> {
+    Router::new()
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(oauth_metadata),
+        )
+        // Unauthenticated liveness probe for systemd/deploy scripts; the
+        // bearer-gated `/api/health` stays for authenticated clients.
+        .route("/healthz", get(health))
+        .route("/oauth/register", post(oauth_register))
+        .route("/oauth/authorize", get(oauth_authorize))
+        .route("/oauth/authorize/decision", post(oauth_authorize_decision))
+        .route("/oauth/consent/revoke", post(oauth_consent_revoke))
+        .route("/oauth/token", post(oauth_token))
+}
+
+/// `--graph-view`: the OAuth routes plus the graph page and one bearer-gated,
+/// read-only snapshot endpoint. Serves no MCP and never opens the store for
+/// writing; refuses an auth DB inside `memory_dir` so it adds no data there.
+/// SQLite may still create or update the store's `-wal`/`-shm` coordination
+/// files, which is why it must run as the store owner or root.
+pub fn build_graph_view_router(config: ServerConfig) -> anyhow::Result<Router> {
+    let memory_dir = std::fs::canonicalize(&config.memory_dir)
+        .with_context(|| format!("graph view: memory dir {} not found", config.memory_dir))?;
+    let db_path = memory_dir.join("db.sqlite");
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // A read-only WAL reader still creates `-shm`/`-wal` when no writer has
+        // them open. As root SQLite gives them the database's owner; as any
+        // other user they would be foreign-owned and lock the writer out.
+        let me = std::fs::metadata("/proc/self")?.uid();
+        let owner = std::fs::metadata(&db_path)
+            .with_context(|| format!("graph view: {} not found", db_path.display()))?
+            .uid();
+        anyhow::ensure!(
+            me == 0 || me == owner,
+            "graph view must run as the store owner (uid {owner}) or root: SQLite may create \
+             WAL/shm files next to db.sqlite, and files owned by another user block its writer"
+        );
+    }
+    crate::graph_view::snapshot(&db_path)
+        .with_context(|| format!("graph view: cannot read {}", db_path.display()))?;
+    let auth_db = std::path::absolute(&config.auth_db_path)?;
+    let auth_dir = auth_db
+        .parent()
+        .and_then(|dir| std::fs::canonicalize(dir).ok())
+        .unwrap_or_else(|| auth_db.clone());
+    anyhow::ensure!(
+        !auth_dir.starts_with(&memory_dir),
+        "graph view keeps its auth DB out of AVER_MEMORY_DIR (it never writes memory data there); \
+         set AVER_AUTH_DB_PATH to a file outside it"
+    );
+    let state = http_state(config)?;
+    let snapshot = Router::new()
+        .route(
+            "/api/graph",
+            get(move |request: Request<Body>| graph_snapshot(db_path.clone(), request)),
+        )
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            validate_bearer_token,
+        ));
+    Ok(oauth_routes()
+        .route("/graph", get(graph_page))
+        .merge(snapshot)
+        .with_state(state))
+}
+
+const GRAPH_CSP: &str = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
+    connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+/// The contrib page with its offline `connect-src 'none'` meta policy relaxed
+/// to same-origin, so it can fetch the token and snapshot endpoints.
+pub fn graph_page_html() -> String {
+    include_str!("../../../contrib/graph/graph.html").replacen(
+        "connect-src 'none'",
+        "connect-src 'self'",
+        1,
+    )
+}
+
+async fn graph_page() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CONTENT_SECURITY_POLICY, GRAPH_CSP),
+            (header::CACHE_CONTROL, "no-store"),
+            (header::REFERRER_POLICY, "no-referrer"),
+        ],
+        graph_page_html(),
+    )
+        .into_response()
+}
+
+async fn graph_snapshot(db_path: std::path::PathBuf, request: Request<Body>) -> Response {
+    let granted = request
+        .extensions()
+        .get::<GrantedScopes>()
+        .is_some_and(|g| g.0.contains(&crate::scopes::Scope::ClaimsRead));
+    if !granted {
+        return (StatusCode::FORBIDDEN, "claims:read scope required").into_response();
+    }
+    match tokio::task::spawn_blocking(move || crate::graph_view::snapshot(&db_path)).await {
+        Ok(Ok(snapshot)) => (
+            [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+            Json(snapshot),
+        )
+            .into_response(),
+        Ok(Err(err)) => {
+            eprintln!("graph view snapshot failed: {err:#}");
+            (StatusCode::SERVICE_UNAVAILABLE, "snapshot unavailable").into_response()
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn oauth_metadata(
+    axum::extract::State(state): axum::extract::State<HttpState>,
+) -> Json<serde_json::Value> {
+    Json(authorization_server_metadata(&state.config.base_url))
+}
+
+async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// ADR-0022 middleware: read X-Aver-Scope and X-Aver-Scope-Default headers
+/// from the request, walk the precedence chain (header > default header >
+/// AVER_DEFAULT_SCOPE env > "global"), and insert the resolved scope as an
+/// Axum extension. The MCP handler reads it via http::request::Parts in
+/// the rmcp request context.
+///
+/// Malformed sources fail fast with HTTP 400 — silent fallback to "global"
+/// would re-introduce the cross-repo pollution this layer exists to fix.
+async fn resolve_request_scope(request: Request<Body>, next: Next) -> Response {
+    let header_scope = request
+        .headers()
+        .get("x-aver-scope")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let header_default = request
+        .headers()
+        .get("x-aver-scope-default")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let env_default = std::env::var("AVER_DEFAULT_SCOPE").ok();
+
+    let resolved = resolve_scope(
+        None,
+        header_scope.as_deref(),
+        header_default.as_deref(),
+        env_default.as_deref(),
+    );
+    match resolved {
+        Ok(resolved) => {
+            let mut request = request;
+            request.extensions_mut().insert(resolved);
+            next.run(request).await
+        }
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            format!("invalid scope header or env: {err}"),
+        )
+            .into_response(),
+    }
+}
+
+/// RFC 6750 §3: bearer-protected surfaces must answer 401s with a
+/// `WWW-Authenticate: Bearer` challenge so clients know how to authenticate.
+fn unauthorized_bearer() -> Response {
+    let mut response = StatusCode::UNAUTHORIZED.into_response();
+    response
+        .headers_mut()
+        .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+    response
+}
+
+async fn validate_bearer_token(
+    axum::extract::State(state): axum::extract::State<HttpState>,
+    mut request: Request<Body>,
+    next: Next,
+) -> impl IntoResponse {
+    let token = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    let Some(token) = token else {
+        return unauthorized_bearer();
+    };
+    let grant = {
+        let Ok(db) = state.auth_db.lock() else {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        match db.access_token_grant(&hash_token(token)) {
+            Ok(Some(grant)) => grant,
+            Ok(None) => return unauthorized_bearer(),
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
+    };
+    // Parse leniently: an unknown token in the persisted column is treated
+    // as "no implicit access" — valid scopes still apply.
+    let granted = parse_scope_list_lossy(&grant.granted_scopes);
+    request.extensions_mut().insert(GrantedScopes(granted));
+    if let Some(client_id) = grant.client_id {
+        request
+            .extensions_mut()
+            .insert(AuthenticatedClient(client_id));
+    }
+    next.run(request).await.into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct RegisterRequest {
+    #[serde(default)]
+    client_name: Option<String>,
+    redirect_uris: Vec<String>,
+}
+
+async fn oauth_register(
+    axum::extract::State(state): axum::extract::State<HttpState>,
+    Json(request): Json<RegisterRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
+    let db = state
+        .auth_db
+        .lock()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let client = db
+        .register_client(
+            request.client_name.as_deref().unwrap_or("Aver MCP client"),
+            &request.redirect_uris,
+        )
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "client_id": client.client_id,
+            "client_name": client.client_name,
+            "redirect_uris": client.redirect_uris,
+            "token_endpoint_auth_method": "none",
+        })),
+    ))
+}
+
+/// Dispatcher for `GET /oauth/authorize`.
+///
+/// Profile A (loopback): delegate to the browser consent flow in
+/// [`crate::consent`]. Loopback callers are always accepted.
+///
+/// Non-loopback callers are accepted when `AVER_TRUSTED_AUTH_HEADER` is
+/// configured and authenticated; otherwise we keep a terminal HTML 403.
+///
+/// `ConnectInfo<SocketAddr>` is also required to avoid bypasses in tests and direct
+/// handler calls, so absence is treated as non-loopback and rejected.
+async fn oauth_authorize(
+    axum::extract::State(state): axum::extract::State<HttpState>,
+    request: Request<Body>,
+) -> Response {
+    let connect = match request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .copied()
+    {
+        Some(conn) => conn,
+        None => return non_loopback_authorize_rejected(),
+    };
+
+    let (mut parts, _body) = request.into_parts();
+    let headers = std::mem::take(&mut parts.headers);
+    let query_str = parts.uri.query().unwrap_or("");
+    let query: crate::consent::AuthorizeQuery = match serde_urlencoded::from_str(query_str) {
+        Ok(q) => q,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, "invalid /oauth/authorize query").into_response();
+        }
+    };
+    handle_loopback_get_authorize(
+        axum::extract::State(state.consent_deps.clone()),
+        connect,
+        Query(query),
+        headers,
+    )
+    .await
+}
+
+/// Renders the terminal HTML 403 served to non-loopback /oauth/authorize
+/// callers. Kept as a free function so the test suite can pin the response
+/// shape independently of the dispatcher wiring.
+fn html_response_unavailable() -> Response {
+    let body = concat!(
+        "<!doctype html><html><head><meta charset=\"utf-8\">",
+        "<title>Authorization unavailable</title>",
+        "<style>body{font-family:system-ui,sans-serif;max-width:480px;",
+        "margin:4em auto;padding:1em;color:#111}h1{font-size:1.2em}",
+        "p{color:#444}</style></head><body>",
+        "<h1>Authorization unavailable</h1>",
+        "<p>Authorization requires loopback connectivity or a trusted",
+        "header-backed identity.</p>",
+        "</body></html>",
+    );
+    let mut response = (StatusCode::FORBIDDEN, body).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    response
+}
+
+fn non_loopback_authorize_rejected() -> Response {
+    html_response_unavailable()
+}
+
+async fn oauth_authorize_decision(
+    axum::extract::State(state): axum::extract::State<HttpState>,
+    request: Request<Body>,
+) -> Response {
+    // Manually extract ConnectInfo so we can fail fast if caller context is
+    // unavailable (for direct-router tests and unusual invocation paths).
+    let connect_info = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .copied();
+    let Some(connect) = connect_info else {
+        return html_response_unavailable();
+    };
+
+    let (mut parts, body) = request.into_parts();
+    let headers = std::mem::take(&mut parts.headers);
+    let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let form: crate::consent::DecisionForm = match serde_urlencoded::from_bytes(&bytes) {
+        Ok(f) => f,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    handle_authorize_decision(
+        axum::extract::State(state.consent_deps.clone()),
+        connect,
+        headers,
+        Form(form),
+    )
+    .await
+}
+
+/// Dispatcher for `POST /oauth/consent/revoke`. Same shape as
+/// [`oauth_authorize_decision`]: fail closed when ConnectInfo is absent.
+async fn oauth_consent_revoke(
+    axum::extract::State(state): axum::extract::State<HttpState>,
+    request: Request<Body>,
+) -> Response {
+    let connect_info = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .copied();
+    let Some(connect) = connect_info else {
+        return html_response_unavailable();
+    };
+
+    let (mut parts, body) = request.into_parts();
+    let headers = std::mem::take(&mut parts.headers);
+    let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let form: crate::consent::RevokeConsentForm = match serde_urlencoded::from_bytes(&bytes) {
+        Ok(f) => f,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    handle_revoke_consent(
+        axum::extract::State(state.consent_deps.clone()),
+        connect,
+        headers,
+        Form(form),
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize)]
+struct TokenRequest {
+    grant_type: String,
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    client_id: String,
+    #[serde(default)]
+    code_verifier: String,
+    #[serde(default)]
+    redirect_uri: String,
+    #[serde(default)]
+    refresh_token: String,
+}
+
+/// RFC 6749 §5.2 error body for the token endpoint.
+fn token_error(status: StatusCode, error: &'static str) -> (StatusCode, Json<serde_json::Value>) {
+    (status, Json(serde_json::json!({ "error": error })))
+}
+
+async fn oauth_token(
+    axum::extract::State(state): axum::extract::State<HttpState>,
+    request: Result<Form<TokenRequest>, FormRejection>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let Form(request) =
+        request.map_err(|_| token_error(StatusCode::BAD_REQUEST, "invalid_request"))?;
+    let db = state
+        .auth_db
+        .lock()
+        .map_err(|_| token_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error"))?;
+    let tokens = match request.grant_type.as_str() {
+        "authorization_code" => {
+            if request.code.is_empty()
+                || request.client_id.is_empty()
+                || request.code_verifier.is_empty()
+                || request.redirect_uri.is_empty()
+            {
+                return Err(token_error(StatusCode::BAD_REQUEST, "invalid_request"));
+            }
+            db.exchange_authorization_code_for_tokens(
+                &request.code,
+                &request.client_id,
+                &request.code_verifier,
+                &request.redirect_uri,
+            )
+            .map_err(|_| token_error(StatusCode::BAD_REQUEST, "invalid_grant"))?
+        }
+        "refresh_token" => {
+            if request.refresh_token.is_empty() {
+                return Err(token_error(StatusCode::BAD_REQUEST, "invalid_request"));
+            }
+            db.refresh_access_token(&request.refresh_token)
+                .map_err(|_| token_error(StatusCode::BAD_REQUEST, "invalid_grant"))?
+        }
+        _ => {
+            return Err(token_error(
+                StatusCode::BAD_REQUEST,
+                "unsupported_grant_type",
+            ));
+        }
+    };
+    Ok((
+        [
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (header::PRAGMA, HeaderValue::from_static("no-cache")),
+        ],
+        Json(serde_json::json!({
+            "access_token": tokens.access_token,
+            "refresh_token": tokens.refresh_token,
+            "token_type": "Bearer",
+            "expires_in": ACCESS_TOKEN_TTL_SECS,
+        })),
+    ))
+}

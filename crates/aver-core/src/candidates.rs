@@ -1,0 +1,451 @@
+//! Candidate claims (staging, promotion, rejection) and `ClaimExtractor`.
+
+use std::str::FromStr;
+
+use rusqlite::{OptionalExtension, params, types::Type};
+
+use crate::apply::apply;
+use crate::candidate_decision;
+use crate::error::Error;
+use crate::log::{LogRecord, append_jsonl};
+use crate::store::Store;
+use crate::types::{
+    CandidateClaim, CandidateClaimDraft, CandidateWrite, EpisodicEvent, Provenance,
+};
+use crate::validation::{
+    validate_candidate_status_filter, validate_claim_field, validate_event_field,
+    validate_rejection_reason, validate_scope,
+};
+pub trait ClaimExtractor {
+    fn extract(&self, events: &[EpisodicEvent]) -> Result<Vec<CandidateClaimDraft>, Error>;
+}
+
+#[derive(Debug, Clone)]
+pub struct MockClaimExtractor {
+    drafts: Vec<CandidateClaimDraft>,
+}
+
+impl MockClaimExtractor {
+    pub fn new(drafts: Vec<CandidateClaimDraft>) -> Self {
+        Self { drafts }
+    }
+}
+
+impl ClaimExtractor for MockClaimExtractor {
+    fn extract(&self, _events: &[EpisodicEvent]) -> Result<Vec<CandidateClaimDraft>, Error> {
+        Ok(self.drafts.clone())
+    }
+}
+
+impl Store {
+    pub fn propose_claims_from_extractor(
+        &self,
+        session_id: &str,
+        extractor: &impl ClaimExtractor,
+    ) -> Result<Vec<i64>, Error> {
+        let events = self.list_events_for_session(session_id)?;
+        let drafts = extractor.extract(&events)?;
+        let mut candidate_ids = Vec::new();
+        for draft in drafts {
+            candidate_ids.push(self.propose_candidate_claim(CandidateWrite::new(
+                draft.event_id,
+                draft.subject,
+                draft.predicate,
+                draft.object,
+            ))?);
+        }
+        Ok(candidate_ids)
+    }
+
+    /// Stage one candidate claim (ADR-0005/0014). The scope rides through
+    /// `promote_candidate_claim` onto the durable claim — there is no scope
+    /// override at promotion time.
+    pub fn propose_candidate_claim(&self, write: CandidateWrite) -> Result<i64, Error> {
+        let CandidateWrite {
+            event_id,
+            subject,
+            predicate,
+            object,
+            scope,
+        } = write;
+        if !self.event_exists(event_id)? {
+            return Err(Error::MissingEventProvenance { event_id });
+        }
+        validate_claim_field("subject", &subject)?;
+        validate_claim_field("predicate", &predicate)?;
+        validate_claim_field("object", &object)?;
+        validate_scope(&scope)?;
+        self.privacy_filter_recording(&format!("{subject} {predicate} {object}"))?;
+        for possible_path in [&subject, &object] {
+            self.privacy_filter_path_recording(possible_path)?;
+        }
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        // The candidate id is writer-minted (ADR-0026) so the append-only log
+        // can pin it (ADR-0005). Candidate records go to the episodic
+        // log: they FK-reference episodic_events, which replay in the same
+        // phase (ADR-0019 §4 input order replays events.jsonl after
+        // log.jsonl, so log.jsonl must not carry event-dependent records).
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<i64, Error> {
+            let candidate_id = self.ids.mint();
+            let record = LogRecord::ProposeCandidateClaim {
+                ts: now,
+                candidate_id,
+                event_id,
+                subject,
+                predicate,
+                object,
+                scope,
+            };
+            append_jsonl(&self.event_log_path, &record)?;
+            apply(&self.conn, &record)?;
+            Ok(candidate_id)
+        })();
+        match result {
+            Ok(candidate_id) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(candidate_id)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
+    }
+
+    fn event_exists(&self, event_id: i64) -> Result<bool, Error> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM episodic_events WHERE id = ?1",
+                [event_id],
+                |_| Ok(()),
+            )
+            .is_ok())
+    }
+
+    pub fn promote_candidate_claim(&self, candidate_id: i64) -> Result<i64, Error> {
+        self.promote_candidate_claim_inner(candidate_id, None, None)
+    }
+
+    /// `attribution` overrides the candidate's provenance/confidence on the
+    /// durable claim; `decision` is recorded on the promotion log line
+    /// (ADR-0024).
+    pub(crate) fn promote_candidate_claim_inner(
+        &self,
+        candidate_id: i64,
+        attribution: Option<(Provenance, f64)>,
+        decision: Option<candidate_decision::DecisionLogField<'_>>,
+    ) -> Result<i64, Error> {
+        let candidate = self.get_candidate_claim(candidate_id)?;
+        if candidate.status == "REJECTED" {
+            return Err(Error::InvalidCandidateStatus {
+                candidate_id,
+                status: candidate.status,
+            });
+        }
+        if let Some(claim_id) = candidate.promoted_claim_id {
+            return Ok(claim_id);
+        }
+        let event = self.get_event(candidate.event_id)?;
+        let source = format!("event:{}", event.id);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let (provenance, confidence) =
+            attribution.unwrap_or((candidate.provenance, candidate.confidence));
+
+        // ADR-0018: ontology check BEFORE any log append. Promoting an
+        // extractor candidate with an unknown predicate must fail cleanly;
+        // appending the add_claim line first would poison the log with a
+        // record whose projection INSERT later fails at the ontology
+        // trigger. (The candidate content was privacy-filtered at proposal
+        // time, so there is nothing new to filter here.)
+        self.validate_ontology(&candidate.predicate, provenance)?;
+
+        // Log appends and projection updates in one write transaction (same
+        // race class as insert_claim). Log-first ordering is preserved: both
+        // log lines precede the projection writes.
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<i64, Error> {
+            let claim_id = self.ids.mint();
+            let claim = LogRecord::AddClaim {
+                ts: now,
+                claim_id,
+                subject: candidate.subject,
+                predicate: candidate.predicate,
+                object_kind: Some(crate::ObjectKind::classify(&candidate.object)),
+                object: candidate.object,
+                event_id: None,
+                source,
+                agent_id: event.agent_id,
+                agent_kind: event.agent_kind.as_str().to_string(),
+                confidence: provenance.cap_confidence(confidence),
+                provenance: Some(provenance.as_str().to_string()),
+                scope: candidate.scope,
+            };
+            append_jsonl(&self.log_path, &claim)?;
+            // The promotion marker joins the candidate in the episodic log
+            // (FK dependency on candidate_claims, which replays in the
+            // events phase; the paired add_claim line replays earlier).
+            let promotion = LogRecord::PromoteCandidateClaim {
+                ts: now,
+                candidate_id,
+                claim_id,
+                decision: decision.map(Into::into),
+            };
+            append_jsonl(&self.event_log_path, &promotion)?;
+            apply(&self.conn, &claim)?;
+            apply(&self.conn, &promotion)?;
+            Ok(claim_id)
+        })();
+        match result {
+            Ok(claim_id) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(claim_id)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
+    }
+
+    pub fn reject_candidate_claim(&self, candidate_id: i64, reason: &str) -> Result<(), Error> {
+        self.reject_candidate_claim_inner(candidate_id, reason, None)
+    }
+
+    /// `decision` is recorded on the rejection log line (ADR-0024).
+    pub(crate) fn reject_candidate_claim_inner(
+        &self,
+        candidate_id: i64,
+        reason: &str,
+        decision: Option<candidate_decision::DecisionLogField<'_>>,
+    ) -> Result<(), Error> {
+        let candidate = self.get_candidate_claim(candidate_id)?;
+        if candidate.status == "PROMOTED" {
+            return Err(Error::InvalidCandidateStatus {
+                candidate_id,
+                status: candidate.status,
+            });
+        }
+        validate_rejection_reason(reason)?;
+        self.privacy_filter_recording(reason)?;
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<(), Error> {
+            // Re-read under the write lock so racing callers cannot both
+            // observe PENDING and append conflicting terminal transitions.
+            let current: Option<(String, Option<String>)> = self
+                .conn
+                .query_row(
+                    "SELECT status, rejection_reason FROM candidate_claims WHERE id = ?1",
+                    [candidate_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let Some((status, rejection_reason)) = current else {
+                return Err(Error::MissingCandidate { candidate_id });
+            };
+            if status == "REJECTED" {
+                if rejection_reason.as_deref() == Some(reason) {
+                    return Ok(());
+                }
+                return Err(Error::InvalidCandidateStatus {
+                    candidate_id,
+                    status,
+                });
+            }
+            if status != "PENDING" {
+                return Err(Error::InvalidCandidateStatus {
+                    candidate_id,
+                    status,
+                });
+            }
+
+            // Candidate lifecycle records live in the episodic log so replay
+            // applies them in the same phase as the candidate proposal.
+            let record = LogRecord::RejectCandidateClaim {
+                ts: now,
+                candidate_id,
+                reason: reason.to_string(),
+                decision: decision.map(Into::into),
+            };
+            append_jsonl(&self.event_log_path, &record)?;
+            apply(&self.conn, &record)?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
+    }
+
+    pub fn list_candidate_claims(
+        &self,
+        session_id: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<Vec<CandidateClaim>, Error> {
+        if let Some(session_id) = session_id {
+            validate_event_field("session_id", session_id)?;
+        }
+        if let Some(status) = status {
+            validate_candidate_status_filter(status)?;
+        }
+        const CANDIDATE_COLUMNS: &str = "candidate_claims.id, candidate_claims.event_id,
+            candidate_claims.subject, candidate_claims.predicate, candidate_claims.object,
+            candidate_claims.provenance, candidate_claims.confidence, candidate_claims.status,
+            candidate_claims.promoted_claim_id, candidate_claims.rejection_reason,
+            candidate_claims.scope";
+        let (sql, bind_status, bind_session): (String, Option<&str>, Option<&str>) = match (
+            status, session_id,
+        ) {
+            (Some(status), Some(session_id)) => (
+                format!(
+                    "SELECT {CANDIDATE_COLUMNS}
+                           FROM candidate_claims
+                           JOIN episodic_events ON episodic_events.id = candidate_claims.event_id
+                          WHERE candidate_claims.status = ?1 AND episodic_events.session_id = ?2
+                          ORDER BY candidate_claims.id"
+                ),
+                Some(status),
+                Some(session_id),
+            ),
+            (Some(status), None) => (
+                format!(
+                    "SELECT {CANDIDATE_COLUMNS} FROM candidate_claims WHERE status = ?1 ORDER BY id"
+                ),
+                Some(status),
+                None,
+            ),
+            (None, Some(session_id)) => (
+                format!(
+                    "SELECT {CANDIDATE_COLUMNS}
+                           FROM candidate_claims
+                           JOIN episodic_events ON episodic_events.id = candidate_claims.event_id
+                          WHERE episodic_events.session_id = ?1
+                          ORDER BY candidate_claims.id"
+                ),
+                None,
+                Some(session_id),
+            ),
+            (None, None) => (
+                format!("SELECT {CANDIDATE_COLUMNS} FROM candidate_claims ORDER BY id"),
+                None,
+                None,
+            ),
+        };
+        let mut stmt = self.conn.prepare(&sql)?;
+        let map_candidate = |row: &rusqlite::Row<'_>| {
+            let provenance_str = row.get::<usize, String>(5)?;
+            let provenance = Provenance::from_str(&provenance_str).map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(err))
+            })?;
+            Ok(CandidateClaim {
+                id: row.get(0)?,
+                event_id: row.get(1)?,
+                subject: row.get(2)?,
+                predicate: row.get(3)?,
+                object: row.get(4)?,
+                provenance,
+                confidence: row.get(6)?,
+                status: row.get(7)?,
+                promoted_claim_id: row.get(8)?,
+                rejection_reason: row.get(9)?,
+                scope: row.get(10)?,
+            })
+        };
+        let rows = match (bind_status, bind_session) {
+            (Some(status), Some(session_id)) => stmt
+                .query_map(params![status, session_id], map_candidate)?
+                .collect::<Result<Vec<_>, _>>()?,
+            (Some(status), None) => stmt
+                .query_map([status], map_candidate)?
+                .collect::<Result<Vec<_>, _>>()?,
+            (None, Some(session_id)) => stmt
+                .query_map([session_id], map_candidate)?
+                .collect::<Result<Vec<_>, _>>()?,
+            (None, None) => stmt
+                .query_map([], map_candidate)?
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        Ok(rows)
+    }
+
+    /// List candidate claims for a specific event.
+    pub fn list_candidate_claims_for_event(
+        &self,
+        event_id: i64,
+    ) -> Result<Vec<CandidateClaim>, Error> {
+        if !self.event_exists(event_id)? {
+            return Err(Error::MissingEventProvenance { event_id });
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT id, event_id, subject, predicate, object, provenance, confidence, status, promoted_claim_id, rejection_reason, scope
+             FROM candidate_claims WHERE event_id = ?1",
+        )?;
+        let rows = stmt.query_map([event_id], |row| {
+            let provenance_str = row.get::<usize, String>(5)?;
+            let provenance = Provenance::from_str(&provenance_str).map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(err))
+            })?;
+            Ok(CandidateClaim {
+                id: row.get(0)?,
+                event_id: row.get(1)?,
+                subject: row.get(2)?,
+                predicate: row.get(3)?,
+                object: row.get(4)?,
+                provenance,
+                confidence: row.get(6)?,
+                status: row.get(7)?,
+                promoted_claim_id: row.get(8)?,
+                rejection_reason: row.get(9)?,
+                scope: row.get(10)?,
+            })
+        })?;
+        let mut candidates = Vec::new();
+        for row in rows {
+            candidates.push(row?);
+        }
+        Ok(candidates)
+    }
+
+    pub fn get_candidate_claim(&self, id: i64) -> Result<CandidateClaim, Error> {
+        self.conn
+            .query_row(
+                "SELECT id, event_id, subject, predicate, object, provenance, confidence, status,
+                    promoted_claim_id, rejection_reason, scope
+               FROM candidate_claims WHERE id = ?1",
+                [id],
+                |row| {
+                    let provenance: String = row.get(5)?;
+                    let provenance = provenance.parse().map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(err))
+                    })?;
+                    Ok(CandidateClaim {
+                        id: row.get(0)?,
+                        event_id: row.get(1)?,
+                        subject: row.get(2)?,
+                        predicate: row.get(3)?,
+                        object: row.get(4)?,
+                        provenance,
+                        confidence: row.get(6)?,
+                        status: row.get(7)?,
+                        promoted_claim_id: row.get(8)?,
+                        rejection_reason: row.get(9)?,
+                        scope: row.get(10)?,
+                    })
+                },
+            )
+            .map_err(|err| match err {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    Error::MissingCandidate { candidate_id: id }
+                }
+                other => Error::Sqlite(other),
+            })
+    }
+}

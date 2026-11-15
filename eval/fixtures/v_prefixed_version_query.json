@@ -1,0 +1,13 @@
+{
+  "name": "v_prefixed_version_query",
+  "version": 1,
+  "description": "Queries using v-prefixed versions should match compact identifier memories and beat generic version facts",
+  "claims": [
+    {"subject": "server", "predicate": "version", "object": "2"},
+    {"subject": "server", "predicate": "supports", "object": "OAuth2"},
+    {"subject": "protocol", "predicate": "name", "object": "MCP"}
+  ],
+  "queries": [
+    {"query": "supports OAuth v2", "relevant_indices": [1], "top_k": 5}
+  ]
+}

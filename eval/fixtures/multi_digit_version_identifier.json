@@ -1,0 +1,13 @@
+{
+  "name": "multi_digit_version_identifier",
+  "version": 1,
+  "description": "Identifiers with compact multi-digit version suffixes should match spaced version queries and beat generic version facts",
+  "claims": [
+    {"subject": "server", "predicate": "supports", "object": "OAuth21"},
+    {"subject": "server", "predicate": "version", "object": "2"},
+    {"subject": "server", "predicate": "version", "object": "1"}
+  ],
+  "queries": [
+    {"query": "OAuth 2 1 server", "relevant_indices": [0], "top_k": 5}
+  ]
+}

@@ -1,0 +1,1036 @@
+use aver_core::decision::MockDecisionClient;
+use aver_core::{Provenance, Store};
+use aver_server::tools::{
+    AddTripleParams, AssembleCompactionSummaryParams, AverTools, ConsolidateParams,
+    ContradictParams, ExpandParams, ListCandidateClaimsParams, ObservationRelevanceParam,
+    PromoteCandidateClaimParams, ProposeCandidateClaimParams, RecallObservationParams,
+    RecallParams, RecordEventParams, RecordObservationParams, RejectCandidateClaimParams,
+    RememberClaimParams, ShouldExtractMemoriesParams, TriageCandidateClaimParams,
+};
+
+#[test]
+fn remember_claim_tool_writes_claim_and_recall_returns_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let remembered = tools
+        .remember_claim(RememberClaimParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            confidence: None,
+            subject: "Aver".to_string(),
+            predicate: "owns".to_string(),
+            object: "MCP_tools".to_string(),
+            source: Some("mcp-test".to_string()),
+            agent_id: Some("claude".to_string()),
+            agent_kind: Some("LLM".to_string()),
+            scope: None,
+        })
+        .unwrap();
+
+    let recalled = tools
+        .recall(RecallParams {
+            query: "MCP_tools".to_string(),
+            hops: None,
+            top_k: Some(5),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
+            alpha: None,
+        })
+        .unwrap();
+
+    assert_eq!(recalled.triples.len(), 1);
+    assert_eq!(recalled.triples[0].id, remembered.id);
+    assert_eq!(recalled.triples[0].subject, "Aver");
+    assert_eq!(recalled.triples[0].agent_id, "claude");
+}
+
+#[test]
+fn remember_claim_unknown_predicate_typo_lists_vocabulary_and_suggestion() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .remember_claim(RememberClaimParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            confidence: None,
+            subject: "PaymentGateway".to_string(),
+            predicate: "requirse".to_string(),
+            object: "StripeSDK".to_string(),
+            source: Some("mcp-test".to_string()),
+            agent_id: Some("llm_agent".to_string()),
+            agent_kind: Some("LLM".to_string()),
+            scope: None,
+        })
+        .expect_err("LLM claims with misspelled predicates should explain the vocabulary");
+
+    let msg = tools.describe_error(&err);
+    assert!(msg.contains("unknown predicate: requirse"), "{msg}");
+    assert!(
+        msg.contains("did you mean `requires` (alias for `depends_on`)?"),
+        "{msg}"
+    );
+    assert!(msg.contains("available predicates:"), "{msg}");
+    assert!(msg.contains("`depends_on`"), "{msg}");
+    assert!(msg.contains("accepted aliases:"), "{msg}");
+    assert!(msg.contains("`requires`"), "{msg}");
+    assert!(msg.contains("retry hint:"), "{msg}");
+    assert!(
+        msg.contains("safe to retry with predicate `requires`"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn remember_claim_unknown_semantic_predicate_suggests_safe_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .remember_claim(RememberClaimParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            confidence: None,
+            subject: "Aver autoresearch".to_string(),
+            predicate: "deprioritizes".to_string(),
+            object: "unsafe migration triggers".to_string(),
+            source: Some("mcp-test".to_string()),
+            agent_id: Some("llm_agent".to_string()),
+            agent_kind: Some("LLM".to_string()),
+            scope: None,
+        })
+        .expect_err("LLM claims with semantic predicate misses should explain repair");
+
+    let msg = tools.describe_error(&err);
+    assert!(msg.contains("unknown predicate: deprioritizes"), "{msg}");
+    assert!(msg.contains("did you mean `prefers`?"), "{msg}");
+    assert!(
+        msg.contains(
+            "retry hint: safe to retry with predicate `prefers`; do not invent predicates"
+        ),
+        "{msg}"
+    );
+}
+
+#[test]
+fn adr0008_five_tool_surface_covers_claim_graph_lifecycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let triple = tools
+        .add_triple(AddTripleParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            subject: "PaymentGateway".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "StripeSDK".to_string(),
+            confidence: None,
+            source: "agent-test".to_string(),
+            scope: None,
+            agent_id: None,
+            agent_kind: None,
+        })
+        .unwrap();
+    tools
+        .add_triple(AddTripleParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            subject: "StripeSDK".to_string(),
+            predicate: "owned_by".to_string(),
+            object: "BillingTeam".to_string(),
+            confidence: None,
+            source: "agent-test".to_string(),
+            scope: None,
+            agent_id: None,
+            agent_kind: None,
+        })
+        .unwrap();
+
+    let recalled = tools
+        .recall(RecallParams {
+            query: "Stripe".to_string(),
+            hops: Some(2),
+            top_k: Some(5),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
+            alpha: None,
+        })
+        .unwrap();
+    assert!(
+        recalled
+            .triples
+            .iter()
+            .any(|claim| claim.id == triple.triple_id)
+    );
+    assert_eq!(recalled.confidence_floor, 0.45);
+
+    let expanded = tools
+        .expand(ExpandParams {
+            entity: "PaymentGateway".to_string(),
+            hops: Some(2),
+            predicates: None,
+            scope: None,
+            scope_walk: None,
+        })
+        .unwrap();
+    assert!(expanded.nodes.contains(&"BillingTeam".to_string()));
+
+    let contradiction = tools
+        .contradict(ContradictParams {
+            triple_id: triple.triple_id,
+            reason: "vendor migration completed".to_string(),
+            new_claim: None,
+        })
+        .unwrap();
+    assert_eq!(contradiction.status, "recorded");
+
+    let consolidated = tools
+        .consolidate(ConsolidateParams { scope: None })
+        .unwrap();
+    assert_eq!(consolidated.decayed, 1);
+}
+
+#[test]
+fn episodic_candidate_tools_cover_memory_pipeline() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let event = tools
+        .record_event(RecordEventParams {
+            session_id: "session-1".to_string(),
+            kind: "explicit_remember".to_string(),
+            payload: "Aver prefers triggered memory extraction".to_string(),
+            source: Some("mcp-test".to_string()),
+            agent_id: Some("claude".to_string()),
+            agent_kind: Some("LLM".to_string()),
+            scope: None,
+        })
+        .unwrap();
+
+    let should_extract = tools
+        .should_extract_memories(ShouldExtractMemoriesParams {
+            session_id: "session-1".to_string(),
+            event_threshold: 10,
+        })
+        .unwrap();
+    assert!(should_extract.should_extract);
+
+    let candidate = tools
+        .propose_candidate_claim(ProposeCandidateClaimParams {
+            event_id: event.id,
+            subject: "Aver".to_string(),
+            predicate: "prefers".to_string(),
+            object: "triggered_memory_extraction".to_string(),
+            scope: None,
+        })
+        .unwrap();
+
+    let candidates = tools
+        .list_candidate_claims(ListCandidateClaimsParams {
+            session_id: Some("session-1".to_string()),
+            status: Some("PENDING".to_string()),
+        })
+        .unwrap();
+    assert_eq!(candidates, vec![candidate.clone()]);
+
+    tools
+        .reject_candidate_claim(RejectCandidateClaimParams {
+            candidate_id: candidate.id,
+            reason: "duplicate".to_string(),
+        })
+        .unwrap();
+    let rejected = tools
+        .list_candidate_claims(ListCandidateClaimsParams {
+            session_id: Some("session-1".to_string()),
+            status: Some("REJECTED".to_string()),
+        })
+        .unwrap();
+    assert_eq!(rejected[0].rejection_reason.as_deref(), Some("duplicate"));
+
+    let second = tools
+        .propose_candidate_claim(ProposeCandidateClaimParams {
+            event_id: event.id,
+            subject: "Aver".to_string(),
+            predicate: "owns".to_string(),
+            object: "candidate_claims".to_string(),
+            scope: None,
+        })
+        .unwrap();
+    let promoted = tools
+        .promote_candidate_claim(PromoteCandidateClaimParams {
+            candidate_id: second.id,
+        })
+        .unwrap();
+    assert_eq!(promoted.subject, "Aver");
+    assert_eq!(promoted.source_refs, [format!("event:{}", event.id)]);
+}
+
+#[test]
+fn observation_projection_tools_expose_recall_and_compaction_summary() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let event = tools
+        .record_event(RecordEventParams {
+            session_id: "session-1".to_string(),
+            kind: "tool_result".to_string(),
+            payload: "cargo test failed with E0425 before implementation".to_string(),
+            source: Some("cargo test".to_string()),
+            agent_id: Some("claude".to_string()),
+            agent_kind: Some("LLM".to_string()),
+            scope: None,
+        })
+        .unwrap();
+
+    let observation = tools
+        .record_observation(RecordObservationParams {
+            session_id: "session-1".to_string(),
+            content: "cargo test failed with E0425 before implementation".to_string(),
+            relevance: ObservationRelevanceParam::High,
+            source_event_ids: vec![event.id],
+            derivation: "mock-observer".to_string(),
+            scope: None,
+        })
+        .unwrap();
+
+    let recalled = tools
+        .recall_observation(RecallObservationParams {
+            observation_id: observation.id.clone(),
+        })
+        .unwrap();
+    assert_eq!(recalled.observation.id, observation.id);
+    assert_eq!(recalled.events, vec![event]);
+
+    let summary = tools
+        .assemble_compaction_summary(AssembleCompactionSummaryParams {
+            session_id: "session-1".to_string(),
+        })
+        .unwrap();
+    assert!(
+        summary
+            .summary
+            .contains("[high] cargo test failed with E0425")
+    );
+}
+
+#[test]
+fn add_triple_rejects_confidence_outside_unit_interval() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .add_triple(AddTripleParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            subject: "PaymentGateway".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "StripeSDK".to_string(),
+            confidence: Some(-0.1),
+            source: "agent-test".to_string(),
+            scope: None,
+            agent_id: None,
+            agent_kind: None,
+        })
+        .expect_err("invalid confidence should be rejected");
+
+    assert!(err.to_string().contains("confidence"));
+}
+
+#[test]
+fn add_triple_persists_valid_confidence_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let written = tools
+        .add_triple(AddTripleParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            subject: "PaymentGateway".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "StripeSDK".to_string(),
+            confidence: Some(0.4),
+            source: "agent-test".to_string(),
+            scope: None,
+            agent_id: None,
+            agent_kind: None,
+        })
+        .unwrap();
+
+    let recalled = tools
+        .recall(RecallParams {
+            query: "PaymentGateway".to_string(),
+            hops: None,
+            top_k: Some(5),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
+            alpha: None,
+        })
+        .unwrap();
+
+    let claim = recalled
+        .triples
+        .iter()
+        .find(|claim| claim.id == written.triple_id)
+        .expect("written claim should be recalled");
+    assert_eq!(claim.confidence, 0.4);
+}
+
+#[test]
+fn expand_tool_rejects_zero_hops() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .expand(ExpandParams {
+            entity: "PaymentGateway".to_string(),
+            hops: Some(0),
+            predicates: None,
+            scope: None,
+            scope_walk: None,
+        })
+        .expect_err("zero hops should be rejected");
+
+    assert!(err.to_string().contains("hops"));
+}
+
+#[test]
+fn recall_tool_rejects_zero_hops() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .recall(RecallParams {
+            query: "PaymentGateway".to_string(),
+            hops: Some(0),
+            top_k: Some(5),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
+            alpha: None,
+        })
+        .expect_err("zero hops should be rejected");
+
+    assert!(err.to_string().contains("hops"));
+}
+
+#[test]
+fn recall_tool_rejects_zero_top_k() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .recall(RecallParams {
+            query: "PaymentGateway".to_string(),
+            hops: None,
+            top_k: Some(0),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
+            alpha: None,
+        })
+        .expect_err("zero top_k should be rejected");
+
+    assert!(err.to_string().contains("top_k"));
+}
+
+#[test]
+fn recall_tool_returns_graph_context_for_entity_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    tools
+        .add_triple(AddTripleParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            subject: "PaymentGateway".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "StripeSDK".to_string(),
+            confidence: None,
+            source: "test".to_string(),
+            scope: None,
+            agent_id: None,
+            agent_kind: None,
+        })
+        .unwrap();
+
+    let recalled = tools
+        .recall(RecallParams {
+            query: "PaymentGateway".to_string(),
+            hops: Some(1),
+            top_k: Some(5),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
+            alpha: None,
+        })
+        .unwrap();
+
+    assert!(
+        recalled
+            .subgraph
+            .nodes
+            .contains(&"PaymentGateway".to_string())
+    );
+    assert!(recalled.subgraph.nodes.contains(&"StripeSDK".to_string()));
+    assert_eq!(recalled.subgraph.edges.len(), 1);
+    assert_eq!(recalled.subgraph.edges[0].predicate, "depends_on");
+}
+
+#[test]
+fn recall_tool_expands_graph_from_recalled_claim_subject_when_query_is_phrase() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    tools
+        .add_triple(AddTripleParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            subject: "PaymentGateway".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "StripeSDK".to_string(),
+            confidence: None,
+            source: "test".to_string(),
+            scope: None,
+            agent_id: None,
+            agent_kind: None,
+        })
+        .unwrap();
+
+    let recalled = tools
+        .recall(RecallParams {
+            query: "what depends on PaymentGateway".to_string(),
+            hops: Some(1),
+            top_k: Some(5),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
+            alpha: None,
+        })
+        .unwrap();
+
+    assert_eq!(recalled.triples.len(), 1);
+    assert!(
+        recalled
+            .subgraph
+            .nodes
+            .contains(&"PaymentGateway".to_string())
+    );
+    assert!(recalled.subgraph.nodes.contains(&"StripeSDK".to_string()));
+    assert_eq!(recalled.subgraph.edges.len(), 1);
+}
+
+#[test]
+fn recall_tool_reports_confidence_floor_for_returned_triples() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    tools
+        .add_triple(AddTripleParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            subject: "PaymentGateway".to_string(),
+            predicate: "status".to_string(),
+            object: "current".to_string(),
+            confidence: Some(0.4),
+            source: "test".to_string(),
+            scope: None,
+            agent_id: None,
+            agent_kind: Some("HUMAN".to_string()),
+        })
+        .unwrap();
+
+    let recalled = tools
+        .recall(RecallParams {
+            query: "PaymentGateway".to_string(),
+            hops: Some(1),
+            top_k: Some(5),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
+            alpha: None,
+        })
+        .unwrap();
+
+    assert_eq!(recalled.triples.len(), 1);
+    assert_eq!(recalled.confidence_floor, 0.4);
+}
+
+#[test]
+fn recall_tool_confidence_floor_includes_subgraph_edges() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    tools
+        .add_triple(AddTripleParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            subject: "PaymentGateway".to_string(),
+            predicate: "status".to_string(),
+            object: "current".to_string(),
+            confidence: Some(0.95),
+            source: "test".to_string(),
+            scope: None,
+            agent_id: None,
+            agent_kind: Some("HUMAN".to_string()),
+        })
+        .unwrap();
+    tools
+        .add_triple(AddTripleParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            subject: "PaymentGateway".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "StripeSDK".to_string(),
+            confidence: Some(0.4),
+            source: "test".to_string(),
+            scope: None,
+            agent_id: None,
+            agent_kind: Some("HUMAN".to_string()),
+        })
+        .unwrap();
+
+    let recalled = tools
+        .recall(RecallParams {
+            query: "status current".to_string(),
+            hops: Some(1),
+            top_k: Some(1),
+            scope: None,
+            scope_walk: None,
+            agent_id: None,
+            agent_kind: None,
+            predicate: None,
+            predicate_walk: None,
+            min_confidence: None,
+            status: None,
+            alpha: None,
+        })
+        .unwrap();
+
+    assert_eq!(recalled.triples.len(), 1);
+    assert_eq!(recalled.subgraph.edges.len(), 2);
+    assert_eq!(recalled.confidence_floor, 0.4);
+}
+
+#[test]
+fn consolidate_tool_rejects_unsupported_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .consolidate(ConsolidateParams {
+            scope: Some("session:abc".to_string()),
+        })
+        .expect_err("unsupported scoped consolidation should be explicit");
+
+    assert!(err.to_string().contains("scope"));
+}
+
+#[test]
+fn should_extract_memories_rejects_zero_event_threshold() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .should_extract_memories(ShouldExtractMemoriesParams {
+            session_id: "s1".to_string(),
+            event_threshold: 0,
+        })
+        .expect_err("zero threshold should be rejected");
+
+    // Core enforces the rule (`Error::InvalidEventThreshold`); the
+    // agent-facing text names the MCP parameter.
+    assert_eq!(
+        tools.describe_error(&err),
+        "invalid event_threshold: must be greater than zero"
+    );
+}
+
+#[test]
+fn record_event_tool_rejects_empty_session_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .record_event(RecordEventParams {
+            session_id: "".to_string(),
+            kind: "message".to_string(),
+            payload: "hello".to_string(),
+            source: None,
+            agent_id: None,
+            agent_kind: None,
+            scope: None,
+        })
+        .expect_err("empty session ids should be rejected");
+
+    assert!(err.to_string().contains("session_id"));
+}
+
+#[test]
+fn record_event_tool_rejects_empty_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .record_event(RecordEventParams {
+            session_id: "s1".to_string(),
+            kind: " ".to_string(),
+            payload: "hello".to_string(),
+            source: None,
+            agent_id: None,
+            agent_kind: None,
+            scope: None,
+        })
+        .expect_err("empty event kinds should be rejected");
+
+    assert!(err.to_string().contains("kind"));
+}
+
+#[test]
+fn add_triple_rejects_empty_subject() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .add_triple(AddTripleParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            subject: " ".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "StripeSDK".to_string(),
+            confidence: None,
+            source: "test".to_string(),
+            scope: None,
+            agent_id: None,
+            agent_kind: None,
+        })
+        .expect_err("empty subjects should be rejected");
+
+    assert!(err.to_string().contains("subject"));
+}
+
+#[test]
+fn add_triple_rejects_empty_predicate() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .add_triple(AddTripleParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            subject: "PaymentGateway".to_string(),
+            predicate: " ".to_string(),
+            object: "StripeSDK".to_string(),
+            confidence: None,
+            source: "test".to_string(),
+            scope: None,
+            agent_id: None,
+            agent_kind: None,
+        })
+        .expect_err("empty predicates should be rejected");
+
+    assert!(err.to_string().contains("predicate"));
+}
+
+#[test]
+fn add_triple_rejects_empty_object() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .add_triple(AddTripleParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            subject: "PaymentGateway".to_string(),
+            predicate: "depends_on".to_string(),
+            object: " ".to_string(),
+            confidence: None,
+            source: "test".to_string(),
+            scope: None,
+            agent_id: None,
+            agent_kind: None,
+        })
+        .expect_err("empty objects should be rejected");
+
+    assert!(err.to_string().contains("object"));
+}
+
+#[test]
+fn remember_claim_rejects_empty_subject() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .remember_claim(RememberClaimParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            confidence: None,
+            subject: " ".to_string(),
+            predicate: "depends_on".to_string(),
+            object: "StripeSDK".to_string(),
+            source: None,
+            agent_id: None,
+            agent_kind: None,
+            scope: None,
+        })
+        .expect_err("empty subjects should be rejected");
+
+    assert!(err.to_string().contains("subject"));
+}
+
+#[test]
+fn remember_claim_rejects_empty_predicate() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .remember_claim(RememberClaimParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            confidence: None,
+            subject: "PaymentGateway".to_string(),
+            predicate: " ".to_string(),
+            object: "StripeSDK".to_string(),
+            source: None,
+            agent_id: None,
+            agent_kind: None,
+            scope: None,
+        })
+        .expect_err("empty predicates should be rejected");
+
+    assert!(err.to_string().contains("predicate"));
+}
+
+#[test]
+fn remember_claim_rejects_empty_object() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+
+    let err = tools
+        .remember_claim(RememberClaimParams {
+            provenance: None,
+            object_kind: None,
+            event_id: None,
+            strict_atomic: None,
+            confidence: None,
+            subject: "PaymentGateway".to_string(),
+            predicate: "depends_on".to_string(),
+            object: " ".to_string(),
+            source: None,
+            agent_id: None,
+            agent_kind: None,
+            scope: None,
+        })
+        .expect_err("empty objects should be rejected");
+
+    assert!(err.to_string().contains("object"));
+}
+
+// ADR-0024 decision-model wiring. Every test injects `MockDecisionClient`;
+// none reads `AVER_DECISION_MODEL` or needs Ollama.
+
+fn tools_with_decisions(dir: &std::path::Path, indices: Vec<usize>) -> AverTools {
+    AverTools::open_with_decision_client(
+        dir,
+        Some(Box::new(MockDecisionClient::with_indices(indices))),
+    )
+    .unwrap()
+}
+
+fn stage_candidate(tools: &AverTools) -> (i64, i64) {
+    let event = tools
+        .record_event(RecordEventParams {
+            session_id: "triage-session".to_string(),
+            kind: "message".to_string(),
+            payload: "Aver prefers local decision models".to_string(),
+            source: Some("mcp-test".to_string()),
+            agent_id: Some("claude".to_string()),
+            agent_kind: Some("LLM".to_string()),
+            scope: None,
+        })
+        .unwrap();
+    let candidate = tools
+        .propose_candidate_claim(ProposeCandidateClaimParams {
+            event_id: event.id,
+            subject: "Aver".to_string(),
+            predicate: "prefers".to_string(),
+            object: "local_decision_models".to_string(),
+            scope: None,
+        })
+        .unwrap();
+    (event.id, candidate.id)
+}
+
+#[test]
+fn triage_candidate_claim_promotes_with_inferred_attribution() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tools_with_decisions(dir.path(), vec![0]);
+    let (_, candidate_id) = stage_candidate(&tools);
+
+    let view = tools
+        .triage_candidate_claim(TriageCandidateClaimParams { candidate_id })
+        .unwrap();
+
+    assert_eq!(view.candidate_id, candidate_id);
+    assert_eq!(view.triage, "promote");
+    let claim_id = view.claim_id.expect("promotion returns the claim id");
+    drop(tools);
+    let store = Store::open(dir.path()).unwrap();
+    let claim = store.get_claim(claim_id).unwrap();
+    assert_eq!(claim.provenance, Provenance::Inferred);
+    assert_eq!(claim.confidence, 0.45);
+    assert_eq!(
+        serde_json::to_value(&view).unwrap(),
+        serde_json::json!({
+            "candidate_id": candidate_id,
+            "triage": "promote",
+            "claim_id": claim_id,
+        })
+    );
+}
+
+#[test]
+fn triage_candidate_claim_hold_leaves_candidate_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tools_with_decisions(dir.path(), vec![2]);
+    let (_, candidate_id) = stage_candidate(&tools);
+
+    let view = tools
+        .triage_candidate_claim(TriageCandidateClaimParams { candidate_id })
+        .unwrap();
+
+    assert_eq!(view.triage, "hold");
+    assert_eq!(view.claim_id, None);
+    let pending = tools
+        .list_candidate_claims(ListCandidateClaimsParams {
+            session_id: Some("triage-session".to_string()),
+            status: Some("PENDING".to_string()),
+        })
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].id, candidate_id);
+}
+
+#[test]
+fn triage_candidate_claim_without_decision_model_is_a_clear_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open_with_decision_client(dir.path(), None).unwrap();
+    let (_, candidate_id) = stage_candidate(&tools);
+
+    let err = tools
+        .triage_candidate_claim(TriageCandidateClaimParams { candidate_id })
+        .expect_err("triage needs a configured decision model");
+
+    assert_eq!(
+        tools.describe_error(&err),
+        "decision model not configured (set AVER_DECISION_MODEL)"
+    );
+}
+
+#[test]
+fn should_extract_memories_consults_decision_model_and_reports_reasons() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = tools_with_decisions(dir.path(), vec![0]);
+    stage_candidate(&tools);
+    let params = ShouldExtractMemoriesParams {
+        session_id: "triage-session".to_string(),
+        event_threshold: 10,
+    };
+
+    let view = tools.should_extract_memories(params.clone()).unwrap();
+    assert!(view.should_extract);
+    assert_eq!(
+        view.reasons,
+        Some(vec![
+            "uncovered_coverage_gap".to_string(),
+            "decision_model".to_string(),
+        ])
+    );
+
+    // Unconfigured: deterministic answer and the pre-ADR-0024 JSON shape.
+    drop(tools);
+    let unconfigured = AverTools::open_with_decision_client(dir.path(), None).unwrap();
+    let view = unconfigured.should_extract_memories(params).unwrap();
+    assert!(!view.should_extract);
+    assert_eq!(
+        serde_json::to_value(&view).unwrap(),
+        serde_json::json!({ "should_extract": false })
+    );
+}

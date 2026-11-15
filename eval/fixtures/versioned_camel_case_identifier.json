@@ -1,0 +1,13 @@
+{
+  "name": "versioned_camel_case_identifier",
+  "version": 1,
+  "description": "Natural spaced version queries should distinguish CamelCase identifiers with numeric suffixes",
+  "claims": [
+    {"subject": "component", "predicate": "name", "object": "MemoryAgent1"},
+    {"subject": "component", "predicate": "name", "object": "MemoryAgent2"},
+    {"subject": "component", "predicate": "kind", "object": "agent"}
+  ],
+  "queries": [
+    {"query": "memory agent 2", "relevant_indices": [1], "top_k": 5}
+  ]
+}

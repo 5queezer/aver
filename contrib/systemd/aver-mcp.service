@@ -1,0 +1,22 @@
+[Unit]
+Description=Aver MCP/OAuth server
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+Environment="AVER_HOST=127.0.0.1"
+Environment="AVER_PORT=3317"
+Environment="AVER_BASE_URL=http://127.0.0.1:3317"
+Environment="AVER_MEMORY_DIR=%h/.aver"
+ExecStart=%h/.local/bin/aver-server
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

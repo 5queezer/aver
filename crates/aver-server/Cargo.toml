@@ -1,0 +1,48 @@
+[package]
+name = "aver-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "aver-server"
+path = "src/main.rs"
+
+[features]
+default = ["ollama"]
+# ADR-0024: enables the Ollama decision client so `AVER_DECISION_MODEL` works in standalone builds.
+ollama = ["aver-core/ollama"]
+
+[dependencies]
+anyhow.workspace = true
+askama = { version = "0.12", default-features = false }
+aver-core = { path = "../aver-core", default-features = false }
+aver-extractor = { path = "../aver-extractor" }
+serde.workspace = true
+serde_json.workspace = true
+serde_urlencoded = "0.7"
+rusqlite.workspace = true
+sha2 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
+time = { workspace = true, features = ["formatting"] }
+schemars = "1.0"
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", rev = "a64be231527f923e9f84d4dd7bf3c3bd695ee53e", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
+uuid = { version = "1", features = ["v4"] }
+axum = { version = "0.8", default-features = false, features = ["form", "http1", "json", "macros", "query", "tokio"] }
+http = "1"
+tokio = { version = "1", default-features = false, features = ["macros", "net", "rt-multi-thread"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
+url = "2.5"
+
+[dev-dependencies]
+tempfile.workspace = true

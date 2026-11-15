@@ -1,0 +1,13 @@
+{
+  "name": "ies_plural_morphology",
+  "version": 1,
+  "description": "Natural plural words ending in -ies should normalize to singular -y and beat object-only distractors",
+  "claims": [
+    {"subject": "company", "predicate": "name", "object": "Acme"},
+    {"subject": "user", "predicate": "employer", "object": "Acme"},
+    {"subject": "project", "predicate": "name", "object": "Aver"}
+  ],
+  "queries": [
+    {"query": "companies named Acme", "relevant_indices": [0], "top_k": 5}
+  ]
+}

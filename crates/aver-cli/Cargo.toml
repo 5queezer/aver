@@ -1,0 +1,34 @@
+[package]
+name        = "aver-cli"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+authors.workspace     = true
+rust-version.workspace = true
+description.workspace  = true
+repository.workspace   = true
+homepage.workspace     = true
+readme                 = "../../README.md"
+keywords.workspace     = true
+categories.workspace   = true
+
+[[bin]]
+name = "aver"
+path = "src/main.rs"
+
+[features]
+default = ["ollama"]
+# ADR-0024: enables the Ollama decision client so `AVER_DECISION_MODEL` works in standalone builds.
+ollama = ["aver-core/ollama"]
+
+[dependencies]
+aver-core      = { path = "../aver-core", default-features = false }
+aver-extractor = { path = "../aver-extractor" }
+clap.workspace   = true
+anyhow.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+assert_cmd = "2"
+tempfile.workspace = true
+rusqlite.workspace = true

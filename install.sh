@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BIN="aver"
+VERSION="${AVER_VERSION:-latest}"
+INSTALL_DIR="${AVER_INSTALL_DIR:-$HOME/.cargo/bin}"
+FROM_SOURCE=0
+WITH_SERVER=0
+SERVER_DIR="${AVER_SERVER_INSTALL_DIR:-$HOME/.local/bin}"
+REPO="${AVER_REPO:-}"
+BASE_URL="${AVER_RELEASE_BASE_URL:-}"
+VERIFY_KEY="${AVER_GPG_KEYRING:-}"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+SOURCE_DIR=""
+
+usage() {
+  cat <<'USAGE'
+Install Aver.
+
+Recommended secure usage:
+  1. Download this script first, do not blindly pipe it to sh.
+  2. Verify the script/release signature with GPG or Cosign.
+  3. Run: ./install.sh --repo OWNER/REPO
+
+Options:
+  --server                   Also install aver-server (to --server-dir).
+  --server-dir DIR           aver-server directory. Default: ~/.local/bin (matches contrib/systemd/aver-mcp.service).
+  --from-source              Build and install from this checkout with cargo install.
+  --repo OWNER/REPO          Install from GitHub Releases.
+  --version VERSION          Release version/tag. Default: latest.
+  --install-dir DIR          Install directory. Default: ~/.cargo/bin.
+  --base-url URL             Direct release base URL containing assets.
+  --gpg-keyring FILE         GPG keyring used to verify .asc signatures when present.
+  -h, --help                 Show help.
+
+Environment:
+  AVER_REPO, AVER_VERSION, AVER_INSTALL_DIR, AVER_SERVER_INSTALL_DIR, AVER_RELEASE_BASE_URL, AVER_GPG_KEYRING
+
+PATH setup:
+  export PATH="$HOME/.cargo/bin:$PATH"
+USAGE
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --from-source) FROM_SOURCE=1 ;;
+    --server) WITH_SERVER=1 ;;
+    --server-dir) SERVER_DIR="$2"; shift ;;
+    --repo) REPO="$2"; shift ;;
+    --version) VERSION="$2"; shift ;;
+    --install-dir) INSTALL_DIR="$2"; shift ;;
+    --base-url) BASE_URL="$2"; shift ;;
+    --gpg-keyring) VERIFY_KEY="$2"; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+is_aver_source_dir() {
+  dir="$1"
+  [ -f "$dir/Cargo.toml" ] \
+    && [ -f "$dir/crates/aver-cli/Cargo.toml" ] \
+    && grep -q 'crates/aver-cli' "$dir/Cargo.toml"
+}
+
+source_checkout_root() {
+  for dir in "$PWD" "$SCRIPT_DIR"; do
+    if command -v git >/dev/null 2>&1 && git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      root="$(git -C "$dir" rev-parse --show-toplevel)"
+      if is_aver_source_dir "$root"; then
+        printf '%s\n' "$root"
+        return 0
+      fi
+    elif [ -d "$dir/.git" ] && is_aver_source_dir "$dir"; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if [ "$FROM_SOURCE" -eq 0 ] && [ -z "$REPO" ] && [ -z "$BASE_URL" ]; then
+  if SOURCE_DIR="$(source_checkout_root)"; then
+    FROM_SOURCE=1
+    echo "Detected Aver source checkout; installing from source."
+  fi
+fi
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || { echo "missing required command: $1" >&2; exit 1; }
+}
+
+ensure_path_hint() {
+  case ":$PATH:" in
+    *":$INSTALL_DIR:"*) ;;
+    *)
+      echo
+      echo "Add Aver to your PATH:"
+      echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+      ;;
+  esac
+}
+
+install_from_source() {
+  need cargo
+  if [ -z "$SOURCE_DIR" ]; then
+    if ! SOURCE_DIR="$(source_checkout_root)"; then
+      SOURCE_DIR="$PWD"
+    fi
+  fi
+  mkdir -p "$INSTALL_DIR"
+  if [ "$INSTALL_DIR" = "$HOME/.cargo/bin" ]; then
+    cargo install --path "$SOURCE_DIR/crates/aver-cli" --locked --force
+  else
+    tmp_root="$(mktemp -d)"
+    trap 'rm -rf "$tmp_root"' EXIT
+    cargo install --path "$SOURCE_DIR/crates/aver-cli" --locked --force --root "$tmp_root"
+    install -m 0755 "$tmp_root/bin/$BIN" "$INSTALL_DIR/$BIN"
+  fi
+  if [ "$WITH_SERVER" -eq 1 ]; then
+    server_root="$(mktemp -d)"
+    cargo install --path "$SOURCE_DIR/crates/aver-server" --locked --force --root "$server_root"
+    mkdir -p "$SERVER_DIR"
+    install -m 0755 "$server_root/bin/aver-server" "$SERVER_DIR/aver-server"
+    rm -rf "$server_root"
+  fi
+}
+
+target_triple() {
+  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) arch="x86_64" ;;
+    aarch64|arm64) arch="aarch64" ;;
+  esac
+  printf '%s-%s' "$os" "$arch"
+}
+
+resolve_base_url() {
+  if [ -n "$BASE_URL" ]; then
+    printf '%s' "$BASE_URL"
+    return
+  fi
+  if [ -z "$REPO" ]; then
+    echo "release install needs --repo OWNER/REPO, --base-url URL, or --from-source" >&2
+    exit 2
+  fi
+  if [ "$VERSION" = "latest" ]; then
+    printf 'https://github.com/%s/releases/latest/download' "$REPO"
+  else
+    printf 'https://github.com/%s/releases/download/%s' "$REPO" "$VERSION"
+  fi
+}
+
+download() {
+  url="$1"
+  out="$2"
+  # https only, except plain http to loopback (local release dry run, see doc/release-procedure.md)
+  proto='=https'
+  case "$url" in http://127.0.0.1[:/]*|http://localhost[:/]*) proto='=http,https' ;; esac
+  if command -v curl >/dev/null 2>&1; then
+    curl --fail --location --proto "$proto" --tlsv1.2 --output "$out" "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -O "$out" "$url"
+  else
+    echo "missing curl or wget" >&2
+    exit 1
+  fi
+}
+
+verify_sha256() {
+  archive="$1"
+  sums="$2"
+  need sha256sum
+  archive_name="$(basename "$archive")"
+  grep "  $archive_name\$\| \*$archive_name\$" "$sums" > "$sums.one" || {
+    echo "checksum file does not contain $archive_name" >&2
+    exit 1
+  }
+  (cd "$(dirname "$archive")" && sha256sum -c "$(basename "$sums.one")")
+}
+
+verify_signature_if_present() {
+  file="$1"
+  sig="$2"
+  if [ ! -s "$sig" ]; then
+    echo "No signature found for $(basename "$file"); checksum verification still passed."
+    return
+  fi
+  if command -v cosign >/dev/null 2>&1 && [ -n "${AVER_COSIGN_IDENTITY:-}" ]; then
+    cosign verify-blob --signature "$sig" --certificate-identity "$AVER_COSIGN_IDENTITY" --certificate-oidc-issuer "${AVER_COSIGN_ISSUER:-https://token.actions.githubusercontent.com}" "$file"
+  elif command -v gpg >/dev/null 2>&1; then
+    if [ -n "$VERIFY_KEY" ]; then
+      gpg --no-default-keyring --keyring "$VERIFY_KEY" --verify "$sig" "$file"
+    else
+      gpg --verify "$sig" "$file"
+    fi
+  else
+    echo "signature exists but neither cosign nor gpg is available" >&2
+    exit 1
+  fi
+}
+
+fetch_and_install() {
+  name="$1"
+  dest="$2"
+  asset="${name}-${triple}.tar.gz"
+
+  download "$url_base/$asset" "$tmp/$asset"
+  verify_sha256 "$tmp/$asset" "$tmp/SHA256SUMS"
+
+  download "$url_base/$asset.asc" "$tmp/$asset.asc" >/dev/null 2>&1 || true
+  download "$url_base/$asset.sig" "$tmp/$asset.sig" >/dev/null 2>&1 || true
+  if [ -s "$tmp/$asset.asc" ]; then
+    verify_signature_if_present "$tmp/$asset" "$tmp/$asset.asc"
+  else
+    verify_signature_if_present "$tmp/$asset" "$tmp/$asset.sig"
+  fi
+
+  mkdir -p "$dest" "$tmp/$name"
+  tar -xzf "$tmp/$asset" -C "$tmp/$name"
+  install -m 0755 "$tmp/$name/$name" "$dest/$name"
+}
+
+install_from_release() {
+  need tar
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  triple="$(target_triple)"
+  url_base="$(resolve_base_url)"
+
+  download "$url_base/SHA256SUMS" "$tmp/SHA256SUMS"
+  fetch_and_install "$BIN" "$INSTALL_DIR"
+  if [ "$WITH_SERVER" -eq 1 ]; then
+    fetch_and_install aver-server "$SERVER_DIR"
+  fi
+}
+
+if [ "$FROM_SOURCE" -eq 1 ]; then
+  install_from_source
+else
+  install_from_release
+fi
+
+"$INSTALL_DIR/$BIN" --version || true
+echo "Installed $BIN to $INSTALL_DIR/$BIN"
+ensure_path_hint
+if [ "$WITH_SERVER" -eq 1 ]; then
+  echo "Installed aver-server to $SERVER_DIR/aver-server"
+  echo "Systemd unit: contrib/systemd/aver-mcp.service (expects ~/.local/bin/aver-server)"
+fi

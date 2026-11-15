@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members  = ["crates/aver-core", "crates/aver-cli", "crates/aver-extractor", "crates/aver-server", "crates/aver-eval", "crates/aver-scope-shim"]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2024"
+license      = "MIT"
+authors      = ["Christian Pojoni"]
+rust-version = "1.95"
+description  = "Local-first, auditable memory layer for coding agents"
+repository   = "https://github.com/5queezer/aver"
+homepage     = "https://github.com/5queezer/aver"
+readme       = "README.md"
+keywords     = ["ai", "memory", "mcp", "sqlite", "rust"]
+categories   = ["command-line-utilities", "database"]
+
+[workspace.dependencies]
+rusqlite    = { version = "0.32", features = ["bundled"] }
+sqlite-vec  = "0.1"
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+ureq        = { version = "2", features = ["json"] }
+clap        = { version = "4", default-features = false, features = ["std", "derive", "env", "help", "usage"] }
+anyhow      = "1"
+thiserror   = "2"
+time        = { version = "0.3", features = ["serde", "macros"] }
+directories = "5"
+tempfile    = "3"
+tree-sitter = "0.22"
+tree-sitter-rust = "0.21"
+tree-sitter-python = "0.21"
+tree-sitter-typescript = "0.21"
+tree-sitter-go = "0.21"
+tree-sitter-javascript = "0.21.4"
+tree-sitter-java = "0.21.0"
+tree-sitter-c = "0.21.4"
+tree-sitter-cpp = "0.22.0"
+tree-sitter-c-sharp = "0.21.3"
+tree-sitter-ruby = "0.21.0"
+tree-sitter-php = "0.22.8"
+tree-sitter-kotlin = "0.3.8"
+tree-sitter-swift = "0.5.0"
+
+[workspace.metadata.aver]
+shared_mode = "planned"
+
+[profile.release]
+opt-level     = "z"
+lto           = "fat"
+codegen-units = 1
+strip         = true

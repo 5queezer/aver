@@ -1,0 +1,13 @@
+{
+  "name": "camel_case_acronym_query",
+  "version": 1,
+  "description": "Acronym queries should match CamelCase identifier memories without returning broad same-subject topic facts",
+  "claims": [
+    {"subject": "benchmark", "predicate": "name", "object": "MemoryAgentBench"},
+    {"subject": "benchmark", "predicate": "topic", "object": "memory_recall"},
+    {"subject": "project", "predicate": "name", "object": "Aver"}
+  ],
+  "queries": [
+    {"query": "MAB benchmark", "relevant_indices": [0], "top_k": 5}
+  ]
+}

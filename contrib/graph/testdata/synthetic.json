@@ -1,0 +1,142 @@
+{
+  "format": "aver-graph-v1",
+  "entities": [
+    {
+      "id": "decision:alpha",
+      "label": "decision:alpha"
+    },
+    {
+      "id": "decision:beta",
+      "label": "decision:beta"
+    },
+    {
+      "id": "topic:example",
+      "label": "topic:example"
+    }
+  ],
+  "claims": [
+    {
+      "id": 1,
+      "subject": "decision:alpha",
+      "predicate": "about",
+      "object": "topic:example",
+      "provenance": "INFERRED",
+      "confidence": 0.45,
+      "status": "ACTIVE",
+      "source_refs": [],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 1,
+      "created_at": 1700000010,
+      "event_ids": [
+        1
+      ]
+    },
+    {
+      "id": 2,
+      "subject": "decision:alpha",
+      "predicate": "has_rationale",
+      "object": "An invented rationale sentence.",
+      "provenance": "INFERRED",
+      "confidence": 0.7,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:2",
+        "note:x"
+      ],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1700000110,
+      "event_ids": [
+        2
+      ]
+    },
+    {
+      "id": 3,
+      "subject": "decision:beta",
+      "predicate": "supersedes",
+      "object": "decision:alpha",
+      "provenance": "EXTRACTED",
+      "confidence": 0.9,
+      "status": "ACTIVE",
+      "source_refs": [
+        "event:1"
+      ],
+      "scope": "proj/example",
+      "object_kind": "entity",
+      "event_id": 1,
+      "created_at": 1700000200,
+      "event_ids": [
+        1
+      ]
+    },
+    {
+      "id": 4,
+      "subject": "decision:alpha",
+      "predicate": "has_outcome",
+      "object": "pending",
+      "provenance": "INFERRED",
+      "confidence": 0.45,
+      "status": "INVALIDATED",
+      "source_refs": [
+        "event:",
+        "retired:invented reason"
+      ],
+      "scope": "proj/example",
+      "object_kind": "literal",
+      "event_id": null,
+      "created_at": 1700000300,
+      "event_ids": []
+    }
+  ],
+  "events": [
+    {
+      "id": 1,
+      "session_id": "synthetic-session",
+      "kind": "decision",
+      "payload": "Invented decision text <b>not markup</b>",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1700000000,
+      "scope": "proj/example"
+    },
+    {
+      "id": 2,
+      "session_id": "synthetic-session",
+      "kind": "note",
+      "payload": "Second invented event",
+      "source": "synthetic",
+      "agent_id": "model-a",
+      "agent_kind": "LLM",
+      "ts": 1700000100,
+      "scope": "proj/example"
+    }
+  ],
+  "contradictions": [
+    {
+      "id": 1,
+      "claim_id": 4,
+      "reason": "invented conflicting evidence",
+      "new_claim_id": 3
+    }
+  ],
+  "predicates": [
+    {
+      "name": "about",
+      "parent": "relates_to",
+      "cardinality": "multi"
+    },
+    {
+      "name": "has_outcome",
+      "parent": "relates_to",
+      "cardinality": "single"
+    },
+    {
+      "name": "relates_to",
+      "parent": null,
+      "cardinality": "multi"
+    }
+  ]
+}

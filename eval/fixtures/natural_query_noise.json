@@ -1,0 +1,15 @@
+{
+  "name": "natural_query_noise",
+  "version": 1,
+  "description": "Natural wording with stopword-like terms and plural entity words, testing general token normalization without LLMs",
+  "claims": [
+    {"subject": "project", "predicate": "language", "object": "Rust"},
+    {"subject": "user", "predicate": "likes", "object": "Rust"},
+    {"subject": "benchmark", "predicate": "language", "object": "Rust"},
+    {"subject": "meeting", "predicate": "attendee", "object": "Alice"}
+  ],
+  "queries": [
+    {"query": "projects using Rust", "relevant_indices": [0], "top_k": 5},
+    {"query": "meetings with Alice", "relevant_indices": [3], "top_k": 5}
+  ]
+}
