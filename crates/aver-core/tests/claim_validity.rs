@@ -314,6 +314,7 @@ fn reverify_records_its_writer_and_evidence_and_only_extends_the_window() {
             ClaimWrite::new("lesson:plain", "concerns", "topic:mulch", "synthetic").scope("a"),
         )
         .unwrap();
+    let log_after_confirm = std::fs::read_to_string(dir.path().join("log.jsonl")).unwrap();
     for (write, expected) in [
         (confirm().scope("a/b"), "request scope"),
         (
@@ -343,6 +344,12 @@ fn reverify_records_its_writer_and_evidence_and_only_extends_the_window() {
         let message = store.reverify_claim(write).unwrap_err().to_string();
         assert!(message.contains(expected), "{message}");
     }
+    // The checks run inside the write transaction: a refusal appends
+    // nothing and rolls back, so the next write still goes through.
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("log.jsonl")).unwrap(),
+        log_after_confirm
+    );
     store.retire_claim(plain, "invented").unwrap();
     let message = store
         .reverify_claim(ReverifyWrite::new(plain, ["plot:1"]).scope("a"))

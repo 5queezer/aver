@@ -96,6 +96,41 @@ impl Store {
             self.privacy_filter_path_recording(reference)?;
         }
 
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<(), Error> {
+            // Under the write lock, so a concurrent retire or scope change
+            // cannot slip between these checks and the append.
+            let claim = self.reverify_target(&write)?;
+            let record = LogRecord::ReverifyClaim {
+                ts: now,
+                claim_id: claim.id,
+                verified_at: now,
+                agent_id: Some(write.agent_id),
+                agent_kind: Some(write.agent_kind.as_str().to_string()),
+                evidence: write.evidence,
+                valid_until: write.valid_until,
+            };
+            append_jsonl(&self.log_path, &record)?;
+            apply(&self.conn, &record)?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(now)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
+    }
+
+    /// The claim a confirmation targets, after the checks that read store
+    /// state: ACTIVE, in the request scope, evidence present in its scope
+    /// set, and a window end that only extends. Caller holds the write lock.
+    fn reverify_target(&self, write: &ReverifyWrite) -> Result<Claim, Error> {
         let claim = self.get_claim(write.claim_id)?;
         if claim.status != ClaimStatus::Active {
             return Err(invalid_reverify(format!(
@@ -166,33 +201,7 @@ impl Store {
                 )));
             }
         }
-
-        let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        let result = (|| -> Result<(), Error> {
-            let record = LogRecord::ReverifyClaim {
-                ts: now,
-                claim_id: claim.id,
-                verified_at: now,
-                agent_id: Some(write.agent_id),
-                agent_kind: Some(write.agent_kind.as_str().to_string()),
-                evidence: write.evidence,
-                valid_until: write.valid_until,
-            };
-            append_jsonl(&self.log_path, &record)?;
-            apply(&self.conn, &record)?;
-            Ok(())
-        })();
-        match result {
-            Ok(()) => {
-                self.conn.execute_batch("COMMIT")?;
-                Ok(now)
-            }
-            Err(err) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-                Err(err)
-            }
-        }
+        Ok(claim)
     }
 
     /// ADR-0032: every explicit confirmation of a claim, oldest first.

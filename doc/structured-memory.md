@@ -221,12 +221,17 @@ their own evidence. Counting and confirmation stay within a claim's scope set,
 so replay evidence neither confirms nor decays a claim in a live scope, and a
 replay-scoped request cannot confirm one. A pre-declared out-of-sample test is
 a live claim whose window starts after its creation: only items that close
-after both its creation and the window start are counted.
+after both its creation and the window start are counted. This isolation is
+only as good as the scopes writers use: a per-call `scope` parameter overrides
+the connection scope, so keeping replay writes out of live scopes is the
+importer's discipline; aver does not stop a writer from naming a live scope.
 
 A store whose `ontology.json` declares `in_context` or `closed_at` with a
 different shape fails to open (ADR-0031); reconcile the file before upgrading.
-An older binary replaying a newer log silently drops context and evidence, so
-roll back by restoring the matching backup, never by replaying a newer log.
+An older binary refuses to open an upgraded store because its schema version
+is newer. Roll back with the old binary plus the store backup taken before the
+upgrade. Never replay a newer log with an older binary: it would silently drop
+context and evidence.
 
 ## Viewer
 
