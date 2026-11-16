@@ -1,268 +1,70 @@
-# Aver
+# aver
 
-Aver is a local-first memory layer for coding agents: an append-only episodic log, a durable claim graph with first-class hyperedges, vector recall primitives, deterministic code extraction, and an MCP/OAuth server surface in one Rust workspace.
+> *A memory for coding agents that writes every fact down twice: once in a plain log you can read, and once in a database it can always rebuild from that log.*
 
-Aver is experimental systems infrastructure. The architecture is ADR-driven and the implementation is useful for local development, but it is not yet hardened as a hosted multi-user service. See [Implementation status](#implementation-status) for what is built today.
+Every claim below links to the test that proves it ("proof"). CI runs those tests and the quickstart on every commit, so this page can't quietly drift from the code.
 
-## Status
+---
 
-- **Maturity:** experimental / alpha
-- **Default deployment:** localhost-first CLI and MCP server
-- **Quality gate:** `cargo fmt`, `cargo clippy`, `cargo test`, and project policy checks in CI
-- **Security posture:** privacy filtering runs before memory writes; public deployments still require explicit CORS origins, HTTPS, and trusted reverse-proxy boundaries
+## agents forget, or remember the wrong way
 
-## Why
+A coding agent starts every session with no memory of the last one. The usual fixes swing between two bad options. One is a pile of text chunks in a vector store, which is easy to write to and impossible to audit: nobody can say where a "memory" came from or whether it is still true. The other is a background process that rewrites the agent's notes on its own, which you have to trust blindly.
 
-Most agent memory systems either store loose text chunks or rely on opaque background reasoning. Aver takes a more conservative route inspired by *The Memory Layer*: every durable memory should be structured, provenance-tracked, privacy-checked, and replayable from an append-only log.
+aver takes the boring route. A memory is a small structured fact, `PaymentGateway depends_on StripeSDK`, with a source, a confidence and the agent that wrote it. Every write is checked for secrets, appended to a log file first, and only then indexed. If the database is lost or suspect, aver rebuilds it from the log, and the result is identical. Nothing rewrites a memory behind your back: corrections, retirements and contradictions are new log entries, not edits.
 
-The goal is a trustworthy substrate for coding agents that can:
+It is a single Rust program, local first: SQLite and a JSONL file in a directory you choose. Agents reach it over MCP, either through a small HTTP server with OAuth or as a child process on stdin/stdout.
 
-- remember explicit project facts as triples such as `PaymentGateway depends_on StripeSDK`,
-- keep an audit trail of memory writes in `log.jsonl`,
-- derive searchable claims and vectors from that log,
-- reject secrets before they enter memory,
-- extract code relationships deterministically with Tree-sitter,
-- expose memory through a small CLI and MCP-compatible server.
+## install it
 
-## Features
+You need a Rust toolchain (1.95 or newer). From a checkout of this repository:
 
-- **Local-first storage** — SQLite plus `log.jsonl` under a configurable memory directory.
-- **Append-first writes** — durable claims and hyperedges are appended to JSONL before SQLite insertion, and lifecycle transitions (retire, contradict, candidate staging, consolidation supersede/decay/merge) are logged the same way so replay reconstructs them.
-- **Structured claims** — memories are stored as `(subject, predicate, object)` claims with source references, confidence, status, and agent provenance.
-- **First-class hyperedges** — n-ary memories can be stored with predicate, provenance, confidence, source references, status, timestamps, and role/entity participants.
-- **Privacy gate** — token/path/entropy checks run before writes; rejected content is not persisted.
-- **Keyword, vector, and hybrid recall primitives** — text recall is available through the CLI; vector chunks and hybrid ranking over active claims are implemented in the core crate.
-- **Adaptive HybridRAG weights** — structural graph questions lean toward graph context; broad summary questions lean toward vectors; explicit alpha overrides are range-validated.
-- **Opt-in recency** — hybrid recall can add `w * exp(-age / tau)` from each claim's last verification time; off by default, and re-assertions refresh that time through an append-only log record.
-- **Graph expansion, path queries, and communities** — local claim neighborhoods, confidence/provenance-aware shortest path queries over active claims and hyperedges, and deterministic weighted community detection are available in core.
-- **Contradiction records and confidence decay** — contradictions are explicit audit records; consolidation can decay contradicted active claims and report merged/superseded/decayed counts.
-- **Deterministic code extraction** — `aver-extractor` uses Tree-sitter to extract functions, imports, calls, structs, enums, traits, impl methods, tests, and code facts across 13 languages (C, C++, C#, Go, Java, JavaScript, Kotlin, PHP, Python, Ruby, Rust, Swift, TypeScript). `aver extract <path>` stores them as `EXTRACTED` claims (confidence 0.90) in the project scope `proj/<repo>`: `File defines Symbol`, `Symbol calls Symbol`, `File/Module imports Module`, `TestFunction tests Function`, `Class uses Trait`. `extends` and `implements` facts are counted and skipped until the core ontology has those predicates (ADR-0027).
-- **Candidate claim workflow** — episodic events can produce staged claims that are promoted or rejected explicitly.
-- **Observation continuity surfaces** — episodic events can produce privacy-checked, source-backed observations that are recallable by ID, summarized by compaction, and coverage-accounted across full session event ranges.
-- **Continuity reliability controls** — coverage accounting, deterministic `catch-up`, gap warnings in summaries, destructive prune operations blocked when gaps remain, prune markers preserved in logs, and audit-aware observation recall.
-- **MCP/OAuth server** — `aver-server` exposes memory tools over Streamable HTTP MCP behind a local OAuth-style token flow, including the ADR-0008 five-tool surface with validated recall/write/event/extraction-trigger parameters, observation projection tools, ADR-0021/0022 scoped memory parameters and connection defaults, persisted confidence overrides, and recall subgraphs with confidence floors.
-- **Evaluation harnesses** — fixture evaluation plus a BEAM100K runner using local Ollama for embeddings, answer generation, and judging.
-
-## Quick Start
-
-### Install from this checkout
-
-Prerequisites:
-
-- Rust toolchain compatible with the workspace (`rust-version = 1.95`)
-- `cargo`
-
+<!-- quickstart -->
 ```bash
-./install.sh
-# equivalent when run from the Aver git checkout:
-./install.sh --from-source
-# or, if you use just:
-just install
-```
-
-When run from the Aver git repository, `install.sh` detects the checkout and installs from source. This installs the `aver` CLI to `~/.cargo/bin` by default.
-
-To run `aver-server` as a systemd user service (unit in [`contrib/systemd/aver-mcp.service`](contrib/systemd/aver-mcp.service), binary at `~/.local/bin/aver-server`):
-
-```bash
-just install-service   # once: install + enable the aver-mcp user unit
-just deploy-server     # after every change: release build, install, restart, probe
-just health            # probe GET /healthz on the running server
-```
-
-### Install from a release
-
-Tagged releases (`v*`) attach `aver-<os>-<arch>.tar.gz`, `aver-server-<os>-<arch>.tar.gz` (`linux`/`darwin`, `x86_64`/`aarch64`), `aver-mcp.service` and `SHA256SUMS`.
-
-```bash
-V=v0.1.0; R=https://github.com/5queezer/aver/releases/download/$V   # set 5queezer/aver
-curl -fLO $R/aver-server-linux-x86_64.tar.gz -O $R/aver-mcp.service -O $R/SHA256SUMS
-sha256sum -c --ignore-missing SHA256SUMS
-tar -xzf aver-server-linux-x86_64.tar.gz
-install -Dm755 aver-server ~/.local/bin/aver-server
-install -Dm644 aver-mcp.service ~/.config/systemd/user/aver-mcp.service
-systemctl --user daemon-reload && systemctl --user enable --now aver-mcp
-curl -fsS http://127.0.0.1:3317/healthz
-```
-
-Or let the installer verify checksums for you: `./install.sh --repo 5queezer/aver --version $V --server` installs `aver` to `~/.cargo/bin` and `aver-server` to `~/.local/bin` (`--server-dir` to change).
-
-Maintainers: see [doc/release-procedure.md](doc/release-procedure.md) for the release dry run, tagging and rollback.
-
-### Store and recall a claim
-
-```bash
+cargo install --locked --path crates/aver-cli
 aver --memory-dir .aver status
 aver --memory-dir .aver remember PaymentGateway depends_on StripeSDK --source session_47
 aver --memory-dir .aver recall Stripe
 ```
 
-Expected recall output:
+Expected output:
 
 ```text
-PaymentGateway depends_on StripeSDK
+aver store: ok
+claim_id=<number>
+[global] PaymentGateway depends_on StripeSDK
+```
+<!-- /quickstart -->
+
+`<number>` is the new claim's id, different on every run. The store is now two files: `.aver/log.jsonl`, the append-only log, and `.aver/db.sqlite`, the index rebuilt from it.
+
+To give agents access, install the server too, `cargo install --locked --path crates/aver-server`, and see [connect an agent](#connect-an-agent). There are no prebuilt releases yet.
+
+## what it does
+
+- **Facts as triples, with provenance.** Each memory is subject, predicate, object, plus where it came from, a confidence, a status and the writing agent ([proof](crates/aver-core/tests/claims.rs "get_claim_returns_provenance_confidence_status_and_source_refs")).
+- **Log first, then the index.** A write is appended to `log.jsonl` before anything else changes ([proof](crates/aver-core/tests/claims.rs "add_claim_appends_to_episodic_log_and_mirrors_to_sqlite")), and replaying the log rebuilds an identical database ([proof](crates/aver-core/tests/write_path.rs "replay_rebuild_is_identical")). `aver replay` does this on demand; it is strict by default and can quarantine bad lines instead ([proof](crates/aver-cli/tests/replay.rs "replay_strict_fails_and_lenient_quarantines")).
+- **Secrets never get in.** API keys, tokens, private paths and high-entropy strings are rejected before anything is written, so they never reach the log ([proof](crates/aver-core/tests/privacy.rs "add_claim_rejects_secret_before_episodic_log_write")).
+- **A small, strict vocabulary.** Predicates come from an ontology with parents, aliases and cardinality. An unknown predicate is refused with suggestions to retry with ([proof](crates/aver-server/tests/tools.rs "remember_claim_unknown_predicate_typo_lists_vocabulary_and_suggestion")). A store can add its own predicates in an `ontology.json` next to it ([proof](crates/aver-core/tests/ontology_extension.rs "extension_adds_predicates_cardinality_aliases_and_types_on_open")).
+- **Sentences stay sentences.** An object that is prose, a number or a quoted string is stored as a literal value, not turned into a graph node; short names stay entities ([proof](crates/aver-core/tests/structured_objects.rs "objects_keep_text_but_prose_and_numbers_are_not_entities")). A prose write gets a hint to split it into atomic facts, and `strict_atomic` refuses it instead ([proof](crates/aver-server/tests/structured_memory.rs "mcp_writes_expose_provenance_kind_event_and_atomicity_hint"), [proof](crates/aver-core/tests/structured_writes.rs "strict_prose_rejection_has_no_claim_log")).
+- **The agent's own judgments are marked as such.** Writes through MCP default to `INFERRED` at confidence 0.45, and an inferred claim is capped at 0.75. Only a fact stated in a source may be written as `EXTRACTED` ([proof](crates/aver-server/tests/structured_memory.rs "mcp_default_inference_and_explicit_provenance_reject_bad_inputs_before_append")).
+- **Events, and claims that point at them.** An agent records what happened as an event, then writes the claims it draws from it with the event's id, in one cheap step ([proof](crates/aver-server/tests/structured_memory.rs "event_then_claim_is_a_cheap_scope_correct_public_workflow")). Claims can also be staged as candidates and promoted or rejected after review ([proof](crates/aver-cli/tests/episode_flow.rs "record_event_propose_promote_recall_integration")).
+- **Recall by keyword, or hybrid with embeddings.** Without an embedding provider, recall is keyword search over active claims ([proof](crates/aver-cli/tests/recall.rs "recall_prints_claim_matching_keyword")). With one, recall blends vector similarity and graph structure, and falls back to keywords if the provider fails ([proof](crates/aver-server/tests/hybrid_recall.rs "recall_falls_back_to_keyword_when_query_embedding_fails")).
+- **Scopes keep projects apart.** Every memory has a scope such as `proj/aver`. Recall can read a scope and its parents, only that scope, its children, or everything ([proof](crates/aver-cli/tests/scope_cli.rs "recall_with_scope_walk_filters_results")).
+- **Corrections leave a trail.** Retiring a claim ([proof](crates/aver-server/tests/shared_store.rs "retire_claim_over_mcp_invalidates_the_stored_claim")), recording a contradiction, or consolidating duplicates are new log entries; the old claim stays readable in history ([proof](crates/aver-core/tests/claims.rs "contradict_records_auditable_contradiction_without_deleting_claim"), [proof](crates/aver-core/tests/claims.rs "consolidate_supersedes_older_conflicting_claim")). A single-valued fact that changes supersedes the old one; a multi-valued one keeps every value ([proof](crates/aver-core/tests/predicate_cardinality.rs "multi_valued_predicates_keep_every_object_through_consolidation")).
+- **Knowing when a fact was last checked.** A claim can say under which context it holds and for how long. A reviewer confirms it with cited evidence, and recall reports how much new matching evidence has arrived since that confirmation ([proof](crates/aver-core/tests/claim_validity.rs "reverify_records_its_writer_and_evidence_and_only_extends_the_window")).
+- **Code facts without a model.** `aver extract <path>` reads source code with Tree-sitter in 13 languages and stores definitions, calls, imports and tests as claims in the project's scope ([proof](crates/aver-cli/tests/extract.rs "extract_then_recall_returns_project_scoped_code_claims")).
+
+## connect an agent
+
+**Over HTTP**, for agents that connect to a server (Claude Code, VS Code and other MCP clients with OAuth). Start `aver-server`; it listens on `127.0.0.1:3317`. The client registers itself, your browser shows a consent screen listing what it may do, and after you approve, the client gets a token limited to the scopes you ticked ([proof](crates/aver-server/tests/oauth_consent_flow.rs "approve_decision_records_consent_redirects_with_code_and_skips_screen")). Tokens refresh, and a reused refresh token revokes the whole token family ([proof](crates/aver-server/tests/refresh_and_cors.rs "refresh_token_reuse_revokes_token_family")). Callers from other machines are refused unless a trusted reverse proxy vouches for them ([proof](crates/aver-server/tests/http_routes.rs "oauth_authorize_route_rejects_non_loopback_with_html_403")). A VS Code workspace entry:
+
+```json
+{ "servers": { "aver": { "type": "http", "url": "http://127.0.0.1:3317/mcp" } } }
 ```
 
-The store directory will contain:
+Each write is attributed to the client that made it ([proof](crates/aver-server/tests/oauth_scopes.rs "mcp_writes_stamp_agent_id_from_authenticated_client")). `contrib/systemd/aver-mcp.service` runs the server as a user service.
 
-```text
-.aver/
-├── db.sqlite   # indexed SQLite projection
-└── log.jsonl   # append-only audit log
-```
-
-### Extract code facts
-
-```bash
-aver --memory-dir .aver extract crates/ --dry-run   # fact counts per predicate, no writes
-aver --memory-dir .aver extract crates/             # write claims to proj/<repo>
-aver --memory-dir .aver recall Store --scope proj/aver
-```
-
-The scope defaults to `proj/<name>`, where `<name>` is the repository name from `remote.origin.url`, else the git top-level directory name, else the scanned directory name; pass `--scope` to pin it. `--lang rust` limits the scan to one language. Hidden directories, `target`, and `node_modules` are skipped. Each run prints one summary line (`files_scanned`, `facts_extracted`, `facts_ingested`, and `skipped` counts by predicate, duplicate, and privacy rejection). Re-running appends duplicate claims; `extract` does not consolidate, because consolidation currently treats every predicate as single-valued (ADR-0027).
-
-## How It Works
-
-Aver separates memory into three projections:
-
-```text
-User / Agent
-  → CLI or MCP tool
-  → privacy filter
-  → append JSONL event/claim first
-  → insert/update SQLite projection
-  → recall by text, vector, or hybrid ranking
-```
-
-The design maps to the ADRs:
-
-- **Episodic log** — chronological append-only record in `log.jsonl` and `events.jsonl`.
-- **Observation projection** — privacy-checked session-continuity observations over episodic events, with source-event provenance and mechanical compaction summaries.
-- **Observation coverage accounting** — `Store::observation_coverage()` computes covered/uncovered event IDs per session; uncovered IDs are exposed to callers and used to block unsafe pruning.
-- **Continuity blockers** — session summaries mark uncovered ranges explicitly, and pruning refuses to proceed until coverage gaps are resolved by catch-up projection.
-- **Prune markers + audit recall** — pruning emits append-only tombstones in `observations.jsonl`; pruned observations disappear from default views but remain recallable with audit metadata.
-- **Semantic graph** — durable claims/triples in SQLite.
-- **Ontology reasoner** — ADR-0010 entity and predicate hierarchies are seeded on open, materialized into closure tables, and used by graph expansion and path predicate filters so abstract filters such as `depends_on` also match descendant predicates like `calls`, `imports`, and accepted aliases such as `requires`; MCP/tool-facing diagnostics for unknown non-user predicates use alias-aware fuzzy suggestions plus the current predicate/alias vocabulary.
-- **Typed entities** — claim subjects/objects are projected into `entities` with prefix-based types such as `Function:*` and fallback `Thing` for unknown entities.
-- **Vector store** — `vector_chunks` with JSON-serialized embeddings and a `sqlite-vec`/`vec0` ANN table where the bundled extension is available.
-- **Extraction** — Rust Tree-sitter extractor turns source code into structured facts.
-- **Graph tools** — recall, expand, add-triple, contradict, and consolidate map the ADR-0008 surface onto the local claim store.
-- **Consolidation** — duplicate/conflict handling supersedes older claims, explicit contradictions can decay confidence, and report counts summarize merged, superseded, and decayed claims.
-
-For a deeper implementation walkthrough, see [`doc/how-it-works.md`](doc/how-it-works.md). For design rationale, see the ADRs in [`doc/adr/`](doc/adr/).
-
-## Design References
-
-Aver's implementation is intentionally conservative and source-grounded:
-
-- *The Memory Layer* frames durable memory as append-only triples consolidated from episodic fragments into a persistent graph, with HybridRAG combining vector search and graph traversal [ch.147–148].
-- Karta demonstrates the value of active memory operations such as multi-hop traversal, contradiction detection, consolidation, confidence, and temporal awareness; Aver keeps those ideas behind explicit, auditable claim tools instead of opaque note mutation.
-- MuninnDB shows practical retrieval controls such as mode/weight selection, entity graph traversal, relationship types, confidence-preserving entity state, and use-strength/decay; Aver adopts the local-first graph and adaptive retrieval pieces that fit its SQLite/Rust ADRs.
-
-## CLI Usage
-
-```bash
-aver --help
-aver --memory-dir .aver status
-aver --memory-dir .aver remember <subject> <predicate> <object> --source <source>
-aver --memory-dir .aver recall <query>
-aver --memory-dir .aver communities
-```
-
-Current CLI commands:
-
-| Command | Purpose |
-|---|---|
-| `status` | Open the store and report readiness. |
-| `remember` | Append a user-asserted structured claim. |
-| `recall` | Search active claims by keyword. |
-| `record-event` | Record an episodic event with session/kind/payload and optional source. |
-| `should-extract-memories` | Check extraction trigger conditions for a session. |
-| `propose` | Propose a candidate claim from an event. |
-| `list-candidates` | List candidate claims with optional session/status filters. |
-| `promote` | Promote a candidate claim into durable memory. |
-| `triage` | Let the opt-in ADR-0024 decision model promote, reject, or hold a candidate claim. |
-| `reject` | Reject a candidate claim with a reason. |
-| `record-observation` | Record a session observation from source events. |
-| `recall-observation` | Recall an observation with its supporting event payloads and audit status. |
-| `observation-coverage` | Report event coverage and uncovered ranges for a session. |
-| `catch-up` | Run a deterministic catch-up projection over uncovered events. |
-| `compaction-summary` | Assemble a continuity summary including coverage gap warnings. |
-| `expand` | Expand an entity neighborhood from the local claim graph. |
-| `communities` | Print deterministic weighted graph communities with score and bridge nodes. |
-| `add-triple` | Append a confidence-bearing structured triple. `remember` and `add-triple` take `--context`, `--valid-from` and `--valid-until` (ADR-0032). |
-| `reverify` | Confirm a claim with new evidence (`--claim-id`, repeatable `--evidence`, `--scope` = the claim's scope, optional `--valid-until`, `--agent-id`/`--agent-kind`). |
-| `confirmations` | List every explicit confirmation of a claim (`--claim-id`), oldest first. |
-| `contradict` | Record a contradiction for a claim id and optional replacement claim. |
-| `consolidate` | Consolidate active duplicates/conflicts and apply confidence decay. |
-| `extract` | Extract Tree-sitter code facts from a file or directory into the project scope (`--scope`, `--dry-run`, `--lang`). |
-| `recall-misses` | Summarize the opt-in server recall-miss log (`--since <ISO date>`, `--json`): misses vs weak hits, by retrieval path, scope walk and scope, query-length median/p90, alpha histogram, events per day. Also `just recall-misses`. |
-| `vacuum` | Run `VACUUM` (and optional analysis). |
-| `replay` | Rebuild SQLite from the append-only logs (strict by default; `--lenient` quarantines invalid lines and continues). Holds the advisory `.lock` for the whole run so it cannot race a live store. |
-
-## Server and MCP Usage
-
-Run the MCP/OAuth HTTP server:
-
-```bash
-cargo run -p aver-server
-```
-
-Default configuration:
-
-| Environment variable | Default | Purpose |
-|---|---:|---|
-| `AVER_HOST` | `127.0.0.1` | Bind host. |
-| `AVER_PORT` | `3317` | Bind port. |
-| `AVER_BASE_URL` | `http://127.0.0.1:3317` | Public base URL used in OAuth metadata. |
-| `AVER_MEMORY_DIR` | `.aver` | Memory store directory. |
-| `AVER_AUTH_DB_PATH` | `<AVER_MEMORY_DIR>/auth.db` | SQLite auth database path. |
-| `AVER_CORS_ORIGINS` | *(allow any origin)* | Optional comma-separated allowed origins for protected MCP CORS responses. |
-| `AVER_TRUSTED_AUTH_HEADER` | *(unset)* | Optional reverse-proxy header name (for example `X-Forwarded-User`) that enables non-loopback OAuth authorization using Profile C trusted-header auth. |
-| `AVER_DECISION_MODEL` | *(unset)* | Ollama decision model (for example `tev1:4b`); setting it enables the ADR-0024 decision-model features. |
-| `AVER_DECISION_URL` | `http://localhost:11434` | Ollama base URL for the decision model. |
-| `AVER_DECISION_MIN_CONFIDENCE` | `0.6` | Confidence floor for decision-model choices; below it, or when the model reports no confidence, the deterministic behaviour applies (triage holds, suggestions fall back). |
-| `AVER_EMBEDDING_PROVIDER` | `ollama` | Embedding provider: `ollama` or `openai` (any OpenAI-compatible `POST /embeddings` endpoint). See [Embedding providers](#embedding-providers). |
-| `AVER_EMBEDDING_URL` | *(unset)*; `https://api.openai.com/v1` for `openai` | Provider base URL. With the `ollama` provider (for example `http://localhost:11434`) setting it is what enables embeddings: MCP `recall` becomes hybrid (ADR-0004) and `add_vector_chunk` stores an embedding with each chunk. Requires the default `ollama` feature. |
-| `AVER_EMBEDDING_MODEL` | `nomic-embed-text`; `text-embedding-3-small` for `openai` | Embedding model, recorded on vector chunks. |
-| `AVER_EMBEDDING_API_KEY_ENV` | `OPENAI_API_KEY` | Name of the environment variable that holds the API key for the `openai` provider. Without a key in that variable the provider stays off and recall is keyword-only. |
-| `AVER_EMBED_ON_WRITE` | *(unset)* | Set to `1` to store an embedded vector chunk with every claim written through the server, so ordinary memories are eligible for hybrid recall. Needs an embedding provider; see [Embedding providers](#embedding-providers) for cost and limits. |
-| `AVER_EMBEDDING_TIMEOUT_SECS` | `10` | Timeout in whole seconds for one embedding request; on timeout `recall` falls back to keyword recall and chunk writes store text only. Zero or unparsable values are ignored. |
-| `AVER_RECALL_RECENCY_WEIGHT` | `0` | Opt-in recency weight `w` in `[0, 1]` for hybrid `recall` (ADR-0004 amendment): adds `w * exp(-age / tau)` to each claim's score, with age measured from `last_verified_at` (or the write time). `0` or unset keeps ranking unchanged; an invalid value is reported on stderr and leaves recency off. `0.08` passes the bundled timed fixture. |
-| `AVER_RECALL_RECENCY_TAU_DAYS` | `90` | Time constant `tau` in days for `AVER_RECALL_RECENCY_WEIGHT`; must be positive. |
-| `AVER_RECALL_EVIDENCE_HALF_LIFE` | unset | Opt-in ADR-0032 ranking for hybrid `recall`: a claim with a context scores `0.5^(n / half_life)` of its relevance, `n` being its closed matching evidence since the last confirmation. Unset or `0` keeps ranking unchanged; stored confidence is never rewritten; an invalid value is reported on stderr and leaves it off. |
-| `AVER_DECISION_TIMEOUT_SECS` | `30` | Timeout in whole seconds for one decision-model request; on timeout the deterministic behaviour applies. Zero or unparsable values are ignored. |
-| `AVER_EXTRACT_ROOT` | *(unset)* | Directory the MCP `extract` tool may read (ADR-0027). Unset, the tool refuses every path. Paths must be absolute and, after symlink resolution, inside this directory. |
-| `AVER_EXTRACT_MAX_FILES` | `2000` | Most source files one `extract` call may scan; larger trees are refused with an error naming this cap. |
-| `AVER_RECALL_MISS_LOG` | *(unset)* | Set to `1` to append a content-free line to `<AVER_MEMORY_DIR>/recall_misses.jsonl` for every MCP `recall` that misses or only hits weakly. Unset, no file is created. |
-| `AVER_RECALL_WEAK_CONFIDENCE` | `0.5` | With the recall-miss log on, a recall whose top claim's confidence is below this value is logged as `weak`. Values outside 0..=1 are ignored. |
-
-
-Useful endpoints:
-
-- `GET /.well-known/oauth-authorization-server`
-- `POST /oauth/register`
-- `GET /oauth/authorize` (browser consent screen; loopback by default, optional trusted-header for non-loopback)
-- `POST /oauth/authorize/decision` (consent-screen form submission)
-- `POST /oauth/consent/revoke` (browser-session form; revokes a client's consent and its live tokens, after which `/oauth/authorize` re-renders the consent screen)
-- `POST /oauth/token` for authorization-code + PKCE token exchange and refresh-token grants (RFC 6749 §5.2 JSON error bodies)
-- `GET /healthz` (unauthenticated liveness probe)
-- `GET /api/health` with `Authorization: Bearer <token>`
-- `/mcp` with `Authorization: Bearer <token>`
-
-`/oauth/authorize` drives a browser consent flow (ADR-0020). After a client dynamic-registers via `POST /oauth/register`, it redirects the user to `/oauth/authorize` with the standard PKCE parameters. Aver renders a consent screen showing the client name, redirect URI, and all supported scopes as checkboxes, with the client's requested scopes pre-selected; on **Approve** it stores a per-client consent row, mints an authorization code bound to the checked scopes, and redirects back to the client's `redirect_uri` with `code` and `state`. Approving with zero scopes records an empty grant that never skips the consent screen, so a later visit can grant real access. The client then exchanges the code at `/oauth/token` for an `access_token` plus `refresh_token` (and an `expires_in` lifetime); refresh grants rotate both halves of the token pair, presenting an already-rotated refresh token revokes the client's whole token family (RFC 6819 §5.2.2.3 reuse detection), and access tokens carry only the scopes recorded on the consent row.
-
-The flow supports loopback (`127.0.0.1` / `::1`) callers by default (Profile A in ADR-0020). Non-loopback callers can also authenticate via Profile C when `AVER_TRUSTED_AUTH_HEADER` is set to a trusted upstream identity header (for example `X-Forwarded-User`); otherwise they are rejected with an HTML 403.
-
-### stdio mode for a parent process
-
-Agent hosts that start MCP servers as child processes can run Aver without HTTP or OAuth (ADR-0028):
-
-```bash
-AVER_MEMORY_DIR=/path/to/store AVER_DEFAULT_SCOPE=proj/my-agent aver-server --stdio
-```
-
-The server then speaks MCP on stdin/stdout to the process that spawned it and exits when stdin closes. No port is opened. The parent is the only client and holds every tool scope, so access control in this mode is the file permissions on the store directory. The session's memory scope is `AVER_DEFAULT_SCOPE` (else `global`); the embedding, recency, decision-model and extract settings from the table above apply unchanged. Only protocol frames are written to stdout; diagnostics go to stderr. Several children can share one store, but open a new store once (one start, or any `aver` command) before starting several at the same moment: on a fresh, empty store directory two simultaneous first starts race on the initial schema setup and one of them exits non-zero and must be started again. A typical client entry:
+**Over stdio**, for agent hosts that start MCP servers as child processes. No port, no OAuth: the parent process is the only client, and the store directory's file permissions are the access control ([proof](crates/aver-server/tests/stdio.rs "stdio_session_grants_every_scope_and_keeps_stdout_for_the_protocol")). Several children can share one store ([proof](crates/aver-server/tests/stdio.rs "two_stdio_children_share_one_store_and_the_log_replays_to_the_same_state")).
 
 ```yaml
 mcp_servers:
@@ -272,267 +74,89 @@ mcp_servers:
     env:
       AVER_MEMORY_DIR: /path/to/store
 ```
-### Embedding providers
 
-Embeddings are off unless configured. One provider serves a store; there is no fallback chain between providers.
+The server offers 16 tools and tells agents to start with five: `recall`, `remember_claim`, `record_event`, `add_triple` and `retire_claim` ([proof](crates/aver-server/tests/mcp_instructions.rs "mcp_instructions_are_a_progressive_discovery_card")). The rest (graph expansion, event lookup, candidate review, contradiction, reverification, consolidation, vector chunks) is described in the server's own instructions for when an agent needs it.
 
-- **Ollama (default).** Set `AVER_EMBEDDING_URL` to an Ollama base URL. Text stays on the machines you run.
-- **OpenAI-compatible.** Set `AVER_EMBEDDING_PROVIDER=openai` and put the API key in `OPENAI_API_KEY` (or the variable named by `AVER_EMBEDDING_API_KEY_ENV`). Requests go to `POST <AVER_EMBEDDING_URL>/embeddings` with `model`, `input`, `encoding_format: "float"` and `dimensions: 768`, so vectors fit the ANN index; a response of any other length is rejected. **With this provider the text of every vector chunk and of every recall query is sent to that endpoint.** The privacy filter still runs first, so text it rejects is never stored or sent. The key is used only as the bearer token: it is not logged, not written to the claim log, and provider error bodies are never echoed.
+## embeddings, optional
 
-What to expect either way:
+Embeddings are off until you configure a provider, and one provider serves a store.
 
-- By default `remember_claim` does not embed. Only `add_vector_chunk` stores an embedding, so hybrid recall (and the opt-in recency term) covers claims that have chunks.
-- **Embed on write (opt-in).** With `AVER_EMBED_ON_WRITE=1` and a provider configured, every claim created through the server (`remember_claim`, `add_triple`, `promote_candidate_claim`, `triage_candidate_claim`, and the replacement claim of `contradict`) also gets one vector chunk holding its `subject predicate object` text, written through the same logged path as `add_vector_chunk`. The claim is validated, privacy-filtered and durably written first; the embedding is best effort and can never fail or undo that write. The tool result then carries `embedded`: `true` when the claim got a vector, `false` when the provider did not answer and the claim is keyword-only. Costs and limits:
-  - one embedding request per such write, bounded by `AVER_EMBEDDING_TIMEOUT_SECS`, made while the server holds its tool lock, so other calls to the same server wait for it;
-  - with the OpenAI-compatible provider the text of every such claim is sent to that endpoint;
-  - nothing retries a failed embedding, and claims written before the setting was turned on, by `aver extract`, or by consolidation are not embedded;
-  - each re-assertion of a triple adds another chunk with the same vector. Consolidation supersedes the duplicate claim but its chunk stays in the index, and recall filters to ACTIVE claims after the nearest-neighbour step, so a fact re-asserted very many times takes up room in the candidate pool (4 × `top_k`, at least 64).
-- When the provider does not answer within `AVER_EMBEDDING_TIMEOUT_SECS`, `recall` answers by keyword and a chunk write stores the text without a vector. Nothing embeds that chunk later: the backfill routine in `aver-core` is not exposed by any command or tool yet.
-- Recall compares the query vector with every stored vector and has no model filter. Vectors from different models are not comparable even at the same length, so do not change provider or model on a store that already holds embedded chunks; start a new store or re-create the chunks.
+- **Ollama:** set `AVER_EMBEDDING_URL` to its address. Text stays on machines you run ([proof](crates/aver-server/tests/embedding_provider.rs "unset_configuration_is_unchanged")).
+- **OpenAI-compatible:** set `AVER_EMBEDDING_PROVIDER=openai` and the key in `OPENAI_API_KEY`. **The text of every embedded claim and every recall query is then sent to that endpoint.** The privacy check still runs first, so rejected text is never sent ([proof](crates/aver-server/tests/embed_on_write.rs "rejected_writes_send_nothing_to_the_provider")), and the key is never logged or stored ([proof](crates/aver-core/tests/openai_embedding.rs "provider_errors_never_carry_the_response_body_or_the_key")).
+- **Embed on write:** with `AVER_EMBED_ON_WRITE=1`, every claim written through the server also gets a vector, so ordinary memories take part in hybrid recall ([proof](crates/aver-server/tests/embed_on_write.rs "opted_in_writes_get_a_vector_chunk_and_hybrid_recall")). The claim is saved first; if the provider fails, the claim stays keyword-only ([proof](crates/aver-server/tests/embed_on_write.rs "provider_failure_keeps_the_claim_and_reports_keyword_only")) until `aver backfill` embeds what is missing ([proof](crates/aver-cli/src/main.rs "backfill_command_fills_missing_vectors_and_is_idempotent")).
+- **Recency, opt-in:** `AVER_RECALL_RECENCY_WEIGHT` makes recently confirmed claims rank higher; at 0 the ranking is unchanged ([proof](crates/aver-core/tests/recency.rs "zero_weight_is_bit_identical_to_relevance_only_for_every_age")).
 
-### Connecting an MCP client
+Don't switch provider or model on a store that already holds vectors: vectors from different models can't be compared. Start a new store instead.
 
-For Visual Studio Code, drop a workspace-level `.vscode/mcp.json` similar to:
+## look at what it remembers
 
-```json
-{
-  "servers": {
-    "aver": {
-      "type": "http",
-      "url": "http://127.0.0.1:3317/mcp"
-    }
-  }
-}
-```
+[contrib/graph/graph.html](contrib/graph/graph.html) is a single offline page that shows a store as tables of entities, free-text notes, and a graph around whatever you select, with each claim's provenance and history ([proof](contrib/graph/test_graph.js "graph_tabs_date_range_and_all_history_use_synthetic_fixture")). Open it on an export made by `python3 contrib/graph/export.py <db.sqlite> <out.json>`, which reads the store read-only ([proof](contrib/graph/test_export.py "test_empty_store_and_readonly_input")). Or start `aver-server --graph-view` to serve the same page at `/graph`; it needs a read token and never writes ([proof](crates/aver-server/tests/graph_view.rs "reads_committed_state_without_changing_the_store_under_a_live_writer")). Details: [contrib/graph/README.md](contrib/graph/README.md).
 
-Then run **MCP: Add Server** from the command palette and pick `aver`. VS Code dynamic-registers with `POST /oauth/register`, opens the consent screen in your browser, and — after you click **Approve** — receives the authorization code and exchanges it for an access token automatically. Other MCP clients that support the OAuth 2.1 + PKCE discovery profile (`/.well-known/oauth-authorization-server`) follow the same path.
+![Entities table of an invented project memory](doc/images/graph-entities.png)
 
-MCP writes are attributed to the client that made them: `remember_claim` and `record_event` default `agent_id` to the OAuth `client_id` the bearer token was issued to (`aver-<uuid>` from dynamic registration), so writes from different harnesses stay distinguishable. An explicit `agent_id` parameter overrides it, and tokens minted without a client fall back to `mcp`. Observations and promoted candidates inherit the `agent_id` of their source events; MCP `add_triple` and replacement claims also use the caller attribution. Ordinary MCP claims default to `agent_kind=LLM`, `provenance=INFERRED`, confidence 0.45 (new inferred writes are capped at 0.75). Explicit source-stated facts can request `EXTRACTED`; agent judgments must remain `INFERRED`.
+## what runs where, and what it does not do
 
-MCP currently exposes 24 tools through a progressive discovery card so agents keep the active choice set small:
+- **On your machine:** everything. The store is a SQLite file and a JSONL log in one directory. The only network traffic is to the embedding provider you configure, if any.
+- **Not a hosted service.** It is built for one person's agents on one machine or one trusted network. Put it behind HTTPS and a trusted proxy before exposing it anywhere else.
+- **No language model inside.** aver never asks a model to decide anything; the only model it calls is the embedding provider you configure. It stores what agents tell it, checks it, and finds it again. Deciding what is worth remembering is the agent's job.
+- **No background rewriting.** Nothing merges, decays or deletes memories on its own. Consolidation runs only when asked, and it only adds log entries. Recall never writes anything ([proof](crates/aver-server/tests/recall_read_only.rs "recall_leaves_log_and_database_bytes_unchanged")).
+- **No graph database.** Graph questions (neighbourhoods, related facts) are answered from SQLite.
 
-- **Default active set:** `recall`, `remember_claim`, `record_event`, `record_observation`, `assemble_compaction_summary`
-- **Event-to-claim workflow:** record rationale with `record_event`, then pass its returned `id` as `event_id` to `remember_claim`/`add_triple` in the same scope. For a staged review, progressively load `should_extract_memories`, `propose_candidate_claim`, `list_candidate_claims`, `promote_candidate_claim`, `reject_candidate_claim` only when converting raw events into reviewed durable claims
-- **Source-event audit:** `get_event(event_id, scope?)` reads rationale on demand, requires `claims:read`, and matches the exact event scope (default: resolved request scope). Missing/out-of-scope IDs return the same actionable error; recall does not expand raw event payloads.
-- **Decision-model triage:** `triage_candidate_claim` (ADR-0024, opt-in) asks the local decision model to promote, reject, or hold one candidate
-- **Graph navigation:** progressively load `expand` after recall returns an entity or an anchor is already known; both `remember_claim` and `add_triple` support optional `provenance`, `confidence`, `object_kind`, `event_id`, and `strict_atomic`
-- **Path query:** `path` (`claims:read`) returns the shortest directed path over claims and hyperedges (hyperedges count as `global`, so `exact`/`descendants` walks below `global` skip them) between two entities (`from`, `to`, `max_hops` default 4 max 8, `predicates`, `min_confidence`, `scope`/`scope_walk`) as `found`, `hops`, `confidence` and per-hop `subject`/`predicate`/`object`/`claim_id` (`null` on hyperedge steps)/`confidence`/`provenance`/`scope`
-- **Communities:** `communities` (`claims:read`) lists clusters of strongly connected entities (`scope`/`scope_walk`, `min_members` default 2, `top_k` default 20 max 100) with `id`, `score`, `members`, `bridges` and `size`; grouping and scores are computed over the claims admitted by the scope walk (hyperedges count as `global`)
-- **Observation audit:** progressively load `recall_observation`, `observation_coverage` for handoff, compaction, or provenance checks
-- **Code extraction:** `extract` (`claims:write`) walks a source file or directory on the server with Tree-sitter and stores the facts as `EXTRACTED` claims (ADR-0027). Params: `path` (absolute, inside `AVER_EXTRACT_ROOT`), `scope` (default: the request's resolved scope; `global` is used with a note in the result), `lang`, `dry_run`. It returns `scope`, `files_scanned`, `files_failed`, `facts_extracted`, `facts_ingested`, `skipped` (`extends`, `implements`, `duplicate`, `privacy`, ...) and `dry_run`
-- **Maintenance/repair:** keep `contradict`, `retire_claim`, `consolidate`, `add_vector_chunk` hidden until there is an explicit repair or retrieval-tuning need
-- **Review:** `reverify_claim` (`claims:write`, not in the default set) lets a review step confirm an ACTIVE claim with cited evidence; the request scope must equal the claim's scope. See [claim validity](doc/structured-memory.md#claim-validity-and-confirmation) (ADR-0032)
+## settings
 
-`recall` is hybrid when embeddings are configured (`AVER_EMBEDDING_URL`) and the store holds embedded vector chunks: it embeds the query once, ranks claims with the ADR-0004 vector/graph blend (`alpha` parameter, default from the query-intent classifier) with the scope and ADR-0023 filters (including `status`) applied while candidates are selected, and returns the matching chunk texts in `chunks`. Without embeddings or when the embedding call fails (or times out, `AVER_EMBEDDING_TIMEOUT_SECS`) it answers from keyword recall as before; the additive `retrieval` field (`"hybrid"` or `"keyword"`) says which path ran, and `alpha` is reported for hybrid results. With `AVER_RECALL_RECENCY_WEIGHT` set, hybrid ranking also prefers recently verified claims; a claim's verification time is refreshed when `consolidate` folds a later re-assertion of the same triple into it (logged as `reverify_claim`). Keyword recall and the default configuration are unaffected, and recall still writes nothing.
+The server reads its settings from the environment. The defaults suit a local install.
 
-**Recall-miss log.** With `AVER_RECALL_MISS_LOG=1`, each MCP `recall` that returns no claims (`kind: "miss"`) or whose top claim is below `AVER_RECALL_WEAK_CONFIDENCE` (`kind: "weak"`) appends one JSON line to `<AVER_MEMORY_DIR>/recall_misses.jsonl`; hits write nothing. A line holds `ts` (UTC), `kind`, `agent_id` (the authenticated OAuth client id), `query_len` (chars), `query_tokens` (whitespace tokens), `scope`, `scope_walk`, `filters` (`agent_id_set`, `agent_kind`, `predicate_set`, `min_confidence`, `status`), `alpha`, `retrieval`, `top_k`, `claims_returned`, `chunks_returned`, `top_confidence` and `duration_ms`, and nothing else. Per ADR-0009 it is content-free by construction: the event type has no field for query text, claim text, entity names or chunk text, so none can reach the file. A failed write is reported to stderr once and never fails the recall. This is the data source for the Phase 4 agent trial's "recalls that returned nothing useful"; summarize it with `aver recall-misses`.
+| Variable | Default | What it does |
+|---|---|---|
+| `AVER_MEMORY_DIR` | `.aver` | Store directory ([proof](crates/aver-server/tests/config.rs "auth_db_path_defaults_under_default_memory_dir")) |
+| `AVER_HOST` / `AVER_PORT` / `AVER_BASE_URL` | `127.0.0.1` / `3317` / `http://127.0.0.1:3317` | Where the HTTP server listens and how it names itself in OAuth metadata ([proof](crates/aver-server/tests/config.rs "server_config_defaults_to_loopback_port_and_derived_base_url")) |
+| `AVER_DEFAULT_SCOPE` | `global` | Scope for writes that name none ([proof](crates/aver-server/tests/scope_resolution.rs "env_used_when_no_param_or_headers")) |
+| `AVER_TRUSTED_AUTH_HEADER` | unset | Header from a trusted proxy that lets non-local callers sign in ([proof](crates/aver-server/tests/oauth_consent_flow.rs "non_loopback_get_authorize_with_trusted_header_is_allowed")) |
+| `AVER_CORS_ORIGINS` | any origin on a loopback host, else only the base URL | Allowed browser origins ([proof](crates/aver-server/tests/refresh_and_cors.rs "unset_cors_origins_allow_any_on_loopback_and_only_base_url_elsewhere")) |
+| `AVER_EMBEDDING_PROVIDER` | `ollama` | `ollama` or `openai` |
+| `AVER_EMBEDDING_URL` | unset (`https://api.openai.com/v1` for openai) | Provider address; for Ollama, setting it turns embeddings on |
+| `AVER_EMBEDDING_MODEL` | `nomic-embed-text` / `text-embedding-3-small` | Embedding model |
+| `AVER_EMBEDDING_API_KEY_ENV` | `OPENAI_API_KEY` | Which variable holds the key |
+| `AVER_EMBEDDING_TIMEOUT_SECS` | `10` | Per-request timeout; on timeout recall uses keywords |
+| `AVER_EMBED_ON_WRITE` | unset | `1` embeds every claim written through the server |
+| `AVER_RECALL_RECENCY_WEIGHT` / `_TAU_DAYS` | `0` / `90` | Opt-in recency ranking ([proof](crates/aver-server/tests/config.rs "recall_ranking_reads_recency_tau_and_evidence_half_life_from_env")) |
+| `AVER_RECALL_EVIDENCE_HALF_LIFE` | unset | Opt-in ranking by unreviewed new evidence; stored confidence never changes ([proof](crates/aver-core/tests/claim_validity.rs "evidence_ranking_is_opt_in_and_leaves_confidence_alone")) |
 
-Setting `AVER_DECISION_MODEL` opts the server and CLI into the ADR-0024 decision model (`aver-server` and `aver-cli` enable `aver-core`'s `ollama` feature by default; build with `--no-default-features` to leave it out, in which case the variable is ignored). `triage_candidate_claim` (CLI: `triage --candidate-id N`) then lets the model promote, reject, or hold a pending candidate; promoted claims carry `INFERRED` provenance with confidence 0.45, and without the variable the tool returns an error. The opt-in also lets `should_extract_memories` ask the model when only undigested events remain (the MCP result then adds `reasons`). `Store::suggest_scope` and `Store::normalize_predicate` exist in `aver-core` but are not wired to the MCP surface yet: the propose log line cannot carry the decision attribution, and error paths must not call the model under the tools mutex. Unset, every existing tool behaves as before.
+## the command line
 
-Aver's MCP guide is intentionally proactive but selective: agents should recall first, then record durable user-shared preferences, project facts, and long-lived working context even when the user does not say "remember this" explicitly. Identity details should be recorded only when they are necessary, user-shared, and not sensitive personal data. When durability is uncertain, agents should prefer `record_event` over `remember_claim`, and they must not store secrets, credentials, sensitive personal data, transient chat, or facts they cannot explain with provenance.
+`aver --help` lists every command. The ones you will reach for:
 
-Scope is a first-class memory dimension. Write tools such as `remember_claim`, `add_triple`, `record_event`, `record_observation`, and `propose_candidate_claim` accept an optional `scope`; when omitted through MCP, the request's ADR-0022 resolved scope applies. Clients that send no per-call or connection scope signal use `AVER_DEFAULT_SCOPE` when configured, then fall back to `global`. Read tools (`recall`, `expand`, `path`, `communities`) accept `scope` plus `scope_walk`: use `ancestors` for normal project memory, `exact` for isolation, `descendants` for subtree audits, and `any` only for intentional cross-scope search. Vector chunks do not carry their own scope; they attach to a claim and inherit the claim's effective scope.
+- `remember`, `recall`: write and find a fact (see the quickstart).
+- `record-event`, `propose`, `promote`, `reject`, `list-candidates`: record what happened and review the claims drawn from it ([proof](crates/aver-cli/tests/episode_flow.rs "record_event_propose_promote_recall_integration"), [proof](crates/aver-cli/tests/episode_flow.rs "reject_candidate_sets_status")).
+- `expand`: show the facts around an entity ([proof](crates/aver-cli/tests/maintenance.rs "expand_command_prints_local_graph")).
+- `reverify`, `confirmations`: confirm a claim with evidence, and list its confirmations ([proof](crates/aver-cli/tests/maintenance.rs "reverify_command_records_claim_confirmation"), [proof](crates/aver-cli/tests/maintenance.rs "confirmations_command_lists_claim_evidence")).
+- `contradict`, `consolidate`: record a conflict; fold duplicates and supersede outdated single-valued facts ([proof](crates/aver-cli/tests/maintenance.rs "contradict_command_records_contradiction"), [proof](crates/aver-cli/tests/maintenance.rs "consolidate_command_supersedes_duplicate_claims")).
+- `backfill`: embed stored text that has no vector yet ([proof](crates/aver-cli/src/main.rs "backfill_command_fills_missing_vectors_and_is_idempotent")).
+- `extract`: store code facts from a source tree (see above).
+- `replay`, `vacuum`, `migrate-literals`: rebuild the database from the log, compact it, and convert sentence objects in an older store to literals ([proof](crates/aver-cli/tests/replay.rs "replay_strict_fails_and_lenient_quarantines"), [proof](crates/aver-cli/tests/maintenance.rs "vacuum_command_writes_analyzed_copy"), [proof](crates/aver-cli/tests/maintenance.rs "migrate_literals_command_reclassifies_legacy_objects_idempotently")).
 
-CLI-only continuity and maintenance surfaces (`catch-up`, `compaction-summary`) are implemented in `aver-cli`; MCP exposes `record_observation`, `assemble_compaction_summary`, and the observation audit tools above, while claim-maintenance tasks stay available through the four advanced tools when agents explicitly need them.
-
-## Structured objects
-
-New prose, numeric, boolean and quoted objects are literals; short identifiers
-and names remain entities. Prose writes return an atomic-triple hint;
-`strict_atomic=true` rejects them before appending. Existing text remains
-readable. `aver migrate-literals --dry-run` previews counts; after a complete
-store backup, `aver migrate-literals` performs explicit append-only cleanup.
-
-Decisions use the strict ontology: `concerns` (`about`), `is` (`is_a`),
-`triggered_by`, `supersedes`, and `has_rationale` are multi-valued; use
-`event:<id>` for rationale. A claim may name the context it was established
-under and the window of its evidence; recall then reports how much closed
-matching evidence has arrived since its last explicit confirmation
-(ADR-0032, [claim validity](doc/structured-memory.md#claim-validity-and-confirmation)). A deployment adds its own predicates, with parents,
-aliases and cardinality, in an optional `ontology.json` next to the store
-(ADR-0031). Consolidation records supersession for corrected single-valued facts.
-
-See [structured-memory usage and migration](doc/structured-memory.md).
-
-## Graph viewer
-
-[contrib/graph/graph.html](contrib/graph/graph.html) is a single offline page
-for looking at what a store remembers. Everything it shows is derived from the
-stored data; it knows no domain vocabulary.
-
-- **Entities**: pick a group (subjects sharing an `is` type or an id prefix
-  such as `task:`). One row per subject, one column per predicate in that
-  group plus incoming relations (`← depends_on`), sortable and filterable.
-- **Notes**: free-text objects, kept out of the table and graph.
-- **Graph**: the neighbourhood of the selected row or node (1 or 2 hops), or
-  the whole store in layers; source events are diamonds.
-- **Detail panel**: every claim of the selection with provenance, confidence
-  and creation time; select a claim to see its source events. A date range and "All history" (superseded
-  and retired claims with their reason) apply to every tab.
-
-![Entities table of an invented project/people/tasks memory](doc/images/graph-entities.png)
-
-![Focus graph of one task with its claims in the detail panel](doc/images/graph-focus.png)
-
-Two ways to open it:
-
-- **File mode**: `python3 contrib/graph/export.py /path/to/db.sqlite
-  ~/aver-graph.json` reads the store read-only and writes a new private export
-  (mode 0600, never overwrites); choose it under **Local export**. The page
-  makes no network requests.
-- **Live mode**: `aver-server --graph-view` (off unless given) serves the same
-  page at `/graph` with a fresh read-only snapshot on every reload. It needs a
-  `claims:read` token from the server's own OAuth flow, serves no MCP, never
-  writes memory data, and binds loopback by default: reach a remote store
-  through an SSH tunnel, never a public route. See
-  [ADR-0030](doc/adr/0030-live-read-only-graph-view.md).
-
-Exports and screenshots of real memory stay private. The images above come
-from the invented fixture in `contrib/graph/testdata`. Details:
-[viewer instructions](contrib/graph/README.md).
-
-## Evaluation
-
-Run deterministic workspace tests:
+## develop
 
 ```bash
-cargo test --workspace --locked
-# or
-just test
+just check      # fmt, clippy, all tests, and the project's policy checks
+just test       # tests only
 ```
 
-Run the local quality gate:
+Without `just`, the [`justfile`](justfile) shows the plain cargo commands. The benchmark harness in `crates/aver-eval` runs fixture evaluations and the BEAM100K benchmark against an in-process store or a running server.
 
-```bash
-just check
-```
+## FAQ
 
-Run fixture evaluation:
+**Does it need a GPU or a model?** No. Embeddings are optional, and the model that makes them runs wherever you point it.
 
-```bash
-cargo run -p aver-eval -- <fixture.json> [fixture.json ...]
-```
+**What happens if the database gets corrupted?** Delete it and run `aver replay`. The log is the source of truth, and the rebuilt database is identical ([proof](crates/aver-core/tests/write_path.rs "replay_rebuild_is_identical")).
 
-Timed fixtures (claims with write timestamps, ranked through hybrid recall at a fixed `now` with a deterministic offline embedder) live beside them and run as tests: `cargo test -p aver-eval --test recency` runs `eval/fixtures/recency_stale_over_fresh.json` with and without the opt-in recency term.
+**Can an agent delete memories?** No. It can retire a claim or record a contradiction, and both are new log entries, so the history stays ([proof](crates/aver-core/tests/claims.rs "contradict_records_auditable_contradiction_without_deleting_claim")).
 
-The eval crate also exposes deterministic data structures for ADR-0012 query-suite regression threshold checks, hallucination-rate memory-on/off reports, and typed prompt contracts; aver-core adds graph-stat drift snapshots with privacy-rejection counters. Prompt contracts validate rendered prompt text before a model call using deterministic checks such as required text, forbidden text, required sections, unresolved-template detection, and character budgets. These checks validate prompt generation code; live judge/provider integrations and output-quality evals should remain separate and feed recorded case results into the eval structures.
+**Can I run several agents on one store?** Yes. Writes from several processes are serialised by a lock and a SQLite transaction ([proof](crates/aver-server/tests/stdio.rs "two_stdio_children_share_one_store_and_the_log_replays_to_the_same_state")).
 
-Run BEAM100K with local Ollama:
+### Documents
 
-```bash
-cargo run -p aver-eval --bin aver-beam100k -- \
-  --dataset path/to/beam-100k.json \
-  --ollama-base-url http://localhost:11434 \
-  --embedding-model nomic-embed-text \
-  --generation-model gemma4 \
-  --top-k 12
-```
-
-The BEAM runner expects Ollama to provide both the embedding model and generation/judge model. Retrieval tuning can override HybridRAG alpha in addition to `top_k`:
-
-```bash
-cargo run -p aver-eval --bin aver-beam100k -- \
-  --dataset path/to/beam-100k.json \
-  --top-k 16 \
-  --retrieval-alpha 0.65
-```
-
-To run the same benchmark through a running `aver-server` instead of an in-process store, pass `--target mcp` with the server URL and a bearer token holding `claims:read` and `claims:write` (`--mcp-url`/`--mcp-token`, or `AVER_MCP_URL`/`AVER_MCP_TOKEN`). Ingestion goes through `add_triple` and `add_vector_chunk`, each conversation into its own scope, and recall through `recall` with `scope_walk=exact`; answering and judging are unchanged. The server must have `AVER_EMBEDDING_URL` set with the same embedding model the harness uses (`--provider ollama`), otherwise the run stops instead of measuring keyword recall:
-
-```bash
-AVER_EMBEDDING_URL=http://localhost:11434 aver-server &
-cargo run -p aver-eval --bin aver-beam100k -- \
-  --dataset path/to/beam-100k.json \
-  --embedding-model nomic-embed-text \
-  --target mcp --mcp-url http://127.0.0.1:3317 --mcp-token "$AVER_TOKEN"
-```
-
-`cargo test -p aver-eval --test mcp_parity` checks the Phase 2 exit criterion offline: it serves `aver-server` in-process with a mock embedding client, runs a fixture dataset both ways, and asserts identical retrieved claims, answer prompts, and scores. Setting `AVER_LIVE_OLLAMA_URL` (and optionally `AVER_EMBEDDING_MODEL`) repeats the comparison with real Ollama embeddings; without it that test returns early.
-
-For Bayesian-style retrieval search over prior live runs, write JSONL observations with `top_k`, `alpha`, and `metric`, then ask Aver for the next autoresearch configuration:
-
-```bash
-cargo run -p aver-eval --bin aver-tune-retrieval -- \
-  --observations retrieval-observations.jsonl
-```
-
-The tuner prints `BEAM_TOP_K`, `BEAM_RETRIEVAL_ALPHA`, and `AVER_AUTORESEARCH_TARGET=beam` values that can be used for the next autoresearch run. Keep a held-out validation split; do not tune directly against final benchmark labels.
-
-## Prose/document plugin boundary
-
-ADR-0013 permits non-Rust prose/document extraction plugins only behind stdin/stdout JSON-RPC. `aver-extractor::JsonRpcPluginRunner` sends one JSON-RPC request to a configured child process, parses the response, validates extracted fact fields, and returns facts to Rust callers. Plugins are extraction-only: they do not write memory directly and cannot bypass core privacy/log-first validation. The current runner is a process boundary, not an OS sandbox; production deployments should run plugins from an allowlisted command with external filesystem/environment sandboxing when untrusted plugins are enabled.
-
-## Project Structure
-
-```text
-aver/
-├── crates/
-│   ├── aver-core/       # Store, claims, events, privacy filter, vectors, recall, consolidation
-│   ├── aver-cli/        # `aver` command-line interface
-│   ├── aver-extractor/  # Tree-sitter (13 languages) and prose fact extraction
-│   ├── aver-server/     # MCP/OAuth HTTP server
-│   ├── aver-eval/       # Fixture and BEAM100K evaluation runners
-│   └── aver-scope-shim/ # DEPRECATED (ADR-0025): X-Aver-Scope proxy; set the header in MCP client config
-├── doc/
-│   ├── adr/             # Architecture decision records
-│   └── how-it-works.md  # Current implementation walkthrough
-├── migrations/          # Embedded SQLite migrations (0001-0008 + 0009 baseline)
-├── install.sh           # Source/release installer
-└── justfile             # Development automation
-```
-
-`crates/aver-core/migrations-legacy/` holds the pre-baseline chain (0009-0119), applied only when upgrading stores created before the baseline.
-
-## Development
-
-Common commands:
-
-```bash
-just build       # cargo build --workspace --locked
-just test        # cargo test --workspace --locked
-just fmt         # cargo fmt --all
-just clippy      # cargo clippy --workspace --no-deps -- -D warnings
-just check       # format check + clippy + tests + policy checks
-just release     # release build for aver-cli
-just dist        # local release tarball and SHA256SUMS under target/dist
-```
-
-Without `just`, use the equivalent Cargo commands shown in the [`justfile`](justfile).
-
-## Implementation Status
-
-Implemented today:
-
-- local-first `Store` backed by SQLite and JSONL,
-- migrations for claims, hyperedges, vector chunks, ontology tables, episodic events, candidate claims, and observation projections,
-- append-first claim, hyperedge, and event writes,
-- privacy filtering before claim, event, and observation writes,
-- claim CRUD and keyword recall,
-- active-only hyperedge create/list/recall/traversal APIs,
-- vector chunk storage and embedding abstractions,
-- Ollama embedding client and deterministic mock embedding client,
-- cosine similarity, adaptive HybridRAG weights, and hybrid vector/text recall primitives,
-- graph expansion/traversal over active claim triples, confidence/provenance-aware path queries over active claims and hyperedges, and weighted community detection,
-- explicit contradiction records and confidence decay for contradicted active claims,
-- basic consolidation for duplicate/conflicting claims,
-- CLI `status`, `remember`, `recall`, `communities`, and observation continuity surfaces (`record-observation`, `recall-observation`, `observation-coverage`, `catch-up`, `compaction-summary`),
-- Tree-sitter extraction across 13 languages (C, C++, C#, Go, Java, JavaScript, Kotlin, PHP, Python, Ruby, Rust, Swift, TypeScript), written to memory by CLI `extract` in the project scope,
-- structured prose fact parsing,
-- MCP/OAuth server with ADR-0008 recall/expand/add-triple/contradict/consolidate tools, staged candidate-claim workflow, and observation recall/compaction-summary tools,
-- ADR-0020 browser consent flow for `/oauth/authorize` (loopback Profile A) replacing the legacy `approval_token` gate,
-- fixture and BEAM100K evaluation runners.
-
-Partial or planned:
-
-- production vector-index operations beyond the current bundled `sqlite-vec`/`vec0` local ANN path and JSON fallback metadata,
-- production shared-graph backend adapter beyond the current local weighted community detection,
-- broader production packaging, signed releases, and release automation beyond the current installer/`just dist` workflow.
-
-## Documentation
-
-- [`doc/how-it-works.md`](doc/how-it-works.md) — current runtime flow and ADR mapping.
-- [`doc/adr/`](doc/adr/) — architecture decisions.
-
-## License
-
-MIT, as declared in the workspace package metadata.
+- **[doc/how-it-works.md](doc/how-it-works.md)**: how a write and a recall flow through the code.
+- **[doc/structured-memory.md](doc/structured-memory.md)**: literals vs entities, the decision vocabulary, claim validity, and migrating an old store.
+- **[doc/adr/](doc/adr/)**: every design decision and why it was made.
+- **[LICENSE](LICENSE)**: MIT.
