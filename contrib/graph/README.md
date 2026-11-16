@@ -101,6 +101,14 @@ serves both. Exports carry `created_at` on claims and the ontology's
 `predicates` (name, parent, cardinality); both are additive to `aver-graph-v1`.
 
 Browser tests must use invented data and a private, headless browser.
+The headless proof covers the tabs, creation-date range and **All history**:
+
+```sh
+NODE_PATH="$(npm root -g)" node contrib/graph/test_graph.js
+```
+
+CI runs it with Playwright 1.58.2 and headless Chromium. Set `CHROMIUM` to a
+browser binary if Playwright did not download one.
 
 The README screenshots in `doc/images/` come from `testdata/projects.json`.
 Regenerate them with Playwright and Chromium installed outside this

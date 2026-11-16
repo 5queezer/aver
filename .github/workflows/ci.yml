@@ -10,6 +10,31 @@ permissions:
   contents: read
 
 jobs:
+  graph:
+    name: Graph export and browser
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test synthetic graph exports
+        run: python3 -m unittest discover -s contrib/graph
+
+      - name: Install pinned browser test tools
+        working-directory: contrib/graph
+        run: |
+          npm install --no-save --package-lock=false playwright@1.58.2
+          npx playwright install --with-deps chromium
+
+      - name: Test synthetic graph page
+        working-directory: contrib/graph
+        run: node test_graph.js
+
   rust:
     name: Rust checks
     runs-on: ubuntu-latest
