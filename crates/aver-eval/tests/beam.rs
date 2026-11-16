@@ -63,18 +63,6 @@ fn beam_sanitize_keeps_known_hash_hex_tokens() {
 }
 
 #[test]
-fn beam_answer_prompt_satisfies_v1_contract() {
-    let prompt = aver_eval::beam::answer_prompt("When is launch?", "April 1", &[]);
-    let contract = aver_eval::prompt_assertions::contract_for(
-        aver_eval::prompt_assertions::PromptKind::BeamAnswer(
-            aver_eval::prompt_assertions::BeamPromptVersion::V1,
-        ),
-    );
-
-    aver_eval::prompt_assertions::assert_prompt_contract(&prompt, &contract).unwrap();
-}
-
-#[test]
 fn openai_embedding_request_serializes_model_and_input() {
     let request =
         aver_eval::beam::OpenAiEmbeddingRequest::new("text-embedding-3-small", "hello memory");

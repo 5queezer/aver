@@ -6,6 +6,11 @@ Date: 2026-05-07
 
 Accepted
 
+Implementation note (2026-11-16): Layers 1–3 are design guidance, not shipped
+scheduled evaluation. The unused regression, hallucination and drift reporting
+code has been removed. The deterministic fixture runner, the opt-in BEAM runner
+and its MCP parity coverage, and the recency fixture remain.
+
 ## Context
 
 The book is silent on memory-quality evaluation. The architectural ADRs (0002–0011) are all about *building* the memory layer; none of them say how to know when it's working — or, more importantly, when it's regressing.
