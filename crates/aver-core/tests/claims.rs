@@ -783,7 +783,6 @@ fn add_claim_records_last_verified_at_for_policy_scoring() {
     let claim = store.get_claim(claim_id).unwrap();
 
     assert!(claim.last_verified_at.is_some());
-    assert_eq!(claim.verification_weighted_confidence(), claim.confidence);
 }
 
 #[test]

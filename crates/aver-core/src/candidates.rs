@@ -1,4 +1,4 @@
-//! Candidate claims (staging, promotion, rejection) and `ClaimExtractor`.
+//! Candidate claims (staging, promotion, rejection).
 
 use std::str::FromStr;
 
@@ -8,54 +8,12 @@ use crate::apply::apply;
 use crate::error::Error;
 use crate::log::{LogRecord, append_jsonl};
 use crate::store::Store;
-use crate::types::{
-    CandidateClaim, CandidateClaimDraft, CandidateWrite, EpisodicEvent, Provenance,
-};
+use crate::types::{CandidateClaim, CandidateWrite, Provenance};
 use crate::validation::{
     validate_candidate_status_filter, validate_claim_field, validate_event_field,
     validate_rejection_reason, validate_scope,
 };
-pub trait ClaimExtractor {
-    fn extract(&self, events: &[EpisodicEvent]) -> Result<Vec<CandidateClaimDraft>, Error>;
-}
-
-#[derive(Debug, Clone)]
-pub struct MockClaimExtractor {
-    drafts: Vec<CandidateClaimDraft>,
-}
-
-impl MockClaimExtractor {
-    pub fn new(drafts: Vec<CandidateClaimDraft>) -> Self {
-        Self { drafts }
-    }
-}
-
-impl ClaimExtractor for MockClaimExtractor {
-    fn extract(&self, _events: &[EpisodicEvent]) -> Result<Vec<CandidateClaimDraft>, Error> {
-        Ok(self.drafts.clone())
-    }
-}
-
 impl Store {
-    pub fn propose_claims_from_extractor(
-        &self,
-        session_id: &str,
-        extractor: &impl ClaimExtractor,
-    ) -> Result<Vec<i64>, Error> {
-        let events = self.list_events_for_session(session_id)?;
-        let drafts = extractor.extract(&events)?;
-        let mut candidate_ids = Vec::new();
-        for draft in drafts {
-            candidate_ids.push(self.propose_candidate_claim(CandidateWrite::new(
-                draft.event_id,
-                draft.subject,
-                draft.predicate,
-                draft.object,
-            ))?);
-        }
-        Ok(candidate_ids)
-    }
-
     /// Stage one candidate claim (ADR-0005/0014). The scope rides through
     /// `promote_candidate_claim` onto the durable claim — there is no scope
     /// override at promotion time.
@@ -372,44 +330,6 @@ impl Store {
                 .collect::<Result<Vec<_>, _>>()?,
         };
         Ok(rows)
-    }
-
-    /// List candidate claims for a specific event.
-    pub fn list_candidate_claims_for_event(
-        &self,
-        event_id: i64,
-    ) -> Result<Vec<CandidateClaim>, Error> {
-        if !self.event_exists(event_id)? {
-            return Err(Error::MissingEventProvenance { event_id });
-        }
-        let mut stmt = self.conn.prepare(
-            "SELECT id, event_id, subject, predicate, object, provenance, confidence, status, promoted_claim_id, rejection_reason, scope
-             FROM candidate_claims WHERE event_id = ?1",
-        )?;
-        let rows = stmt.query_map([event_id], |row| {
-            let provenance_str = row.get::<usize, String>(5)?;
-            let provenance = Provenance::from_str(&provenance_str).map_err(|err| {
-                rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(err))
-            })?;
-            Ok(CandidateClaim {
-                id: row.get(0)?,
-                event_id: row.get(1)?,
-                subject: row.get(2)?,
-                predicate: row.get(3)?,
-                object: row.get(4)?,
-                provenance,
-                confidence: row.get(6)?,
-                status: row.get(7)?,
-                promoted_claim_id: row.get(8)?,
-                rejection_reason: row.get(9)?,
-                scope: row.get(10)?,
-            })
-        })?;
-        let mut candidates = Vec::new();
-        for row in rows {
-            candidates.push(row?);
-        }
-        Ok(candidates)
     }
 
     pub fn get_candidate_claim(&self, id: i64) -> Result<CandidateClaim, Error> {

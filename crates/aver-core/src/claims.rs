@@ -344,23 +344,6 @@ impl Store {
         })
     }
 
-    pub fn agent_trust_score(&self, agent_id: &str) -> Result<f64, Error> {
-        validate_agent_id(agent_id)?;
-        let (active, total): (i64, i64) = self.conn.query_row(
-            "SELECT
-                 SUM(CASE WHEN status = 'ACTIVE' THEN 1 ELSE 0 END),
-                 COUNT(*)
-               FROM claims
-              WHERE agent_id = ?1",
-            [agent_id],
-            |row| Ok((row.get::<_, Option<i64>>(0)?.unwrap_or(0), row.get(1)?)),
-        )?;
-        if total == 0 {
-            return Ok(0.5);
-        }
-        Ok(((active as f64) / (total as f64)).clamp(0.1, 1.0))
-    }
-
     pub fn contradict(
         &self,
         claim_id: i64,
@@ -439,10 +422,6 @@ impl Store {
                 },
             )
             .map_err(Error::from)
-    }
-
-    pub fn should_merge_synonym(similarity: f64) -> bool {
-        similarity >= 0.92
     }
 
     pub fn decay_contradicted_confidence(&self) -> Result<usize, Error> {

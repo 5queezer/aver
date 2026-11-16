@@ -2,12 +2,6 @@ use aver_core::{CandidateWrite, EventWrite};
 use aver_core::{Provenance, Store};
 
 #[test]
-fn synonym_merge_threshold_requires_at_least_point_92_similarity() {
-    assert!(!Store::should_merge_synonym(0.919_999));
-    assert!(Store::should_merge_synonym(0.92));
-}
-
-#[test]
 fn inferred_temporal_decay_uses_exponential_delta_over_tau() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

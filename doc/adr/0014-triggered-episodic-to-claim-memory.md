@@ -55,6 +55,6 @@ The first implementation slice is intentionally small and has now landed:
 5. `Store::promote_candidate_claim` writes a durable claim with `source_refs = ["event:<id>"]`, then marks the candidate `PROMOTED`.
 6. Promotion is idempotent: promoting an already-promoted candidate returns the original durable claim id instead of duplicating memory.
 7. `Store::should_extract_memories` provides deterministic trigger policy for explicit remember events and event-count thresholds.
-8. `ClaimExtractor`, `CandidateClaimDraft`, `MockClaimExtractor`, and `Store::propose_claims_from_extractor` provide an offline extractor boundary. Live LLM extractors remain out of tests.
+8. The unused extractor trait and mock boundary were removed; candidate writes use `Store::propose_candidate_claim` directly.
 
 Future slices should add richer trigger reasons, candidate listing by status/session, stronger contradiction validation before promotion, and MCP tools for the event/candidate lifecycle.

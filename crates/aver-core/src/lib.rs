@@ -24,7 +24,6 @@ mod validity;
 pub mod vector;
 mod vectors;
 
-pub use candidates::{ClaimExtractor, MockClaimExtractor};
 pub use episodic::{MockObserver, Observer};
 pub use error::Error;
 pub use log::{AverLock, LOG_ROTATE_MAX_BYTES, LOG_ROTATE_MAX_LINES};
@@ -35,10 +34,9 @@ pub use privacy::{PrivacyRejection, privacy_filter, privacy_filter_path};
 pub use replay::{ReplayMode, ReplayQuarantine, ReplayReport, replay, replay_with_mode};
 pub use store::{SCHEMA_VERSION, SqliteVecStatus, Store, VECTOR_INDEX_DIM};
 pub use types::{
-    AgentKind, CandidateClaim, CandidateClaimDraft, CandidateWrite, Claim, ClaimConfirmation,
-    ClaimStatus, ClaimWrite, ConsolidationReport, ContradictionRecord, EpisodicEvent, EventWrite,
-    ExtractionDecision, ExtractionTriggerReason, ExtractorFact, GraphExpansion, Observation,
-    ObservationCoverage, ObservationDraft, ObservationRecall, ObservationRelevance,
-    ObservationWrite, PredicateWalk, Provenance, RecallFilters, RecallQuery, ReverifyWrite,
-    ScopeWalk, VectorChunk, Verification,
+    AgentKind, CandidateClaim, CandidateWrite, Claim, ClaimConfirmation, ClaimStatus, ClaimWrite,
+    ConsolidationReport, ContradictionRecord, EpisodicEvent, EventWrite, ExtractionDecision,
+    ExtractionTriggerReason, ExtractorFact, GraphExpansion, Observation, ObservationCoverage,
+    ObservationDraft, ObservationRecall, ObservationRelevance, ObservationWrite, PredicateWalk,
+    Provenance, RecallFilters, RecallQuery, ReverifyWrite, ScopeWalk, VectorChunk, Verification,
 };

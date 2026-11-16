@@ -117,14 +117,6 @@ impl Claim {
     pub fn verified_age_secs(&self, now: i64) -> f64 {
         now.saturating_sub(self.last_verified_at.unwrap_or(self.write_ts)) as f64
     }
-
-    pub fn verification_weighted_confidence(&self) -> f64 {
-        if self.last_verified_at.is_some() {
-            self.confidence
-        } else {
-            self.confidence * 0.5
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -155,14 +147,6 @@ pub struct CandidateClaim {
     pub rejection_reason: Option<String>,
     /// ADR-0021 memory scope. Inherits to the promoted claim. Defaults to "global".
     pub scope: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CandidateClaimDraft {
-    pub event_id: i64,
-    pub subject: String,
-    pub predicate: String,
-    pub object: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
