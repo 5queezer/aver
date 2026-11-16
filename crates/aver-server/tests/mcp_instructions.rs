@@ -11,7 +11,7 @@ fn mcp_instructions_are_a_progressive_discovery_card() {
     let instructions = service.get_info().instructions.unwrap();
 
     assert!(instructions.contains(
-        "Aver exposes 17 MCP tools, but most sessions should start with the default active set."
+        "Aver exposes 16 MCP tools, but most sessions should start with the default active set."
     ));
     assert!(instructions.contains("Review tools for a review step only: reverify_claim;"));
     assert!(instructions.contains(
@@ -49,7 +49,7 @@ fn mcp_instructions_are_a_progressive_discovery_card() {
         "Keep maintenance tools hidden until there is an explicit repair need: contradict, consolidate, add_vector_chunk."
     ));
     assert!(instructions.contains("retire_claim only for explicit invalidation"));
-    assert!(instructions.contains("extract. Progressively load event-to-claim tools"));
+    assert!(instructions.contains("reverify_claim. Progressively load event-to-claim tools"));
     assert!(instructions.to_ascii_lowercase().contains(
         "only record identity details when they are necessary, user-shared, and not sensitive personal data"
     ));

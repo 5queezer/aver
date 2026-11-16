@@ -6,6 +6,11 @@ Date: 2026-10-24
 
 Proposed
 
+Implementation note (2026-11-16): code extraction is exposed only by the CLI
+`aver extract`; the unused MCP `extract` tool and its server-side environment
+configuration have been removed. The shared extractor bridge and logged claim
+writes remain unchanged.
+
 ## Context
 
 `aver-extractor` emits `ExtractedFact { subject, predicate, object }` with

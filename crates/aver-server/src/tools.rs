@@ -1,6 +1,5 @@
 use aver_core::{CandidateWrite, ClaimWrite, EventWrite, RecallQuery};
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use aver_core::retrieval::{DEFAULT_RECENCY_TAU_SECS, HybridWeights};
 use aver_core::vector::{DEFAULT_OPENAI_EMBEDDING_MODEL, EmbeddingClient, VectorIndexConfig};
@@ -8,8 +7,6 @@ use aver_core::{
     AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, Error,
     PredicateWalk, RecallFilters, ReverifyWrite, ScopeWalk, Store,
 };
-use aver_extractor::LANGUAGES;
-use aver_extractor::bridge::extract_tree;
 use serde::{Deserialize, Serialize};
 
 use crate::recall_log::{RecallMissFilters, RecallMissLog, RecallRequestShape};
@@ -748,60 +745,8 @@ impl From<ContradictionRecord> for ContradictionView {
     }
 }
 
-/// Default `AVER_EXTRACT_MAX_FILES`.
-const DEFAULT_EXTRACT_MAX_FILES: usize = 2000;
-
-/// Bounds for the `extract` tool (ADR-0027): the only directory tree it may
-/// read, and the most files one call may scan.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExtractLimits {
-    /// `AVER_EXTRACT_ROOT`. `None` makes the tool refuse every path.
-    pub root: Option<PathBuf>,
-    /// `AVER_EXTRACT_MAX_FILES`.
-    pub max_files: usize,
-}
-
-impl ExtractLimits {
-    pub fn from_env() -> Self {
-        Self {
-            root: std::env::var_os("AVER_EXTRACT_ROOT")
-                .filter(|root| !root.is_empty())
-                .map(PathBuf::from),
-            max_files: std::env::var("AVER_EXTRACT_MAX_FILES")
-                .ok()
-                .and_then(|value| value.trim().parse().ok())
-                .filter(|max| *max > 0)
-                .unwrap_or(DEFAULT_EXTRACT_MAX_FILES),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ExtractParams {
-    pub path: String,
-    pub scope: Option<String>,
-    pub lang: Option<String>,
-    pub dry_run: bool,
-    pub agent_id: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ExtractView {
-    pub scope: String,
-    pub files_scanned: usize,
-    pub files_failed: usize,
-    pub facts_extracted: usize,
-    pub facts_ingested: usize,
-    /// Unsupported predicates by name, plus `duplicate` and `privacy`.
-    pub skipped: BTreeMap<String, usize>,
-    pub dry_run: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
-}
-
 pub struct AverTools {
     store: Store,
-    extract: ExtractLimits,
     /// ADR-0004 embedding client; `None` unless `AVER_EMBEDDING_URL` opts in.
     embedder: Option<Embedder>,
     /// Model label recorded on vector chunks (`AVER_EMBEDDING_MODEL`).
@@ -824,7 +769,6 @@ impl AverTools {
         let recall_miss_log = RecallMissLog::from_env(memory_dir.as_ref());
         Ok(Self {
             store: Store::open(memory_dir)?,
-            extract: ExtractLimits::from_env(),
             embedder,
             embedding_model,
             recall_miss_log,
@@ -896,13 +840,6 @@ impl AverTools {
     /// the BEAM parity harness inject a deterministic client here).
     pub fn with_embedding_client(mut self, embedder: Option<Embedder>) -> Self {
         self.embedder = embedder;
-        self
-    }
-
-    /// Replaces the `extract` limits read from the environment (tests inject
-    /// a root here instead of setting `AVER_EXTRACT_ROOT`).
-    pub fn with_extract_limits(mut self, extract: ExtractLimits) -> Self {
-        self.extract = extract;
         self
     }
 
@@ -983,90 +920,6 @@ impl AverTools {
         Ok(ClaimView {
             embedded,
             ..self.store.get_claim(id)?.into()
-        })
-    }
-
-    /// ADR-0027 `extract` tool: the server-side twin of `aver extract`.
-    /// The path must be absolute and, once canonicalized (symlinks resolved),
-    /// inside `AVER_EXTRACT_ROOT`; the bridge walk does not follow symlinks.
-    pub fn extract(&self, params: ExtractParams) -> anyhow::Result<ExtractView> {
-        let Some(root) = &self.extract.root else {
-            anyhow::bail!(
-                "extract is disabled: the server operator must set AVER_EXTRACT_ROOT to the directory extract may read"
-            );
-        };
-        if let Some(lang) = params.lang.as_deref()
-            && !LANGUAGES.contains(&lang)
-        {
-            anyhow::bail!(
-                "invalid lang: {lang}; expected one of {}",
-                LANGUAGES.join(", ")
-            );
-        }
-        if !Path::new(&params.path).is_absolute() {
-            anyhow::bail!("invalid path: must be absolute");
-        }
-        let root = root.canonicalize().map_err(|err| {
-            anyhow::anyhow!("AVER_EXTRACT_ROOT {} is unusable: {err}", root.display())
-        })?;
-        let path = Path::new(&params.path)
-            .canonicalize()
-            .map_err(|err| anyhow::anyhow!("invalid path: {}: {err}", params.path))?;
-        if !path.starts_with(&root) {
-            anyhow::bail!("invalid path: must be inside AVER_EXTRACT_ROOT");
-        }
-        let scope = params.scope.unwrap_or_else(|| "global".to_string());
-        let extraction = extract_tree(&path, params.lang.as_deref())?;
-        if extraction.files_scanned() > self.extract.max_files {
-            anyhow::bail!(
-                "too many files: {} scanned, AVER_EXTRACT_MAX_FILES is {}; extract a narrower path",
-                extraction.files_scanned(),
-                self.extract.max_files
-            );
-        }
-
-        let mut skipped = extraction.skipped.clone();
-        skipped.insert("duplicate".to_string(), extraction.duplicates);
-        let mut ingested = 0;
-        let mut privacy = 0;
-        if !params.dry_run {
-            for file in &extraction.files {
-                for fact in &file.facts {
-                    match self.store.add_claim(
-                        ClaimWrite::from_agent(
-                            &params.agent_id,
-                            AgentKind::DeterministicParser,
-                            &fact.subject,
-                            &fact.predicate,
-                            &fact.object,
-                            &file.path,
-                        )
-                        .scope(&scope),
-                    ) {
-                        Ok(_) => ingested += 1,
-                        Err(Error::Privacy(_)) => privacy += 1,
-                        Err(err) => return Err(err.into()),
-                    }
-                }
-            }
-            // No consolidate here: its conflict rule supersedes every claim
-            // with a newer one of the same subject and predicate, which
-            // retires multi-valued code facts (`File:x defines A` vs `B`).
-            // Same as the CLI; see ADR-0027.
-        }
-        skipped.insert("privacy".to_string(), privacy);
-        let note = (scope == "global").then(|| {
-            "project scoping was not applied: facts were written to the global scope".to_string()
-        });
-        Ok(ExtractView {
-            scope,
-            files_scanned: extraction.files_scanned(),
-            files_failed: extraction.failed.len(),
-            facts_extracted: extraction.extracted,
-            facts_ingested: ingested,
-            skipped,
-            dry_run: params.dry_run,
-            note,
         })
     }
 

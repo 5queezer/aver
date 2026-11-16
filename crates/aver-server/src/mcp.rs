@@ -15,9 +15,9 @@ use crate::scope_resolution::ResolvedScope;
 use crate::scopes::{Scope, ToolScope};
 use crate::tools::{
     AddTripleParams, AddVectorChunkParams, AverTools, ConsolidateParams, ContradictParams,
-    ExpandParams, ExtractParams as CoreExtractParams, GetEventParams, ListCandidateClaimsParams,
-    PromoteCandidateClaimParams, ProposeCandidateClaimParams, RecallParams as CoreRecallParams,
-    RecordEventParams, RejectCandidateClaimParams, RetireClaimParams, ReverifyClaimParams,
+    ExpandParams, GetEventParams, ListCandidateClaimsParams, PromoteCandidateClaimParams,
+    ProposeCandidateClaimParams, RecallParams as CoreRecallParams, RecordEventParams,
+    RejectCandidateClaimParams, RetireClaimParams, ReverifyClaimParams,
     ShouldExtractMemoriesParams,
 };
 
@@ -113,21 +113,6 @@ fn request_agent_id(ctx: &RequestContext<RoleServer>) -> String {
         .unwrap_or_else(|| UNAUTHENTICATED_AGENT_ID.to_string())
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ExtractParams {
-    /// Absolute path of a source file or directory on the server. Must be inside the server's AVER_EXTRACT_ROOT.
-    pub path: String,
-    /// ADR-0021 memory scope. Defaults to the caller's resolved scope; `global` is used (with a note in the result) when none is resolved.
-    #[serde(default)]
-    pub scope: Option<String>,
-    /// Only scan files of this language (rust, python, typescript, ...).
-    #[serde(default)]
-    pub lang: Option<String>,
-    /// Count facts without writing any claim.
-    #[serde(default)]
-    pub dry_run: bool,
-}
-
 pub struct AverMcpService {
     tools: Arc<Mutex<AverTools>>,
     base_url: String,
@@ -201,7 +186,6 @@ impl AverMcpService {
         Self::REJECT_CANDIDATE_CLAIM,
         Self::RETIRE_CLAIM,
         Self::REVERIFY_CLAIM,
-        Self::EXTRACT,
     ];
 
     const REMEMBER_CLAIM: ToolScope = ToolScope::new("remember_claim", Scope::ClaimsWrite);
@@ -478,29 +462,6 @@ impl AverMcpService {
         json_tool_result(&tools, result, "reverify_claim")
     }
 
-    const EXTRACT: ToolScope = ToolScope::new("extract", Scope::ClaimsWrite);
-    #[tool(
-        description = "Extract code facts (defines, calls, imports, tests, uses) with Tree-sitter from a source file or directory on the server and store them as EXTRACTED claims in the project scope (ADR-0027). The path must be absolute and inside the operator-configured AVER_EXTRACT_ROOT; use dry_run to count without writing."
-    )]
-    async fn extract(
-        &self,
-        Parameters(params): Parameters<ExtractParams>,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, self.local.as_ref(), Self::EXTRACT)?;
-        let tools = self.lock_tools()?;
-        let result = tools.extract(CoreExtractParams {
-            path: params.path,
-            scope: params
-                .scope
-                .or_else(|| Some(request_scope(&ctx, self.local.as_ref()).scope)),
-            lang: params.lang,
-            dry_run: params.dry_run,
-            agent_id: request_agent_id(&ctx),
-        });
-        json_tool_result(&tools, result, "extract")
-    }
-
     const RECALL: ToolScope = ToolScope::new("recall", Scope::ClaimsRead);
     #[tool(
         description = "Search durable claims by text query. Start here for stored facts, preferences, project context, or when you do not know an exact entity id. Hybrid vector + graph ranking (ADR-0004) when the server has embeddings configured; the result's `retrieval` field says which path ran."
@@ -598,7 +559,6 @@ fn mcp_tool_instructions() -> String {
                 "Structured writes: use short identifiers for entities, numeric/quoted/prose values as literals. INFERRED means your judgment (default 0.45; maximum 0.75), EXTRACTED means stated in a cited source, AMBIGUOUS means conflicting evidence. Repetition does not prove extraction. Store rationale with record_event, then write claims with its event_id in the same scope. Prose returns an atomic-triple hint; strict_atomic=true rejects it before append. Decision vocabulary: concerns/about, is/is_a, triggered_by, supersedes, has_rationale (multi); a store's ontology.json can add domain predicates with their own cardinality. Consolidate to supersede corrected single-valued facts. ",
                 "Embedding on write: when a result of remember_claim, add_triple or promote_candidate_claim carries `embedded`, true means the claim is eligible for hybrid recall and false means it was saved keyword-only (not retried); without the field the server does not embed on write. ",
                 "Source-event audit: progressively load get_event only for a known event_id (from a claim or record_event). It requires claims:read and the exact event scope, defaulting to the request scope. Recall does not expand event payloads; use get_event to read rationale on demand. ",
-                "Code extraction: extract reads a source tree on the server (operator-configured root) and writes EXTRACTED code facts; use it for project code, not for chat or user facts. ",
                 "Claim validity: remember_claim and add_triple accept `context` (an opaque entity id the claim was established under) and a `valid_from`/`valid_until` window in Unix seconds. Evidence items link with `<item> in_context <context>`, `<item> concerns <topic>` and `<item> closed_at <time>` once they have an outcome. For a claim with a context or an explicit confirmation, recall also returns last_verified_at, last_confirmed_at, the latest confirmation and evidence_since_confirmation: closed matching items (same context; concerning the claim's subject or its own concerns topics) in the claim's scope or below since the later of its last confirmation and valid_from. Review tools for a review step only: {}; refute with contradict. ",
                 "Tool groups: event workflow {}. Full tool index: {}. ",
                 "Progressively load event-to-claim tools only when converting raw events into reviewed durable claims: {}. ",
@@ -662,7 +622,6 @@ mod tests {
             ("list_candidate_claims", Scope::CandidatesManage),
             ("promote_candidate_claim", Scope::CandidatesManage),
             ("reject_candidate_claim", Scope::CandidatesManage),
-            ("extract", Scope::ClaimsWrite),
         ]
         .into_iter()
         .collect();

@@ -20,7 +20,6 @@ path = "src/main.rs"
 anyhow.workspace = true
 askama = { version = "0.12", default-features = false }
 aver-core = { path = "../aver-core" }
-aver-extractor = { path = "../aver-extractor" }
 serde.workspace = true
 serde_json.workspace = true
 serde_urlencoded = "0.7"

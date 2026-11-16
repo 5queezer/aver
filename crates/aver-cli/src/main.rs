@@ -832,8 +832,7 @@ fn run_extract(
 ///
 /// Phase 1 step 4 (one write API behind `ClaimWrite`) replaces this per-fact
 /// loop with the batch `ingest_extractor_facts` once that takes a scope;
-/// today it hardcodes `global` and also runs the consolidation described
-/// below. Until then each fact is its own write, so a
+/// today it hardcodes `global`. Until then each fact is its own write, so a
 /// privacy rejection skips one fact rather than failing a batch, and
 /// `ExtractorFact::provenance` is not passed: core derives EXTRACTED
 /// (confidence 0.90) from `AgentKind::DeterministicParser`. The privacy gate
@@ -865,12 +864,9 @@ fn ingest_extracted(
             }
         }
     }
-    // No `consolidate_report()` here: its conflict rule supersedes every
-    // claim that has a newer one with the same subject and predicate, so
-    // `File:x defines A` would be retired by `File:x defines B`. On this
-    // repository that retired 15943 of 17932 extracted claims. Code
-    // predicates are multi-valued; call it again once core only applies the
-    // conflict rule to single-valued predicates (ADR-0027).
+    // No automatic `consolidate_report()` here: distinct code facts such as
+    // `File:x defines A` and `File:x defines B` are multi-valued and must not
+    // be retired merely because they share a subject and predicate.
     store.close()?;
     Ok((ingested, privacy))
 }
