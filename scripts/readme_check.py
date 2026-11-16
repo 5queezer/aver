@@ -2,7 +2,8 @@
 """Keep README.md honest.
 
 1. Every proof link, written as [text](path "test_name"), must point at an
-   existing file that defines that test. CI then runs the tests themselves.
+   existing file that defines that name as a test (a Rust #[test] fn, a Python
+   test_ method, or a function in a test_*.js script). CI then runs the tests.
 2. The block between <!-- quickstart --> and <!-- /quickstart --> runs
    verbatim with bash from the repository root, and its stdout must equal the
    "Expected output" block exactly. `<number>` in the expected text matches
@@ -31,11 +32,14 @@ def defines(path, name):
     with open(path, encoding="utf-8") as f:
         text = f.read()
     patterns = [
-        rf"\bfn {re.escape(name)}\b",  # Rust
-        rf"\bdef {re.escape(name)}\b",  # Python
-        rf"\bfunction {re.escape(name)}\b",  # JavaScript
+        # Rust: the function must carry a test attribute.
+        rf"#\[(?:tokio::)?test\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:async\s+)?fn {re.escape(name)}\b",
+        # Python unittest: a test_ method.
+        rf"\bdef {re.escape(name)}\b" if name.startswith("test_") else None,
+        # JavaScript: a test function in a test_*.js script.
+        rf"\bfunction {re.escape(name)}\b" if os.path.basename(path).startswith("test_") else None,
     ]
-    return any(re.search(p, text) for p in patterns)
+    return any(p and re.search(p, text) for p in patterns)
 
 
 def check_links(readme):
