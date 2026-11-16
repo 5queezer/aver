@@ -1,6 +1,6 @@
 //! T72 — v0.4 starts with a pre-write privacy detector for obvious secrets.
 
-use aver_core::ClaimWrite;
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite};
 use aver_core::{Error, PrivacyRejection, Store, privacy_filter, privacy_filter_path};
 
 fn synthetic_token(parts: &[&str]) -> String {
@@ -162,6 +162,46 @@ fn add_claim_rejects_secret_before_episodic_log_write() {
             .privacy_rejection_count(PrivacyRejection::AwsAccessKey)
             .unwrap(),
         1
+    );
+}
+
+#[test]
+fn event_and_candidate_writes_reject_secrets_before_log_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let event_id = store
+        .record_event(EventWrite::new(
+            "s1",
+            "user_message",
+            "ordinary event",
+            "test",
+        ))
+        .unwrap();
+    let before = std::fs::read(dir.path().join("events.jsonl")).unwrap();
+    let token = synthetic_token(&["sk", "-", "abcdefghijklmnopqrstuvwxyz1234567890"]);
+
+    assert!(matches!(
+        store.record_event(EventWrite::new(
+            "s1",
+            "user_message",
+            format!("OPENAI_API_KEY={token}"),
+            "test"
+        )),
+        Err(Error::Privacy(PrivacyRejection::OpenAiKey))
+    ));
+    assert!(matches!(
+        store.propose_candidate_claim(CandidateWrite::new(event_id, "Aver", "mentions", token)),
+        Err(Error::Privacy(PrivacyRejection::OpenAiKey))
+    ));
+    assert_eq!(
+        std::fs::read(dir.path().join("events.jsonl")).unwrap(),
+        before
+    );
+    assert_eq!(
+        store
+            .privacy_rejection_count(PrivacyRejection::OpenAiKey)
+            .unwrap(),
+        2
     );
 }
 

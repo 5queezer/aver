@@ -1,4 +1,4 @@
-use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite};
+use aver_core::{ClaimWrite, EventWrite, ObservationWrite};
 use aver_core::{ConsolidationReport, Error, ExtractionTriggerReason, PrivacyRejection, Store};
 
 #[test]
@@ -132,15 +132,6 @@ fn graph_drift_snapshot_includes_privacy_rejection_counts() {
         .unwrap();
     let token = "sk-abcdefghijklmnopqrstuvwxyz1234567890";
     assert!(matches!(
-        store.record_event(EventWrite::new(
-            "s1",
-            "user_message",
-            format!("OPENAI_API_KEY={token}"),
-            "test"
-        )),
-        Err(Error::Privacy(PrivacyRejection::OpenAiKey))
-    ));
-    assert!(matches!(
         store.add_claim(ClaimWrite::new("Aver", "source", "ssh key", ".ssh/id_rsa")),
         Err(Error::Privacy(PrivacyRejection::SshPath))
     ));
@@ -152,10 +143,6 @@ fn graph_drift_snapshot_includes_privacy_rejection_counts() {
             &[event_id],
             "observer"
         )),
-        Err(Error::Privacy(PrivacyRejection::OpenAiKey))
-    ));
-    assert!(matches!(
-        store.propose_candidate_claim(CandidateWrite::new(event_id, "Aver", "mentions", token)),
         Err(Error::Privacy(PrivacyRejection::OpenAiKey))
     ));
     assert!(matches!(
@@ -177,7 +164,7 @@ fn graph_drift_snapshot_includes_privacy_rejection_counts() {
     );
     assert_eq!(
         snapshot.privacy_rejection_counts.get("regex:openai"),
-        Some(&3)
+        Some(&1)
     );
     assert_eq!(
         snapshot.privacy_rejection_counts.get("path:secrets-dir"),
