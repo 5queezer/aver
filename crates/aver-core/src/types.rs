@@ -208,14 +208,6 @@ pub struct Observation {
     pub scope: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ObservationDraft {
-    pub content: String,
-    pub relevance: ObservationRelevance,
-    pub source_event_ids: Vec<i64>,
-    pub derivation: String,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObservationRecall {
     pub observation: Observation,

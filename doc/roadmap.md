@@ -79,8 +79,6 @@ concatenating their logs.
   use the existing mock. Remove the `"nomic-embed-text"` literal from core.
 - Scope is configured directly through the MCP client's `X-Aver-Scope`
   header; the forwarding shim was removed under ADR-0025.
-- Delete `adapters.rs` and `MockObserver` from the production library.
-  Re-add when a runtime is actually wired.
 - Make the tool declare its required scope instead of `scopes.rs`
   string-matching tool names.
 - Default `agent_id` from the authenticated client, not the literal `"mcp"`.

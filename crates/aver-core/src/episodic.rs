@@ -10,32 +10,11 @@ use crate::log::{LogRecord, append_jsonl};
 use crate::store::Store;
 use crate::types::{
     EpisodicEvent, EventWrite, ExtractionDecision, ExtractionTriggerReason, Observation,
-    ObservationCoverage, ObservationDraft, ObservationRecall, ObservationWrite,
+    ObservationCoverage, ObservationRecall, ObservationWrite,
 };
 use crate::validation::{
     validate_agent_id, validate_event_field, validate_observation_field, validate_scope,
 };
-pub trait Observer {
-    fn observe(&self, events: &[EpisodicEvent]) -> Result<Vec<ObservationDraft>, Error>;
-}
-
-#[derive(Debug, Clone)]
-pub struct MockObserver {
-    drafts: Vec<ObservationDraft>,
-}
-
-impl MockObserver {
-    pub fn new(drafts: Vec<ObservationDraft>) -> Self {
-        Self { drafts }
-    }
-}
-
-impl Observer for MockObserver {
-    fn observe(&self, _events: &[EpisodicEvent]) -> Result<Vec<ObservationDraft>, Error> {
-        Ok(self.drafts.clone())
-    }
-}
-
 impl Store {
     /// Record one episodic event (ADR-0014): validate → privacy gate → mint
     /// the id → log → apply, in one write transaction. Build the write with
@@ -239,42 +218,6 @@ impl Store {
         append_jsonl(&self.observation_log_path, &record)?;
         apply(&self.conn, &record)?;
         Ok(id)
-    }
-
-    pub fn propose_observations_from_observer(
-        &self,
-        session_id: &str,
-        observer: &impl Observer,
-    ) -> Result<Vec<String>, Error> {
-        let events = self.list_events_for_session(session_id)?;
-        let drafts = observer.observe(&events)?;
-        let mut covered_event_ids = self
-            .observation_coverage(session_id)?
-            .covered_event_ids
-            .into_iter()
-            .collect::<HashSet<_>>();
-        let mut ids = Vec::new();
-
-        for draft in drafts {
-            let uncovered_event_ids: Vec<i64> = draft
-                .source_event_ids
-                .into_iter()
-                .filter(|event_id| covered_event_ids.insert(*event_id))
-                .collect();
-            if uncovered_event_ids.is_empty() {
-                continue;
-            }
-
-            let id = self.record_observation(ObservationWrite::new(
-                session_id,
-                draft.content,
-                draft.relevance,
-                &uncovered_event_ids,
-                draft.derivation,
-            ))?;
-            ids.push(id);
-        }
-        Ok(ids)
     }
 
     pub fn get_observation(&self, id: &str) -> Result<Observation, Error> {

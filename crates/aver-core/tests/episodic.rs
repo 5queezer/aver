@@ -1,4 +1,4 @@
-use aver_core::{AgentKind, MockObserver, ObservationDraft, ObservationRelevance, Store};
+use aver_core::{AgentKind, ObservationRelevance, Store};
 use aver_core::{CandidateWrite, EventWrite, ObservationWrite, RecallQuery};
 use serde_json::Value;
 
@@ -491,48 +491,6 @@ fn record_event_rejects_empty_source_before_log_write() {
 }
 
 #[test]
-fn observer_projects_source_backed_observations() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path()).unwrap();
-    let first = store
-        .record_event(
-            EventWrite::new(
-                "session-1",
-                "user_message",
-                "Use observation projections for compaction continuity.",
-                "conversation",
-            )
-            .agent("claude", AgentKind::Llm),
-        )
-        .unwrap();
-    let second = store
-        .record_event(
-            EventWrite::new("session-1", "tool_result", "ADR-0016 was accepted.", "tool")
-                .agent("claude", AgentKind::Llm),
-        )
-        .unwrap();
-
-    let observer = MockObserver::new(vec![ObservationDraft {
-        content: "User accepted ADR-0016 for episodic observation projections.".to_string(),
-        relevance: ObservationRelevance::High,
-        source_event_ids: vec![first, second],
-        derivation: "mock-observer".to_string(),
-    }]);
-
-    let ids = store
-        .propose_observations_from_observer("session-1", &observer)
-        .unwrap();
-    let observation = store.get_observation(&ids[0]).unwrap();
-
-    assert_eq!(observation.session_id, "session-1");
-    assert_eq!(observation.agent_id, "claude");
-    assert_eq!(observation.agent_kind, AgentKind::Llm);
-    assert_eq!(observation.relevance, ObservationRelevance::High);
-    assert_eq!(observation.source_event_ids, vec![first, second]);
-    assert_eq!(observation.derivation, "mock-observer");
-}
-
-#[test]
 fn record_observation_rejects_missing_event_provenance() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
@@ -622,67 +580,6 @@ fn coverage_reports_unobserved_events_for_session() {
     assert_eq!(updated.event_ids, vec![first, second]);
     assert_eq!(updated.covered_event_ids, vec![first]);
     assert_eq!(updated.uncovered_event_ids, vec![second]);
-}
-
-#[test]
-fn catch_up_observer_should_not_reobserve_already_covered_events_before_summary() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path()).unwrap();
-
-    let first = store
-        .record_event(EventWrite::new(
-            "session-1",
-            "user_message",
-            "first fact",
-            "conversation",
-        ))
-        .unwrap();
-    let second = store
-        .record_event(EventWrite::new(
-            "session-1",
-            "tool_result",
-            "second fact",
-            "tool",
-        ))
-        .unwrap();
-    let third = store
-        .record_event(EventWrite::new(
-            "session-1",
-            "assistant_observation",
-            "third fact",
-            "tool",
-        ))
-        .unwrap();
-
-    store
-        .record_observation(ObservationWrite::new(
-            "session-1",
-            "Already covered event in baseline projection.",
-            ObservationRelevance::High,
-            &[second],
-            "mock-observer",
-        ))
-        .unwrap();
-
-    let before = store.assemble_compaction_summary("session-1").unwrap();
-    assert!(before.contains("continuity is incomplete"));
-
-    let catchup_observer = MockObserver::new(vec![ObservationDraft {
-        content: "Catch-up projection for remaining uncovered events.".to_string(),
-        relevance: ObservationRelevance::Medium,
-        source_event_ids: vec![first, second, third],
-        derivation: "mock-observer".to_string(),
-    }]);
-
-    let ids = store
-        .propose_observations_from_observer("session-1", &catchup_observer)
-        .unwrap();
-
-    let catchup = store.get_observation(&ids[0]).unwrap();
-    assert_eq!(catchup.source_event_ids, vec![first, third]);
-
-    let after = store.assemble_compaction_summary("session-1").unwrap();
-    assert!(!after.contains("continuity is incomplete"));
 }
 
 #[test]
@@ -883,20 +780,6 @@ fn automatic_pruning_blocks_when_uncovered_gaps_remain_without_or_after_failed_c
     assert_eq!(observations.len(), 2);
     assert!(observations.iter().any(|o| o.id == low));
     assert!(observations.iter().any(|o| o.id == high));
-
-    // Simulate an attempted catch-up observer; if it cannot cover the uncovered
-    // range, manual flow should still refuse to prune.
-    let catchup = MockObserver::new(vec![ObservationDraft {
-        content: "Catch-up could not add new coverage. Existing observations are already stale."
-            .to_string(),
-        relevance: ObservationRelevance::Medium,
-        source_event_ids: vec![first],
-        derivation: "mock-observer".to_string(),
-    }]);
-    let ids = store
-        .propose_observations_from_observer("session-1", &catchup)
-        .unwrap();
-    assert!(ids.is_empty());
 
     let pruned_after_failed_catchup = store.prune_observations("session-1", 1).unwrap();
     assert_eq!(pruned_after_failed_catchup, 0);
