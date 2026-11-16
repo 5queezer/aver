@@ -13,8 +13,14 @@ if ! cargo fmt --all -- --check; then
 fi
 
 echo "=== cargo clippy ==="
-if ! cargo clippy --workspace --no-deps -- -D warnings; then
+if ! cargo clippy --workspace --all-targets --all-features --no-deps -- -D warnings; then
   echo "FAIL: clippy found warnings."
+  FAIL=1
+fi
+
+echo "=== cargo doc ==="
+if ! RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps; then
+  echo "FAIL: rustdoc found warnings."
   FAIL=1
 fi
 

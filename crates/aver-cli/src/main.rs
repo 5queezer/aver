@@ -79,7 +79,7 @@ enum Command {
     Reverify {
         #[arg(long)]
         claim_id: i64,
-        /// Evidence reference (repeatable): event:<id>, claim:<id> or an item id.
+        /// Evidence reference (repeatable): `event:<id>`, `claim:<id>` or an item id.
         #[arg(long = "evidence", required = true)]
         evidence: Vec<String>,
         /// Extend the claim's window end (Unix seconds); never shrinks it.

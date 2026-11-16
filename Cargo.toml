@@ -10,8 +10,6 @@ authors      = ["Christian Pojoni"]
 rust-version = "1.95"
 description  = "Local-first, auditable memory layer for coding agents"
 repository   = "https://github.com/5queezer/aver"
-homepage     = "https://github.com/5queezer/aver"
-readme       = "README.md"
 keywords     = ["ai", "memory", "mcp", "sqlite", "rust"]
 categories   = ["command-line-utilities", "database"]
 
@@ -25,7 +23,6 @@ clap        = { version = "4", default-features = false, features = ["std", "der
 anyhow      = "1"
 thiserror   = "2"
 time        = { version = "0.3", features = ["serde", "macros"] }
-directories = "5"
 tempfile    = "3"
 tree-sitter = "0.22"
 tree-sitter-rust = "0.21"

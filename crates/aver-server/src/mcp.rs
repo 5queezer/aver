@@ -4,9 +4,8 @@ use std::{
 };
 
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler, handler::server::router::tool::ToolRouter,
-    handler::server::wrapper::Parameters, model::*, schemars, service::RequestContext, tool,
-    tool_handler, tool_router,
+    ErrorData as McpError, RoleServer, ServerHandler, handler::server::wrapper::Parameters,
+    model::*, schemars, service::RequestContext, tool, tool_handler, tool_router,
 };
 use serde::Deserialize;
 
@@ -119,8 +118,6 @@ pub struct AverMcpService {
     /// `Some` for a stdio session: the scope resolved once at startup. Its
     /// presence also marks the session as local and fully trusted.
     local: Option<ResolvedScope>,
-    #[allow(dead_code)]
-    tool_router: ToolRouter<AverMcpService>,
 }
 
 #[tool_router]
@@ -141,7 +138,6 @@ impl AverMcpService {
             tools,
             base_url,
             local: None,
-            tool_router: Self::tool_router(),
         }
     }
 
@@ -167,7 +163,7 @@ impl AverMcpService {
 
     /// ADR-0020: every MCP tool with the OAuth scope it requires. Each entry
     /// is the constant declared directly above that tool's handler, which
-    /// passes it to [`require_scope`]. The order is the tool index rendered
+    /// passes it to `require_scope`. The order is the tool index rendered
     /// in the server instructions.
     pub const TOOLS: &[ToolScope] = &[
         Self::RECALL,

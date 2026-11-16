@@ -66,7 +66,7 @@ pub(crate) fn pending_migrations(current: i64) -> Result<Vec<&'static str>, Erro
 
 /// Canonical embedding dimension for the `vec0` ANN index (ADR-0017
 /// §"Dimension binding"). Bound to `nomic-embed-text`, the default model
-/// returned by [`vector::VectorIndexConfig::default`]. Changing this value
+/// returned by [`crate::vector::VectorIndexConfig::default`]. Changing this value
 /// requires a re-index — see ADR-0017 §"Dimension binding".
 pub const VECTOR_INDEX_DIM: usize = 768;
 

@@ -35,13 +35,13 @@ use crate::{
 };
 
 /// Per-request bag of OAuth scopes granted by the bearer token. Inserted as
-/// an Axum extension by [`validate_bearer_token`] and read inside the MCP
+/// an Axum extension by `validate_bearer_token` and read inside the MCP
 /// service via the `http::request::Parts` extension forwarded by rmcp.
 #[derive(Debug, Clone, Default)]
 pub struct GrantedScopes(pub Vec<crate::scopes::Scope>);
 
 /// OAuth `client_id` the bearer token was issued to. Inserted by
-/// [`validate_bearer_token`] only when the token row carries one; the MCP
+/// `validate_bearer_token` only when the token row carries one; the MCP
 /// service stamps it as the default `agent_id` on writes.
 #[derive(Debug, Clone)]
 pub struct AuthenticatedClient(pub String);
