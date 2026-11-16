@@ -30,10 +30,6 @@ pub enum Error {
     InvalidEmbeddingVector,
     #[error("invalid claim {field}: must not be empty")]
     InvalidClaimField { field: &'static str },
-    #[error("invalid hyperedge {field}: must not be empty")]
-    InvalidHyperedgeField { field: &'static str },
-    #[error("invalid hyperedge participant {field}: must not be empty")]
-    InvalidHyperedgeParticipant { field: &'static str },
     #[error("invalid event {field}: must not be empty")]
     InvalidEventField { field: &'static str },
     #[error("invalid observation {field}: must not be empty")]
@@ -96,8 +92,6 @@ pub enum Error {
     InvalidReverify { detail: String },
     #[error("missing claim: claim {claim_id} does not exist")]
     MissingClaim { claim_id: i64 },
-    #[error("missing hyperedge: hyperedge {hyperedge_id} does not exist")]
-    MissingHyperedge { hyperedge_id: i64 },
     #[error("missing vector chunk: vector chunk {chunk_id} does not exist")]
     MissingVectorChunk { chunk_id: i64 },
     #[error(

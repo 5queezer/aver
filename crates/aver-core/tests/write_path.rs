@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use aver_core::{
-    AgentKind, ExtractorFact, HyperedgeInput, HyperedgeParticipantInput, ObservationRelevance,
-    Provenance, Store, VECTOR_INDEX_DIM, replay, vector::MockEmbeddingClient,
+    AgentKind, ExtractorFact, ObservationRelevance, Provenance, Store, VECTOR_INDEX_DIM, replay,
+    vector::MockEmbeddingClient,
 };
 use rusqlite::{Connection, types::Value};
 
@@ -207,25 +207,6 @@ fn populate(dir: &Path, tag: &str) {
     assert!(store.decay_inferred_confidence_at(future, 1_000.0).unwrap() >= 1);
     store.retire_claim(inferred, "stale").unwrap();
 
-    store
-        .add_hyperedge(HyperedgeInput {
-            predicate: "deployment".to_string(),
-            provenance: Provenance::UserAsserted,
-            confidence: 0.87,
-            source_refs: vec!["deploy-log".to_string()],
-            participants: vec![
-                HyperedgeParticipantInput {
-                    role: "service".to_string(),
-                    entity: format!("Service:{tag}"),
-                },
-                HyperedgeParticipantInput {
-                    role: "environment".to_string(),
-                    entity: "prod".to_string(),
-                },
-            ],
-        })
-        .unwrap();
-
     // Events, observations (enough to prune), candidates promoted/rejected.
     let session = format!("{tag}-session");
     let mut events = Vec::new();
@@ -329,14 +310,14 @@ fn replay_rebuild_is_identical() {
                 || table == "predicate_closure"
                 || table == "entity_types"
                 || table == "predicate_alias"
+                || table == "hyperedges"
+                || table == "hyperedge_participants"
                 || !rows.is_empty(),
             "table {table} was not exercised"
         );
     }
     for table in [
         "claims",
-        "hyperedges",
-        "hyperedge_participants",
         "episodic_events",
         "observations",
         "observation_prune_markers",

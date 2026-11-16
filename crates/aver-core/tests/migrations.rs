@@ -2674,31 +2674,20 @@ fn hyperedge_predicate_must_exist_in_predicate_types() {
 fn hyperedge_predicate_may_be_an_ontology_alias() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).expect("open should succeed");
-
-    // `has-module` is a seeded alias for `has_module` (migration 0011). The
-    // claims trigger consults predicate_alias; migration 0119 mirrors that
-    // clause into the hyperedges trigger so raw-SQL writes behave the same.
-    let id = store
-        .add_hyperedge(aver_core::HyperedgeInput {
-            predicate: "has-module".to_string(),
-            provenance: aver_core::Provenance::Extracted,
-            confidence: 0.9,
-            source_refs: vec!["parser".to_string()],
-            participants: vec![
-                aver_core::HyperedgeParticipantInput {
-                    role: "crate".to_string(),
-                    entity: "aver_core".to_string(),
-                },
-                aver_core::HyperedgeParticipantInput {
-                    role: "module".to_string(),
-                    entity: "privacy".to_string(),
-                },
-            ],
-        })
-        .expect("aliased predicate should be accepted for hyperedges");
     drop(store);
 
     let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();
+    // `has-module` is a seeded alias for `has_module` (migration 0011). The
+    // claims trigger consults predicate_alias; migration 0119 mirrors that
+    // clause into the hyperedges trigger so raw-SQL writes behave the same.
+    conn.execute(
+        "INSERT INTO hyperedges (id, predicate, provenance, confidence, source_refs, created_at, updated_at)
+         VALUES (1, 'has-module', 'EXTRACTED', 0.9, '[\"parser\"]', 1, 1)",
+        [],
+    )
+    .expect("aliased predicate should be accepted for hyperedges");
+    let id = 1;
+
     let predicate: String = conn
         .query_row(
             "SELECT predicate FROM hyperedges WHERE id = ?1",

@@ -106,36 +106,6 @@ pub struct HyperedgeParticipantInput {
     pub entity: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct HyperedgeInput {
-    pub predicate: String,
-    pub provenance: Provenance,
-    pub confidence: f64,
-    pub source_refs: Vec<String>,
-    pub participants: Vec<HyperedgeParticipantInput>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HyperedgeParticipant {
-    pub id: i64,
-    pub hyperedge_id: i64,
-    pub role: String,
-    pub entity: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Hyperedge {
-    pub id: i64,
-    pub predicate: String,
-    pub provenance: Provenance,
-    pub confidence: f64,
-    pub source_refs: Vec<String>,
-    pub status: ClaimStatus,
-    pub created_at: i64,
-    pub updated_at: i64,
-    pub participants: Vec<HyperedgeParticipant>,
-}
-
 impl Claim {
     pub fn text(&self) -> String {
         format!("{} {} {}", self.subject, self.predicate, self.object)
@@ -281,12 +251,6 @@ pub struct ObservationCoverage {
 pub struct GraphExpansion {
     pub nodes: Vec<String>,
     pub edges: Vec<Claim>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RelationshipKind {
-    Claim,
-    Hyperedge,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

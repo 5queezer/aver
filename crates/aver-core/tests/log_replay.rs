@@ -9,8 +9,8 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use aver_core::{
-    AgentKind, ClaimStatus, HyperedgeInput, HyperedgeParticipantInput, ObservationRelevance,
-    Provenance, ReplayMode, Store, replay, replay_with_mode, vector::MockEmbeddingClient,
+    AgentKind, ClaimStatus, ObservationRelevance, Provenance, ReplayMode, Store, replay,
+    replay_with_mode, vector::MockEmbeddingClient,
 };
 use rusqlite::Connection;
 
@@ -648,35 +648,6 @@ fn failed_claim_append_does_not_extend_ontology() {
         )
         .unwrap();
     assert_eq!(audit_count, 0, "failed append emitted ontology audit state");
-}
-
-#[test]
-fn failed_hyperedge_append_does_not_extend_ontology() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path()).unwrap();
-    std::fs::create_dir(dir.path().join("log.jsonl")).unwrap();
-    store
-        .add_hyperedge(HyperedgeInput {
-            predicate: "new_hyperedge_predicate".to_string(),
-            provenance: Provenance::UserAsserted,
-            confidence: 0.9,
-            source_refs: vec!["src".to_string()],
-            participants: vec![HyperedgeParticipantInput {
-                role: "member".to_string(),
-                entity: "alpha".to_string(),
-            }],
-        })
-        .expect_err("a directory at log.jsonl must make append fail");
-
-    let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
-    let predicate_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM predicate_types WHERE name = 'new_hyperedge_predicate'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(predicate_count, 0, "failed append mutated predicate_types");
 }
 
 #[test]

@@ -150,45 +150,6 @@ fn replay_refuses_dangling_or_cross_scope_typed_event_links_without_replacing_da
 }
 
 #[test]
-fn new_inferred_hyperedges_are_capped_and_historical_claim_scores_are_retained() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path()).unwrap();
-    let id = store
-        .add_hyperedge(aver_core::HyperedgeInput {
-            predicate: "concerns".into(),
-            provenance: Provenance::Inferred,
-            confidence: 0.99,
-            source_refs: vec!["synthetic".into()],
-            participants: vec![aver_core::HyperedgeParticipantInput {
-                role: "context".into(),
-                entity: "sample".into(),
-            }],
-        })
-        .unwrap();
-    assert_eq!(store.get_hyperedge(id).unwrap().confidence, 0.75);
-    store.close().unwrap();
-    use std::io::Write;
-    let historical = serde_json::json!({"kind":"add_claim","ts":1,"claim_id":1,"subject":"legacy","predicate":"concerns","object":"widget","source":"synthetic","agent_id":"model","agent_kind":"LLM","confidence":0.99,"provenance":"INFERRED","scope":"global"});
-    writeln!(
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(dir.path().join("log.jsonl"))
-            .unwrap(),
-        "{historical}"
-    )
-    .unwrap();
-    replay(dir.path(), true).unwrap();
-    assert_eq!(
-        Store::open(dir.path())
-            .unwrap()
-            .get_claim(1)
-            .unwrap()
-            .confidence,
-        0.99
-    );
-}
-
-#[test]
 fn consolidation_keeps_direct_claims_and_replacements_in_their_own_scopes() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

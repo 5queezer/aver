@@ -4,10 +4,7 @@
 use aver_core::{ClaimWrite, EventWrite, ObservationWrite};
 use std::io::Write;
 
-use aver_core::{
-    AgentKind, HyperedgeInput, HyperedgeParticipantInput, LOG_ROTATE_MAX_LINES,
-    ObservationRelevance, Provenance, Store, replay, vacuum,
-};
+use aver_core::{AgentKind, LOG_ROTATE_MAX_LINES, ObservationRelevance, Store, replay, vacuum};
 use rusqlite::Connection;
 
 #[test]
@@ -161,49 +158,59 @@ fn vacuum_into_writes_a_copy() {
 #[test]
 fn replay_rebuilds_hyperedges_from_append_only_log() {
     let dir = tempfile::tempdir().unwrap();
+    let record = serde_json::json!({
+        "kind": "add_hyperedge",
+        "ts": 1,
+        "hyperedge_id": 7,
+        "predicate": "deployment",
+        "provenance": "USER_ASSERTED",
+        "confidence": 0.87,
+        "source_refs": ["deploy-log"],
+        "participants": [
+            {"role": "service", "entity": "api"},
+            {"role": "environment", "entity": "prod"}
+        ]
+    });
+    std::fs::write(dir.path().join("log.jsonl"), format!("{record}\n")).unwrap();
 
-    let hyperedge_id = {
-        let store = Store::open(dir.path()).unwrap();
-        let hyperedge_id = store
-            .add_hyperedge(HyperedgeInput {
-                predicate: "deployment".to_string(),
-                provenance: Provenance::UserAsserted,
-                confidence: 0.87,
-                source_refs: vec!["deploy-log".to_string()],
-                participants: vec![
-                    HyperedgeParticipantInput {
-                        role: "service".to_string(),
-                        entity: "api".to_string(),
-                    },
-                    HyperedgeParticipantInput {
-                        role: "environment".to_string(),
-                        entity: "prod".to_string(),
-                    },
-                ],
-            })
-            .unwrap();
-        store.close().unwrap();
-        hyperedge_id
-    };
-
-    std::fs::remove_file(dir.path().join("db.sqlite")).unwrap();
-    let _ = std::fs::remove_file(dir.path().join("db.sqlite-wal"));
-    let _ = std::fs::remove_file(dir.path().join("db.sqlite-shm"));
-
-    let report = replay(dir.path(), false).expect("replay should rebuild hyperedges");
+    let report = replay(dir.path(), false).expect("old hyperedge records must replay strictly");
     assert_eq!(report.hyperedges, 1);
 
-    let store = Store::open(dir.path()).unwrap();
-    let hyperedge = store.get_hyperedge(hyperedge_id).unwrap();
-    assert_eq!(hyperedge.predicate, "deployment");
-    assert_eq!(hyperedge.provenance, Provenance::UserAsserted);
-    assert!((hyperedge.confidence - 0.87).abs() < 1e-9);
-    assert_eq!(hyperedge.source_refs, vec!["deploy-log".to_string()]);
-    assert_eq!(hyperedge.participants.len(), 2);
-    assert_eq!(hyperedge.participants[0].role, "service");
-    assert_eq!(hyperedge.participants[0].entity, "api");
-    assert_eq!(hyperedge.participants[1].role, "environment");
-    assert_eq!(hyperedge.participants[1].entity, "prod");
+    let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let row = conn
+        .query_row(
+            "SELECT predicate, provenance, confidence, source_refs FROM hyperedges WHERE id = 7",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(row.0, "deployment");
+    assert_eq!(row.1, "USER_ASSERTED");
+    assert!((row.2 - 0.87).abs() < 1e-9);
+    assert_eq!(row.3, "[\"deploy-log\"]");
+    let participants: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT role, entity FROM hyperedge_participants WHERE hyperedge_id = 7 ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        participants,
+        vec![
+            ("service".into(), "api".into()),
+            ("environment".into(), "prod".into())
+        ]
+    );
 }
 
 #[test]

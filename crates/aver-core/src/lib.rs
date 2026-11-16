@@ -7,7 +7,6 @@ mod claims;
 mod episodic;
 mod error;
 mod graph;
-mod hyperedges;
 mod ids;
 mod log;
 mod maintenance;
@@ -39,8 +38,7 @@ pub use types::{
     AgentKind, CandidateClaim, CandidateClaimDraft, CandidateWrite, Claim, ClaimConfirmation,
     ClaimStatus, ClaimWrite, ConsolidationReport, ContradictionRecord, EpisodicEvent, EventWrite,
     ExtractionDecision, ExtractionTriggerReason, ExtractorFact, GraphDriftSnapshot, GraphExpansion,
-    Hyperedge, HyperedgeInput, HyperedgeParticipant, HyperedgeParticipantInput, Observation,
-    ObservationCoverage, ObservationDraft, ObservationRecall, ObservationRelevance,
-    ObservationWrite, PredicateWalk, Provenance, RecallFilters, RecallQuery, RelationshipKind,
-    ReverifyWrite, ScopeWalk, VectorChunk, Verification,
+    HyperedgeParticipantInput, Observation, ObservationCoverage, ObservationDraft,
+    ObservationRecall, ObservationRelevance, ObservationWrite, PredicateWalk, Provenance,
+    RecallFilters, RecallQuery, ReverifyWrite, ScopeWalk, VectorChunk, Verification,
 };

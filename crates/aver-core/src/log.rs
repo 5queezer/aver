@@ -90,6 +90,7 @@ pub(crate) enum LogRecord {
         claim_ids: Vec<i64>,
         entity_names: Vec<String>,
     },
+    // The public write API was removed; this record remains for strict replay of old logs.
     AddHyperedge {
         ts: i64,
         hyperedge_id: i64,

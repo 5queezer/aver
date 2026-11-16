@@ -110,7 +110,7 @@ fn legacy_cleanup_is_logged_idempotent_and_replayable() {
         "\n"
     );
     std::fs::write(dir.path().join("log.jsonl"), legacy).unwrap();
-    replay(dir.path(), false).unwrap();
+    replay(dir.path(), true).unwrap();
     let store = Store::open(dir.path()).unwrap();
     assert!(entity_exists(dir.path(), "An invented complete sentence."));
     let before = std::fs::read(dir.path().join("log.jsonl")).unwrap();
@@ -157,7 +157,7 @@ fn cleanup_preserves_subject_and_hyperedge_entities_and_recovers_unapplied_recor
     let sentence = "An invented sentence.";
     let legacy = serde_json::json!({"kind":"add_claim","ts":1,"claim_id":1,"subject":sentence,"predicate":"concerns","object":sentence,"source":"synthetic","agent_id":"mcp","agent_kind":"EXTERNAL_TOOL","confidence":0.9,"provenance":"EXTRACTED","scope":"global"});
     std::fs::write(dir.path().join("log.jsonl"), format!("{legacy}\n")).unwrap();
-    replay(dir.path(), false).unwrap();
+    replay(dir.path(), true).unwrap();
     let store = Store::open(dir.path()).unwrap();
     let before = std::fs::read(dir.path().join("log.jsonl")).unwrap();
     let preview = store.preview_literal_migration().unwrap();
@@ -168,18 +168,13 @@ fn cleanup_preserves_subject_and_hyperedge_entities_and_recovers_unapplied_recor
     assert_eq!(report.entities_removed, 0);
     assert!(entity_exists(dir.path(), sentence));
     let protected = "Another invented sentence.";
-    store
-        .add_hyperedge(aver_core::HyperedgeInput {
-            predicate: "concerns".into(),
-            provenance: Provenance::UserAsserted,
-            confidence: 0.8,
-            source_refs: vec!["synthetic".into()],
-            participants: vec![aver_core::HyperedgeParticipantInput {
-                role: "context".into(),
-                entity: protected.into(),
-            }],
-        })
-        .unwrap();
+    store.close().unwrap();
+    let hyperedge = serde_json::json!({"kind":"add_hyperedge","ts":2,"hyperedge_id":1,"predicate":"concerns","provenance":"USER_ASSERTED","confidence":0.8,"source_refs":["synthetic"],"participants":[{"role":"context","entity":protected}]});
+    let mut log = std::fs::read_to_string(dir.path().join("log.jsonl")).unwrap();
+    log.push_str(&format!("{hyperedge}\n"));
+    std::fs::write(dir.path().join("log.jsonl"), log).unwrap();
+    replay(dir.path(), true).unwrap();
+    let store = Store::open(dir.path()).unwrap();
     assert_eq!(store.migrate_literals().unwrap().entities_removed, 0);
     assert!(entity_exists(dir.path(), protected));
     store.close().unwrap();
