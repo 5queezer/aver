@@ -17,10 +17,10 @@ use crate::tools::{
     AddTripleParams, AddVectorChunkParams, AssembleCompactionSummaryParams, AverTools,
     CommunitiesParams, ConsolidateParams, ContradictParams, ExpandParams,
     ExtractParams as CoreExtractParams, GetEventParams, ListCandidateClaimsParams,
-    ObservationCoverageParams, PathParams, PromoteCandidateClaimParams,
-    ProposeCandidateClaimParams, RecallObservationParams, RecallParams as CoreRecallParams,
-    RecordEventParams, RecordObservationParams, RejectCandidateClaimParams, RetireClaimParams,
-    ReverifyClaimParams, ShouldExtractMemoriesParams,
+    ObservationCoverageParams, PromoteCandidateClaimParams, ProposeCandidateClaimParams,
+    RecallObservationParams, RecallParams as CoreRecallParams, RecordEventParams,
+    RecordObservationParams, RejectCandidateClaimParams, RetireClaimParams, ReverifyClaimParams,
+    ShouldExtractMemoriesParams,
 };
 
 /// Verifies the request's granted scopes (carried via `http::request::Parts`
@@ -189,7 +189,6 @@ impl AverMcpService {
     pub const TOOLS: &[ToolScope] = &[
         Self::RECALL,
         Self::EXPAND,
-        Self::PATH,
         Self::COMMUNITIES,
         Self::REMEMBER_CLAIM,
         Self::ADD_TRIPLE,
@@ -274,28 +273,6 @@ impl AverMcpService {
         let tools = self.lock_tools()?;
         let result = tools.expand(params);
         json_tool_result(&tools, result, "expand")
-    }
-
-    const PATH: ToolScope = ToolScope::new("path", Scope::ClaimsRead);
-    #[tool(
-        description = "Find the shortest directed claim path between two known entities, with each hop's claim id, confidence, and provenance. Use to explain how two entities connect; returns found=false when no path fits the limits."
-    )]
-    async fn path(
-        &self,
-        Parameters(mut params): Parameters<PathParams>,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, self.local.as_ref(), Self::PATH)?;
-        let resolved = request_scope(&ctx, self.local.as_ref());
-        if params.scope_walk.is_none() && params.scope.is_none() {
-            params.scope_walk = Some(resolved.default_walk.as_str().to_string());
-        }
-        if params.scope.is_none() {
-            params.scope = Some(resolved.scope);
-        }
-        let tools = self.lock_tools()?;
-        let result = tools.path(params);
-        json_tool_result(&tools, result, "path")
     }
 
     const COMMUNITIES: ToolScope = ToolScope::new("communities", Scope::ClaimsRead);
@@ -700,7 +677,7 @@ fn mcp_tool_instructions() -> String {
             "reject_candidate_claim",
         ];
         let observation_tools = ["recall_observation", "observation_coverage"];
-        let specialized_tools = ["expand", "path", "communities", "add_triple"];
+        let specialized_tools = ["expand", "communities", "add_triple"];
         let maintenance_tools = [
             "contradict",
             "retire_claim",
@@ -719,7 +696,6 @@ fn mcp_tool_instructions() -> String {
                 "Proactive memory policy: record durable user-shared preferences, project facts, and long-lived working context even without a direct remember command; only record identity details when they are necessary, user-shared, and not sensitive personal data; prefer record_event over remember_claim when durability is uncertain. Avoid storing secrets, credentials, sensitive personal data, transient chat, or facts you cannot explain with provenance. ",
                 "Default workflows: recall existing memory before answering or updating; record_event -> should_extract_memories -> propose_candidate_claim/list_candidate_claims -> promote_candidate_claim or reject_candidate_claim for event-to-claim promotion; record_observation -> recall_observation or observation_coverage -> assemble_compaction_summary for continuity and compaction. ",
                 "Graph navigation tools available: {}. Progressively load graph navigation tools only after recall returns an entity or you already know an anchor: expand; both remember_claim and add_triple support explicit provenance/confidence, object_kind, event_id and strict_atomic. ",
-                "Use path to explain how two known entities connect through claims. ",
                 "Use communities to survey clusters of connected entities and the bridges between them, not to answer a specific question. ",
                 "Keep maintenance tools hidden until there is an explicit repair need: {}. Prefer contradict for normal conflicting evidence, retire_claim only for explicit invalidation, consolidate only when you need refreshed derived state, and add_vector_chunk only for retrieval tuning. ",
                 "Structured writes: use short identifiers for entities, numeric/quoted/prose values as literals. INFERRED means your judgment (default 0.45; maximum 0.75), EXTRACTED means stated in a cited source, AMBIGUOUS means conflicting evidence. Repetition does not prove extraction. Store rationale with record_event, then write claims with its event_id in the same scope. Prose returns an atomic-triple hint; strict_atomic=true rejects it before append. Decision vocabulary: concerns/about, is/is_a, triggered_by, supersedes, has_rationale (multi); a store's ontology.json can add domain predicates with their own cardinality. Consolidate to supersede corrected single-valued facts. ",
@@ -778,7 +754,6 @@ mod tests {
         let fixture: BTreeMap<&str, Scope> = [
             ("recall", Scope::ClaimsRead),
             ("expand", Scope::ClaimsRead),
-            ("path", Scope::ClaimsRead),
             ("communities", Scope::ClaimsRead),
             ("remember_claim", Scope::ClaimsWrite),
             ("add_triple", Scope::ClaimsWrite),

@@ -40,9 +40,8 @@ pub use types::{
     AgentKind, CandidateClaim, CandidateClaimDraft, CandidateWrite, Claim, ClaimConfirmation,
     ClaimStatus, ClaimWrite, Community, ConsolidationReport, ContradictionRecord, EpisodicEvent,
     EventWrite, ExtractionDecision, ExtractionTriggerReason, ExtractorFact, GraphDriftSnapshot,
-    GraphExpansion, GraphPath, GraphPathMode, GraphPathQuery, GraphPathStep, Hyperedge,
-    HyperedgeInput, HyperedgeParticipant, HyperedgeParticipantInput, Observation,
-    ObservationCoverage, ObservationDraft, ObservationRecall, ObservationRelevance,
+    GraphExpansion, Hyperedge, HyperedgeInput, HyperedgeParticipant, HyperedgeParticipantInput,
+    Observation, ObservationCoverage, ObservationDraft, ObservationRecall, ObservationRelevance,
     ObservationWrite, PredicateWalk, Provenance, RecallFilters, RecallQuery, RelationshipKind,
     ReverifyWrite, ScopeWalk, StorageMode, VectorChunk, Verification,
 };

@@ -6,8 +6,8 @@ use aver_core::retrieval::{DEFAULT_RECENCY_TAU_SECS, HybridWeights};
 use aver_core::vector::{DEFAULT_OPENAI_EMBEDDING_MODEL, EmbeddingClient, VectorIndexConfig};
 use aver_core::{
     AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, Error,
-    GraphPathQuery, Observation, ObservationCoverage, ObservationRecall, ObservationRelevance,
-    PredicateWalk, RecallFilters, ReverifyWrite, ScopeWalk, Store,
+    Observation, ObservationCoverage, ObservationRecall, ObservationRelevance, PredicateWalk,
+    RecallFilters, ReverifyWrite, ScopeWalk, Store,
 };
 use aver_extractor::LANGUAGES;
 use aver_extractor::bridge::extract_tree;
@@ -295,29 +295,6 @@ pub struct CommunitiesParams {
     /// Maximum communities to return, highest score first. Defaults to 20, at most 100.
     #[serde(default)]
     pub top_k: Option<usize>,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-pub struct PathParams {
-    /// Entity the path starts from.
-    pub from: String,
-    /// Entity the path ends at.
-    pub to: String,
-    /// Hop limit. Defaults to 4, at most 8.
-    #[serde(default)]
-    pub max_hops: Option<usize>,
-    /// Predicate allowlist for traversal (same semantics as `expand`).
-    #[serde(default)]
-    pub predicates: Option<Vec<String>>,
-    /// Inclusive lower bound on each edge's confidence (0..=1).
-    #[serde(default)]
-    pub min_confidence: Option<f64>,
-    /// ADR-0021 scope filter.
-    #[serde(default)]
-    pub scope: Option<String>,
-    /// ADR-0021 walk mode.
-    #[serde(default)]
-    pub scope_walk: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -742,29 +719,6 @@ pub struct CommunityView {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct CommunitiesView {
     pub communities: Vec<CommunityView>,
-    pub scope: String,
-    pub scope_walk: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct PathStepView {
-    pub subject: String,
-    pub predicate: String,
-    pub object: String,
-    /// `None` (JSON `null`) for hyperedge steps.
-    pub claim_id: Option<i64>,
-    pub confidence: f64,
-    pub provenance: String,
-    pub scope: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct PathView {
-    pub found: bool,
-    pub hops: usize,
-    /// Product of the step confidences; 0 when no path was found.
-    pub confidence: f64,
-    pub path: Vec<PathStepView>,
     pub scope: String,
     pub scope_walk: String,
 }
@@ -1494,48 +1448,6 @@ impl AverTools {
         communities.truncate(top_k);
         Ok(CommunitiesView {
             communities,
-            scope: scope.to_string(),
-            scope_walk: walk.as_str().to_string(),
-        })
-    }
-
-    /// Shortest directed path from `from` to `to` via core's `graph_path`:
-    /// fewest hops, then highest confidence product, then lexicographic
-    /// entity path. Per core's rule, hyperedges (scopeless, treated as
-    /// `"global"`) are followed under `Any`/`Ancestors` walks; their steps
-    /// carry `claim_id: None`.
-    pub fn path(&self, params: PathParams) -> anyhow::Result<PathView> {
-        let max_hops = validate_hops(params.max_hops.unwrap_or(4))?;
-        let scope = params.scope.as_deref().unwrap_or("global");
-        let walk = parse_scope_walk(params.scope_walk.as_deref(), &params.scope)?;
-        let query = GraphPathQuery {
-            max_hops,
-            predicates: params.predicates,
-            min_confidence: params.min_confidence.unwrap_or(0.0),
-            scope: scope.to_string(),
-            walk,
-            ..GraphPathQuery::new(params.from, params.to)
-        };
-        let (found, confidence, steps) = match self.store.graph_path(query)? {
-            Some(path) => (true, path.confidence, path.steps),
-            None => (false, 0.0, Vec::new()),
-        };
-        Ok(PathView {
-            found,
-            hops: steps.len(),
-            confidence,
-            path: steps
-                .into_iter()
-                .map(|step| PathStepView {
-                    subject: step.source,
-                    predicate: step.predicate,
-                    object: step.target,
-                    claim_id: step.claim_id,
-                    confidence: step.confidence,
-                    provenance: step.provenance.as_str().to_string(),
-                    scope: step.scope,
-                })
-                .collect(),
             scope: scope.to_string(),
             scope_walk: walk.as_str().to_string(),
         })

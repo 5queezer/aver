@@ -450,10 +450,7 @@ async fn graph_tools_require_claims_read() {
     let (write_only, _) = approve_and_mint_tokens(&app, &client_id, Some("claims:write")).await;
     let (read_only, _) = approve_and_mint_tokens(&app, &client_id, Some("claims:read")).await;
 
-    for (tool, args) in [
-        ("communities", serde_json::json!({})),
-        ("path", serde_json::json!({"from": "alice", "to": "bob"})),
-    ] {
+    for (tool, args) in [("communities", serde_json::json!({}))] {
         let resp = call_mcp_tool(&app, &write_only, tool, args.clone()).await;
         let err = resp
             .get("error")
