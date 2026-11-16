@@ -132,21 +132,18 @@ pub fn normalized_cosine_score(left: &[f32], right: &[f32]) -> Option<f32> {
     cosine_similarity(left, right).map(|score| (score + 1.0) / 2.0)
 }
 
-#[cfg(feature = "ollama")]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct OllamaEmbeddingRequest<'a> {
     model: &'a str,
     prompt: &'a str,
 }
 
-#[cfg(feature = "ollama")]
 impl<'a> OllamaEmbeddingRequest<'a> {
     pub fn new(model: &'a str, prompt: &'a str) -> Self {
         Self { model, prompt }
     }
 }
 
-#[cfg(feature = "ollama")]
 #[derive(Debug, Clone, serde::Deserialize, PartialEq)]
 pub struct OllamaEmbeddingResponse {
     pub embedding: Vec<f32>,
@@ -175,7 +172,6 @@ fn parse_timeout_secs(value: &str) -> Option<Duration> {
         .map(Duration::from_secs)
 }
 
-#[cfg(feature = "ollama")]
 #[derive(Debug, Clone)]
 pub struct OllamaEmbeddingClient {
     base_url: String,
@@ -184,7 +180,6 @@ pub struct OllamaEmbeddingClient {
     agent: ureq::Agent,
 }
 
-#[cfg(feature = "ollama")]
 impl OllamaEmbeddingClient {
     /// Client with the default request timeout ([`DEFAULT_EMBEDDING_TIMEOUT`]).
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
@@ -254,7 +249,6 @@ impl OllamaEmbeddingClient {
     }
 }
 
-#[cfg(feature = "ollama")]
 impl EmbeddingClient for OllamaEmbeddingClient {
     fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
         let response = self
@@ -279,7 +273,6 @@ pub const DEFAULT_OPENAI_EMBEDDING_MODEL: &str = "text-embedding-3-small";
 /// redacts it, and errors carry the HTTP status or transport error kind
 /// only, never the response body (an authentication error can echo part of
 /// the key) or the request.
-#[cfg(feature = "ollama")]
 #[derive(Clone)]
 pub struct OpenAiEmbeddingClient {
     base_url: String,
@@ -290,7 +283,6 @@ pub struct OpenAiEmbeddingClient {
     agent: ureq::Agent,
 }
 
-#[cfg(feature = "ollama")]
 impl fmt::Debug for OpenAiEmbeddingClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OpenAiEmbeddingClient")
@@ -303,7 +295,6 @@ impl fmt::Debug for OpenAiEmbeddingClient {
     }
 }
 
-#[cfg(feature = "ollama")]
 impl OpenAiEmbeddingClient {
     /// `dimensions` is requested from the provider and enforced on the
     /// response, so every stored vector has the same length.
@@ -341,7 +332,6 @@ impl OpenAiEmbeddingClient {
     }
 }
 
-#[cfg(feature = "ollama")]
 impl EmbeddingClient for OpenAiEmbeddingClient {
     fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
         #[derive(serde::Deserialize)]
@@ -414,7 +404,6 @@ mod timeout_tests {
 
     /// A socket that accepts and never answers must fail within the
     /// configured timeout instead of blocking recall.
-    #[cfg(feature = "ollama")]
     #[test]
     fn hanging_embedding_endpoint_times_out() {
         use std::io::Read;

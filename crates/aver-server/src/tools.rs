@@ -87,7 +87,6 @@ pub fn embedding_from_vars(vars: impl Fn(&str) -> Option<String>) -> (Option<Emb
     }
 }
 
-#[cfg(feature = "ollama")]
 fn openai_embedder(url: String, model: &str, api_key: String) -> Option<Embedder> {
     Some(Box::new(
         aver_core::vector::OpenAiEmbeddingClient::new(
@@ -98,11 +97,6 @@ fn openai_embedder(url: String, model: &str, api_key: String) -> Option<Embedder
         )
         .with_timeout(aver_core::vector::embedding_timeout_from_env()),
     ))
-}
-
-#[cfg(not(feature = "ollama"))]
-fn openai_embedder(_url: String, _model: &str, _api_key: String) -> Option<Embedder> {
-    None
 }
 
 /// Reads the opt-in recall recency term (ADR-0004) once:
@@ -168,7 +162,6 @@ pub fn evidence_half_life_from_env() -> f64 {
     }
 }
 
-#[cfg(feature = "ollama")]
 fn ollama_embedder(url: Option<String>, model: &str) -> Option<Embedder> {
     url.map(|url| {
         Box::new(
@@ -176,11 +169,6 @@ fn ollama_embedder(url: Option<String>, model: &str) -> Option<Embedder> {
                 .with_timeout(aver_core::vector::embedding_timeout_from_env()),
         ) as Embedder
     })
-}
-
-#[cfg(not(feature = "ollama"))]
-fn ollama_embedder(_url: Option<String>, _model: &str) -> Option<Embedder> {
-    None
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]

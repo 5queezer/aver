@@ -1,8 +1,6 @@
 //! `AVER_EMBED_ON_WRITE=1`: claim writes also store an embedded chunk, so
 //! ordinary memories are eligible for hybrid recall without a separate
 //! `add_vector_chunk` call. Opt-in; best effort; never fails the claim write.
-#![cfg(feature = "ollama")]
-
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::process::{Command, Stdio};

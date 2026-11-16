@@ -1,7 +1,5 @@
 //! OpenAI-compatible embedding client against a local mock server. No live
 //! provider call.
-#![cfg(feature = "ollama")]
-
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;

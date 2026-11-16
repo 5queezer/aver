@@ -12,10 +12,6 @@ readme                 = "../../README.md"
 keywords.workspace     = true
 categories.workspace   = true
 
-[features]
-default = ["ollama"]
-ollama = ["dep:ureq"]
-
 [dependencies]
 rusqlite.workspace    = true
 sqlite-vec.workspace  = true
@@ -24,7 +20,7 @@ serde.workspace       = true
 # confidence or embedding component must parse back to the exact bits that
 # were written; serde_json's default float parsing is best-effort.
 serde_json = { workspace = true, features = ["float_roundtrip"] }
-ureq = { workspace = true, optional = true }
+ureq.workspace = true
 thiserror.workspace   = true
 time.workspace        = true
 flate2                = "1"
