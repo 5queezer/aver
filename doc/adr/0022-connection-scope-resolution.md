@@ -106,6 +106,10 @@ JSONL log alone, independent of the SQLite materialization.
 
 ### `aver-scope-shim`
 
+Superseded by ADR-0025 on 2026-11-16. The shim and this section's proposed
+implementation were removed; the scope-resolution precedence and header
+semantics above remain in force.
+
 A new binary in `crates/aver-scope-shim/` (sibling of `aver-cli`,
 `aver-server`) that:
 
@@ -139,6 +143,9 @@ to participate in scoping. It is intentionally a separate binary rather than
 a server flag because its lifecycle is per-workspace, not per-host.
 
 ### Integration with Claude Code (informative)
+
+Superseded by ADR-0025 on 2026-11-16. Configure the `X-Aver-Scope` header
+directly as documented there instead of launching a forwarding process.
 
 Each project's `.claude/settings.json` (or `~/.claude.json` per-project entry)
 points its `aver` MCP at the shim instead of the upstream server. Today that

@@ -4,7 +4,7 @@ Date: 2026-10-24
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -67,8 +67,8 @@ derivation from the git working directory. That is covered below.
 ## Decision
 
 Retire `aver-scope-shim`. Every client we target can send a per-server
-header, so the proxy process is not needed. Do not delete the crate in this
-change; this ADR marks it deprecated and lists the removal steps.
+header, so the proxy process is not needed. The crate was removed on
+2026-11-16; the replacement client configuration below remains the contract.
 
 ### Replacement client configuration
 

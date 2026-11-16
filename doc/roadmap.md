@@ -77,8 +77,8 @@ concatenating their logs.
 - Put the embedding provider behind a trait at the edge. Core stops
   depending on `ureq` by default; the server owns the Ollama client; tests
   use the existing mock. Remove the `"nomic-embed-text"` literal from core.
-- Fold `aver-scope-shim` into client configuration if the MCP client can set
-  the header. If it genuinely cannot, record why in an ADR and keep it.
+- Scope is configured directly through the MCP client's `X-Aver-Scope`
+  header; the forwarding shim was removed under ADR-0025.
 - Delete `adapters.rs`, `MockObserver`, and `MockClaimExtractor` from the
   production library. Re-add when a runtime is actually wired.
 - Make the tool declare its required scope instead of `scopes.rs`
