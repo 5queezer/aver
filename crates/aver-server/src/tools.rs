@@ -9,8 +9,6 @@ use aver_core::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::recall_log::{RecallMissFilters, RecallMissLog, RecallRequestShape};
-
 /// Query-embedding client for hybrid recall (ADR-0004), built at the server
 /// edge. `None` keeps recall on the keyword path.
 pub type Embedder = Box<dyn EmbeddingClient + Send + Sync>;
@@ -751,8 +749,6 @@ pub struct AverTools {
     embedder: Option<Embedder>,
     /// Model label recorded on vector chunks (`AVER_EMBEDDING_MODEL`).
     embedding_model: String,
-    /// Content-free recall-miss log; `None` unless `AVER_RECALL_MISS_LOG=1`.
-    recall_miss_log: Option<RecallMissLog>,
     /// ADR-0004 opt-in recency `(w, tau_secs)`; `w == 0` unless
     /// `AVER_RECALL_RECENCY_WEIGHT` opts in.
     recency: (f64, f64),
@@ -766,12 +762,10 @@ pub struct AverTools {
 impl AverTools {
     pub fn open(memory_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
         let (embedder, embedding_model) = embedding_from_env();
-        let recall_miss_log = RecallMissLog::from_env(memory_dir.as_ref());
         Ok(Self {
             store: Store::open(memory_dir)?,
             embedder,
             embedding_model,
-            recall_miss_log,
             recency: recency_from_env(),
             evidence_half_life: evidence_half_life_from_env(),
             embed_on_write: std::env::var("AVER_EMBED_ON_WRITE").is_ok_and(|v| v.trim() == "1"),
@@ -827,13 +821,6 @@ impl AverTools {
             .with_evidence_half_life(half_life)?
             .evidence_half_life;
         Ok(self)
-    }
-
-    /// Replaces the recall-miss log read from the environment (tests inject
-    /// a log at a temp path instead of setting `AVER_RECALL_MISS_LOG`).
-    pub fn with_recall_miss_log(mut self, log: Option<RecallMissLog>) -> Self {
-        self.recall_miss_log = log;
-        self
     }
 
     /// Replaces the embedding client read from the environment (tests and
@@ -921,25 +908,6 @@ impl AverTools {
             embedded,
             ..self.store.get_claim(id)?.into()
         })
-    }
-
-    /// [`AverTools::recall`] for an MCP caller: when the recall-miss log is
-    /// enabled, a miss or weak hit is recorded against `agent_id` (the
-    /// authenticated client id). Retrieval is unchanged; logging never fails
-    /// the recall.
-    pub fn recall_for_agent(
-        &self,
-        params: RecallParams,
-        agent_id: &str,
-    ) -> anyhow::Result<RecallView> {
-        let Some(log) = &self.recall_miss_log else {
-            return self.recall(params);
-        };
-        let started = std::time::Instant::now();
-        let shape = recall_request_shape(&params);
-        let view = self.recall(params)?;
-        log.observe(shape, &view, agent_id, started.elapsed());
-        Ok(view)
     }
 
     pub fn recall(&self, params: RecallParams) -> anyhow::Result<RecallView> {
@@ -1427,39 +1395,6 @@ fn mcp_agent<'a>(
 /// omitted (preserves today's behavior verbatim) and `Ancestors` if a scope
 /// was supplied (the user clearly wants scoped reads). Layer 2 will refine
 /// this further when connection-resolved scope lands.
-/// Reduces recall params to the content-free shape the recall-miss log
-/// records: the query becomes two counts, filters become flags and enum
-/// names. Values `recall` would reject map to defaults; such a request
-/// errors before anything is logged.
-fn recall_request_shape(params: &RecallParams) -> RecallRequestShape {
-    let (query_len, query_tokens) = RecallRequestShape::query_counts(&params.query);
-    let status = match params.status.as_deref() {
-        Some("any") => "any",
-        Some(s) => s.parse::<ClaimStatus>().map_or("any", ClaimStatus::as_str),
-        None => ClaimStatus::Active.as_str(),
-    };
-    RecallRequestShape {
-        query_len,
-        query_tokens,
-        scope: params.scope.clone().unwrap_or_else(|| "global".to_string()),
-        scope_walk: parse_scope_walk(params.scope_walk.as_deref(), &params.scope)
-            .unwrap_or(ScopeWalk::Any)
-            .as_str(),
-        filters: RecallMissFilters {
-            agent_id_set: params.agent_id.is_some(),
-            agent_kind: params
-                .agent_kind
-                .as_deref()
-                .and_then(|kind| kind.parse::<AgentKind>().ok())
-                .map(AgentKind::as_str),
-            predicate_set: params.predicate.is_some(),
-            min_confidence: params.min_confidence,
-            status,
-        },
-        top_k: params.top_k.unwrap_or(5),
-    }
-}
-
 fn parse_scope_walk(walk: Option<&str>, scope: &Option<String>) -> anyhow::Result<ScopeWalk> {
     match walk {
         Some(s) => s

@@ -498,7 +498,7 @@ impl AverMcpService {
                 context: params.context,
             }
         };
-        let result = tools.recall_for_agent(params, &request_agent_id(&ctx));
+        let result = tools.recall(params);
         json_tool_result(&tools, result, "recall")
     }
 }
