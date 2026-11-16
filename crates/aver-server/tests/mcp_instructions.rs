@@ -18,6 +18,9 @@ fn mcp_instructions_are_a_progressive_discovery_card() {
         "Default active set: recall, remember_claim, record_event, add_triple, retire_claim."
     ));
     assert!(instructions.contains(
+        "Use add_triple instead of remember_claim when you need explicit confidence or source control."
+    ));
+    assert!(instructions.contains(
         "Progressively load event-to-claim tools only when converting raw events into reviewed durable claims: should_extract_memories, propose_candidate_claim, list_candidate_claims, promote_candidate_claim, reject_candidate_claim."
     ));
     assert!(
@@ -41,10 +44,12 @@ fn mcp_instructions_are_a_progressive_discovery_card() {
     assert!(instructions.contains(
         "Progressively load graph navigation tools only after recall returns an entity or you already know an anchor: expand; both remember_claim and add_triple support explicit provenance/confidence, object_kind, event_id and strict_atomic."
     ));
-    assert!(instructions.contains("Graph navigation tools available: expand, add_triple."));
+    assert!(instructions.contains("Graph navigation tools available: expand."));
     assert!(instructions.contains(
-        "Keep maintenance tools hidden until there is an explicit repair need: contradict, retire_claim, consolidate, add_vector_chunk."
+        "Keep maintenance tools hidden until there is an explicit repair need: contradict, consolidate, add_vector_chunk."
     ));
+    assert!(instructions.contains("retire_claim only for explicit invalidation"));
+    assert!(instructions.contains("extract. Progressively load event-to-claim tools"));
     assert!(instructions.to_ascii_lowercase().contains(
         "only record identity details when they are necessary, user-shared, and not sensitive personal data"
     ));

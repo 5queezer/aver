@@ -580,20 +580,15 @@ fn mcp_tool_instructions() -> String {
             "promote_candidate_claim",
             "reject_candidate_claim",
         ];
-        let specialized_tools = ["expand", "add_triple"];
-        let maintenance_tools = [
-            "contradict",
-            "retire_claim",
-            "consolidate",
-            "add_vector_chunk",
-        ];
+        let specialized_tools = ["expand"];
+        let maintenance_tools = ["contradict", "consolidate", "add_vector_chunk"];
         let review_tools = ["reverify_claim"];
 
         format!(
             concat!(
                 "Aver exposes {} MCP tools, but most sessions should start with the default active set. ",
                 "Default active set: {}. ",
-                "Decision policy: recall before answering when durable memory may matter; remember_claim only for explicit stable long-term facts; record_event for useful raw history. ",
+                "Decision policy: recall before answering when durable memory may matter; remember_claim only for explicit stable long-term facts; record_event for useful raw history. Use add_triple instead of remember_claim when you need explicit confidence or source control. ",
                 "Self-healing writes: predicates are strict, but unknown-predicate errors include fuzzy/semantic suggestions, accepted aliases, and a retry hint; retry with a suggested predicate rather than inventing new predicates or silently rewriting claims. Use `relates_to` as the safest generic fallback when no precise predicate fits. ",
                 "Scope policy: pass `scope` only for an explicit per-call override; otherwise the request's resolved scope applies. For scoped reads, use `scope_walk=ancestors` for normal project memory, `exact` for isolation, `descendants` for subtree audits, and `any` only for cross-scope search. ",
                 "Proactive memory policy: record durable user-shared preferences, project facts, and long-lived working context even without a direct remember command; only record identity details when they are necessary, user-shared, and not sensitive personal data; prefer record_event over remember_claim when durability is uncertain. Avoid storing secrets, credentials, sensitive personal data, transient chat, or facts you cannot explain with provenance. ",
@@ -605,7 +600,7 @@ fn mcp_tool_instructions() -> String {
                 "Source-event audit: progressively load get_event only for a known event_id (from a claim or record_event). It requires claims:read and the exact event scope, defaulting to the request scope. Recall does not expand event payloads; use get_event to read rationale on demand. ",
                 "Code extraction: extract reads a source tree on the server (operator-configured root) and writes EXTRACTED code facts; use it for project code, not for chat or user facts. ",
                 "Claim validity: remember_claim and add_triple accept `context` (an opaque entity id the claim was established under) and a `valid_from`/`valid_until` window in Unix seconds. Evidence items link with `<item> in_context <context>`, `<item> concerns <topic>` and `<item> closed_at <time>` once they have an outcome. For a claim with a context or an explicit confirmation, recall also returns last_verified_at, last_confirmed_at, the latest confirmation and evidence_since_confirmation: closed matching items (same context; concerning the claim's subject or its own concerns topics) in the claim's scope or below since the later of its last confirmation and valid_from. Review tools for a review step only: {}; refute with contradict. ",
-                "Tool groups: event workflow {}. Full tool index: {}.",
+                "Tool groups: event workflow {}. Full tool index: {}. ",
                 "Progressively load event-to-claim tools only when converting raw events into reviewed durable claims: {}. ",
                 "Use advanced claim-maintenance tools sparingly for contradiction handling, invalidation, consolidation, and retrieval tuning: {}."
             ),
