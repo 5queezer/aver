@@ -2,12 +2,8 @@
 
 pub mod bridge;
 pub mod lang;
-pub mod prose;
 
-use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
 
 use tree_sitter::{Language, Node, Parser};
 
@@ -24,150 +20,11 @@ pub use lang::ruby::*;
 pub use lang::rust::*;
 pub use lang::swift::*;
 pub use lang::typescript::*;
-pub use prose::parse_prose_facts;
-
-const DEFAULT_PLUGIN_TIMEOUT: Duration = Duration::from_secs(30);
-const PLUGIN_POLL_INTERVAL: Duration = Duration::from_millis(5);
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractedFact {
     pub subject: String,
     pub predicate: String,
     pub object: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PluginRequest {
-    pub id: u64,
-    pub method: String,
-    pub text: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct JsonRpcPluginResponse {
-    id: Option<u64>,
-    result: Option<ProseExtractionResult>,
-    error: Option<JsonRpcPluginError>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct JsonRpcPluginError {
-    code: i64,
-    message: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct ProseExtractionResult {
-    facts: Vec<ExtractedFact>,
-}
-
-#[derive(Debug, Clone)]
-pub struct JsonRpcPluginRunner {
-    program: String,
-    args: Vec<String>,
-    timeout: Duration,
-}
-
-impl JsonRpcPluginRunner {
-    pub fn new(program: impl Into<String>) -> Self {
-        Self {
-            program: program.into(),
-            args: Vec::new(),
-            timeout: DEFAULT_PLUGIN_TIMEOUT,
-        }
-    }
-
-    pub fn arg(mut self, arg: impl Into<String>) -> Self {
-        self.args.push(arg.into());
-        self
-    }
-
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-
-    /// Sends one newline-delimited JSON-RPC request and waits for a single
-    /// JSON-RPC response on stdout. The request stream is closed after the
-    /// write so plugins may read stdin to EOF.
-    pub fn extract(&self, request: PluginRequest) -> Result<Vec<ExtractedFact>, Error> {
-        let request_id = request.id;
-        let request = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": request.id,
-            "method": request.method,
-            "params": { "text": request.text },
-        });
-
-        let mut child = Command::new(&self.program)
-            .args(&self.args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()?;
-
-        let mut stdin = child.stdin.take().ok_or(Error::PluginMissingStdin)?;
-        writeln!(stdin, "{request}")?;
-        drop(stdin);
-
-        let mut stdout = child.stdout.take().ok_or(Error::PluginMissingStdout)?;
-        let reader = std::thread::spawn(move || {
-            let mut buffer = Vec::new();
-            stdout.read_to_end(&mut buffer).map(|_| buffer)
-        });
-
-        let deadline = Instant::now() + self.timeout;
-        let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break status;
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(Error::PluginTimeout(self.timeout));
-            }
-            std::thread::sleep(PLUGIN_POLL_INTERVAL);
-        };
-
-        let stdout = reader
-            .join()
-            .map_err(|_| Error::Io(std::io::Error::other("plugin stdout reader panicked")))??;
-
-        if !status.success() {
-            return Err(Error::PluginFailed(status.code()));
-        }
-
-        let response: JsonRpcPluginResponse = serde_json::from_slice(&stdout)?;
-        if let Some(error) = response.error {
-            return Err(Error::PluginError {
-                code: error.code,
-                message: error.message,
-            });
-        }
-        if response.id != Some(request_id) {
-            return Err(Error::PluginIdMismatch {
-                expected: request_id,
-                actual: response.id,
-            });
-        }
-        let result = response.result.ok_or(Error::PluginMissingResult)?;
-        validate_facts(&result.facts)?;
-        Ok(result.facts)
-    }
-}
-
-pub(crate) fn validate_facts(facts: &[ExtractedFact]) -> Result<(), Error> {
-    for fact in facts {
-        if fact.subject.trim().is_empty() {
-            return Err(Error::InvalidFact("subject"));
-        }
-        if fact.predicate.trim().is_empty() {
-            return Err(Error::InvalidFact("predicate"));
-        }
-        if fact.object.trim().is_empty() {
-            return Err(Error::InvalidFact("object"));
-        }
-    }
-    Ok(())
 }
 
 /// Language names returned by [`language_for_path`], in dispatch order.
@@ -543,24 +400,6 @@ pub enum Error {
     ParseFailed,
     #[error("utf8: {0}")]
     Utf8(#[from] std::str::Utf8Error),
-    #[error("json: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("invalid extracted fact field: {0}")]
-    InvalidFact(&'static str),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
-    #[error("plugin stdin unavailable")]
-    PluginMissingStdin,
-    #[error("plugin stdout unavailable")]
-    PluginMissingStdout,
-    #[error("plugin exited unsuccessfully: {0:?}")]
-    PluginFailed(Option<i32>),
-    #[error("plugin timed out after {0:?}")]
-    PluginTimeout(Duration),
-    #[error("plugin returned JSON-RPC error {code}: {message}")]
-    PluginError { code: i64, message: String },
-    #[error("plugin response id {actual:?} does not match request id {expected}")]
-    PluginIdMismatch { expected: u64, actual: Option<u64> },
-    #[error("plugin response contains neither result nor error")]
-    PluginMissingResult,
 }

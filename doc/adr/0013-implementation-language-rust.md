@@ -55,7 +55,9 @@ Go would win if the project were "HTTP daemon with pure-Go SQLite." It isn't. Tr
 
 ### One permitted boundary
 
-A non-Rust *plugin* process is acceptable for experimental prose extraction or specialized document parsing — but it never writes to memory directly. The Rust core validates and appends. Plugin protocol: stdin/stdout JSON-RPC, no shared filesystem state.
+Status note: the experimental JSON-RPC prose-plugin runner and structured-output
+parser were removed in the README-proof reduction; no shipped caller used them.
+The native Tree-sitter extraction path is unchanged.
 
 ### Build profile
 
