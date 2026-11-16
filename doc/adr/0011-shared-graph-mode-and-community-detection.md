@@ -4,7 +4,7 @@ Date: 2026-05-07
 
 ## Status
 
-Accepted
+Superseded (2026-11-16): community detection and the unused storage-adapter seam were removed; local SQLite remains the only storage mode.
 
 ## Context
 

@@ -282,22 +282,6 @@ pub struct ExpandParams {
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-pub struct CommunitiesParams {
-    /// ADR-0021 scope filter applied to community members.
-    #[serde(default)]
-    pub scope: Option<String>,
-    /// ADR-0021 walk mode.
-    #[serde(default)]
-    pub scope_walk: Option<String>,
-    /// Drop communities with fewer in-scope members. Defaults to 2.
-    #[serde(default)]
-    pub min_members: Option<usize>,
-    /// Maximum communities to return, highest score first. Defaults to 20, at most 100.
-    #[serde(default)]
-    pub top_k: Option<usize>,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct AddTripleParams {
     /// EXTRACTED = explicitly stated in source; INFERRED = your judgment (default for LLM, capped 0.75); AMBIGUOUS = conflicting evidence; USER_ASSERTED = explicit human assertion.
     #[serde(default)]
@@ -705,22 +689,6 @@ pub struct RecallView {
 pub struct GraphView {
     pub nodes: Vec<String>,
     pub edges: Vec<ClaimView>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct CommunityView {
-    pub id: String,
-    pub score: f64,
-    pub members: Vec<String>,
-    pub bridges: Vec<String>,
-    pub size: usize,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct CommunitiesView {
-    pub communities: Vec<CommunityView>,
-    pub scope: String,
-    pub scope_walk: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -1418,38 +1386,6 @@ impl AverTools {
         Ok(GraphView {
             nodes: graph.nodes,
             edges: graph.edges.into_iter().map(ClaimView::from).collect(),
-        })
-    }
-
-    /// Communities from core's `detect_communities_with_scope`, which groups
-    /// and scores over the claims admitted by `scope`/`walk` (`Any` is core's
-    /// unscoped case). `min_members`, `top_k` and the ranking stay here.
-    pub fn communities(&self, params: CommunitiesParams) -> anyhow::Result<CommunitiesView> {
-        let top_k = validate_top_k(params.top_k.unwrap_or(20))?;
-        let min_members = params.min_members.unwrap_or(2);
-        let scope = params.scope.as_deref().unwrap_or("global");
-        let walk = parse_scope_walk(params.scope_walk.as_deref(), &params.scope)?;
-        let mut communities: Vec<CommunityView> = self
-            .store
-            .detect_communities_with_scope(scope, walk)?
-            .into_iter()
-            .filter(|community| {
-                !community.members.is_empty() && community.members.len() >= min_members
-            })
-            .map(|community| CommunityView {
-                id: community.id,
-                score: community.score,
-                size: community.members.len(),
-                members: community.members,
-                bridges: community.bridge_nodes,
-            })
-            .collect();
-        communities.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.id.cmp(&b.id)));
-        communities.truncate(top_k);
-        Ok(CommunitiesView {
-            communities,
-            scope: scope.to_string(),
-            scope_walk: walk.as_str().to_string(),
         })
     }
 

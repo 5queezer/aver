@@ -214,9 +214,6 @@ enum Command {
         scope_walk: Option<String>,
     },
 
-    /// Detect deterministic weighted graph communities.
-    Communities,
-
     /// Append a structured triple with an explicit confidence.
     AddTriple {
         subject: String,
@@ -668,18 +665,6 @@ fn main() -> anyhow::Result<()> {
                 println!(
                     "  [{}] {} {} {}",
                     edge.scope, edge.subject, edge.predicate, edge.object
-                );
-            }
-        }
-
-        Command::Communities => {
-            for community in store.detect_communities()? {
-                println!(
-                    "{} score={:.3} members={} bridges={}",
-                    community.id,
-                    community.score,
-                    community.members.join(","),
-                    community.bridge_nodes.join(",")
                 );
             }
         }

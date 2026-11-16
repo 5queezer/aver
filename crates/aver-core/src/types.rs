@@ -561,23 +561,6 @@ impl ExtractorFact {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Community {
-    pub id: String,
-    pub members: Vec<String>,
-    /// Deterministic cohesion score for the community, currently the average
-    /// internal relationship weight after confidence/provenance weighting.
-    pub score: f64,
-    /// Member nodes that also touch relationships outside the community.
-    pub bridge_nodes: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StorageMode {
-    Local,
-    Shared,
-}
-
 /// ADR-0023 §"recall and expand": how a predicate filter expands through the
 /// `predicate_closure` (ADR-0010).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
