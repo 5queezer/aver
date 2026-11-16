@@ -1,4 +1,4 @@
-use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite, RecallQuery};
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite, RecallQuery};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -6,8 +6,7 @@ use aver_core::retrieval::{DEFAULT_RECENCY_TAU_SECS, HybridWeights};
 use aver_core::vector::{DEFAULT_OPENAI_EMBEDDING_MODEL, EmbeddingClient, VectorIndexConfig};
 use aver_core::{
     AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, Error,
-    Observation, ObservationCoverage, ObservationRecall, ObservationRelevance, PredicateWalk,
-    RecallFilters, ReverifyWrite, ScopeWalk, Store,
+    PredicateWalk, RecallFilters, ReverifyWrite, ScopeWalk, Store,
 };
 use aver_extractor::LANGUAGES;
 use aver_extractor::bridge::extract_tree;
@@ -446,61 +445,6 @@ pub struct RejectCandidateClaimParams {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum ObservationRelevanceParam {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-impl From<ObservationRelevanceParam> for ObservationRelevance {
-    fn from(value: ObservationRelevanceParam) -> Self {
-        match value {
-            ObservationRelevanceParam::Low => Self::Low,
-            ObservationRelevanceParam::Medium => Self::Medium,
-            ObservationRelevanceParam::High => Self::High,
-            ObservationRelevanceParam::Critical => Self::Critical,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-pub struct RecordObservationParams {
-    /// Session identifier for the observation.
-    pub session_id: String,
-    /// Observation content.
-    pub content: String,
-    /// Observation relevance tier.
-    pub relevance: ObservationRelevanceParam,
-    /// Source event identifiers backing the observation.
-    pub source_event_ids: Vec<i64>,
-    /// Derivation note or prompt fragment.
-    pub derivation: String,
-    /// ADR-0021 scope filter.
-    #[serde(default)]
-    pub scope: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-pub struct ObservationCoverageParams {
-    /// Session identifier to inspect.
-    pub session_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-pub struct RecallObservationParams {
-    /// Observation identifier.
-    pub observation_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-pub struct AssembleCompactionSummaryParams {
-    /// Session identifier to summarize.
-    pub session_id: String,
-}
-
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct AddVectorChunkParams {
     /// Claim identifier to attach the vector chunk to.
@@ -633,41 +577,6 @@ pub struct CandidateClaimView {
     pub promoted_claim_id: Option<i64>,
     pub rejection_reason: Option<String>,
     pub scope: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct ObservationView {
-    pub id: String,
-    pub session_id: String,
-    pub content: String,
-    pub relevance: String,
-    pub source_event_ids: Vec<i64>,
-    pub agent_id: String,
-    pub agent_kind: String,
-    pub derivation: String,
-    pub ts: i64,
-    pub scope: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct ObservationRecallView {
-    pub observation: ObservationView,
-    pub events: Vec<EventView>,
-    pub audit_status: Option<String>,
-    pub prune_marker_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct ObservationCoverageView {
-    pub event_ids: Vec<i64>,
-    pub covered_event_ids: Vec<i64>,
-    pub uncovered_event_ids: Vec<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct CompactionSummaryView {
-    pub session_id: String,
-    pub summary: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -822,44 +731,6 @@ impl From<CandidateClaim> for CandidateClaimView {
             promoted_claim_id: candidate.promoted_claim_id,
             rejection_reason: candidate.rejection_reason,
             scope: candidate.scope,
-        }
-    }
-}
-
-impl From<Observation> for ObservationView {
-    fn from(observation: Observation) -> Self {
-        Self {
-            id: observation.id,
-            session_id: observation.session_id,
-            content: observation.content,
-            relevance: observation.relevance.as_str().to_string(),
-            source_event_ids: observation.source_event_ids,
-            agent_id: observation.agent_id,
-            agent_kind: observation.agent_kind.as_str().to_string(),
-            derivation: observation.derivation,
-            ts: observation.ts,
-            scope: observation.scope,
-        }
-    }
-}
-
-impl From<ObservationRecall> for ObservationRecallView {
-    fn from(recall: ObservationRecall) -> Self {
-        Self {
-            observation: recall.observation.into(),
-            events: recall.events.into_iter().map(EventView::from).collect(),
-            audit_status: recall.audit_status,
-            prune_marker_id: recall.prune_marker_id,
-        }
-    }
-}
-
-impl From<ObservationCoverage> for ObservationCoverageView {
-    fn from(coverage: ObservationCoverage) -> Self {
-        Self {
-            event_ids: coverage.event_ids,
-            covered_event_ids: coverage.covered_event_ids,
-            uncovered_event_ids: coverage.uncovered_event_ids,
         }
     }
 }
@@ -1051,9 +922,7 @@ impl AverTools {
                         "unknown predicate: {name} (not in predicate_types or predicate_alias). failed to load available predicates: {vocab_err}"
                     )
                 }),
-            Error::InvalidClaimField { field }
-            | Error::InvalidEventField { field }
-            | Error::InvalidObservationField { field } => {
+            Error::InvalidClaimField { field } | Error::InvalidEventField { field } => {
                 format!("invalid {field}: must not be empty")
             }
             Error::InvalidConfidence { value } => {
@@ -1580,51 +1449,6 @@ impl AverTools {
         self.store
             .reject_candidate_claim(params.candidate_id, &params.reason)?;
         Ok(self.store.get_candidate_claim(params.candidate_id)?.into())
-    }
-
-    pub fn record_observation(
-        &self,
-        params: RecordObservationParams,
-    ) -> anyhow::Result<ObservationView> {
-        let scope = params.scope.as_deref().unwrap_or("global");
-        let id = self.store.record_observation(
-            ObservationWrite::new(
-                &params.session_id,
-                &params.content,
-                params.relevance.into(),
-                &params.source_event_ids,
-                &params.derivation,
-            )
-            .scope(scope),
-        )?;
-        Ok(self.store.get_observation(&id)?.into())
-    }
-
-    pub fn recall_observation(
-        &self,
-        params: RecallObservationParams,
-    ) -> anyhow::Result<ObservationRecallView> {
-        Ok(self
-            .store
-            .recall_observation(&params.observation_id)?
-            .into())
-    }
-
-    pub fn observation_coverage(
-        &self,
-        params: ObservationCoverageParams,
-    ) -> anyhow::Result<ObservationCoverageView> {
-        Ok(self.store.observation_coverage(&params.session_id)?.into())
-    }
-
-    pub fn assemble_compaction_summary(
-        &self,
-        params: AssembleCompactionSummaryParams,
-    ) -> anyhow::Result<CompactionSummaryView> {
-        Ok(CompactionSummaryView {
-            summary: self.store.assemble_compaction_summary(&params.session_id)?,
-            session_id: params.session_id,
-        })
     }
 
     /// ADR-0032: a recall triple with its confirmation state, filled only for

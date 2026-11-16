@@ -8,8 +8,8 @@
 //! Read-path semantics (recall walk modes) are tested in a separate file
 //! once Task #3 lands.
 
-use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite, RecallQuery};
-use aver_core::{ObservationRelevance, Store};
+use aver_core::Store;
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite, RecallQuery};
 use rusqlite::Connection;
 
 fn open_store() -> (tempfile::TempDir, Store) {
@@ -51,38 +51,6 @@ fn episodic_event_default_scope_is_global() {
         .query_row(
             "SELECT scope FROM episodic_events WHERE id = ?",
             [event_id],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(scope, "global");
-}
-
-#[test]
-fn observation_default_scope_is_global() {
-    let (dir, store) = open_store();
-    let event_id = store
-        .record_event(EventWrite::new(
-            "session_x",
-            "user_message",
-            "hello",
-            "test",
-        ))
-        .unwrap();
-    let obs_id = store
-        .record_observation(ObservationWrite::new(
-            "session_x",
-            "test obs",
-            ObservationRelevance::Low,
-            &[event_id],
-            "test",
-        ))
-        .unwrap();
-
-    let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
-    let scope: String = conn
-        .query_row(
-            "SELECT scope FROM observations WHERE id = ?",
-            [&obs_id],
             |row| row.get(0),
         )
         .unwrap();
@@ -242,28 +210,6 @@ fn episodic_event_struct_carries_scope_field() {
     assert_eq!(
         event.scope, "global",
         "EpisodicEvent type must expose scope"
-    );
-}
-
-#[test]
-fn observation_struct_carries_scope_field() {
-    let (_dir, store) = open_store();
-    let event_id = store
-        .record_event(EventWrite::new("session_y", "user_message", "hi", "test"))
-        .unwrap();
-    let obs_id = store
-        .record_observation(ObservationWrite::new(
-            "session_y",
-            "test obs",
-            ObservationRelevance::Low,
-            &[event_id],
-            "test",
-        ))
-        .unwrap();
-    let recall = store.recall_observation(&obs_id).unwrap();
-    assert_eq!(
-        recall.observation.scope, "global",
-        "Observation type must expose scope"
     );
 }
 

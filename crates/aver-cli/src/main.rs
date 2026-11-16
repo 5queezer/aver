@@ -1,12 +1,8 @@
-use aver_core::{
-    CandidateWrite, ClaimWrite, EventWrite, ObservationWrite, RecallQuery, ReverifyWrite,
-};
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite, RecallQuery, ReverifyWrite};
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 
-use aver_core::{
-    AgentKind, ObservationRelevance, ReplayMode, ScopeWalk, Store, replay_with_mode, vacuum,
-};
+use aver_core::{AgentKind, ReplayMode, ScopeWalk, Store, replay_with_mode, vacuum};
 use aver_extractor::LANGUAGES;
 use aver_extractor::bridge::{TreeExtraction, extract_tree};
 use clap::{Parser, Subcommand};
@@ -157,47 +153,6 @@ enum Command {
         candidate_id: i64,
         #[arg(long)]
         reason: String,
-    },
-
-    /// Record a source-backed episodic observation.
-    RecordObservation {
-        #[arg(long)]
-        session_id: String,
-        #[arg(long)]
-        content: String,
-        #[arg(long)]
-        relevance: String,
-        /// Comma-separated event IDs.
-        #[arg(long)]
-        source_event_ids: String,
-        #[arg(long)]
-        derivation: String,
-        #[arg(long)]
-        scope: Option<String>,
-    },
-
-    /// Recall an observation and its supporting events by observation ID.
-    RecallObservation {
-        #[arg(long)]
-        id: String,
-    },
-
-    /// Report coverage for a session's episodic events.
-    ObservationCoverage {
-        #[arg(long)]
-        session_id: String,
-    },
-
-    /// Run a deterministic catch-up pass over uncovered session events.
-    CatchUp {
-        #[arg(long)]
-        session_id: String,
-    },
-
-    /// Assemble a compaction summary from current session observations.
-    CompactionSummary {
-        #[arg(long)]
-        session_id: String,
     },
 
     /// Expand an entity into its local claim-graph neighborhood.
@@ -552,86 +507,6 @@ fn main() -> anyhow::Result<()> {
         } => {
             store.reject_candidate_claim(candidate_id, &reason)?;
             println!("rejected");
-        }
-
-        Command::RecordObservation {
-            session_id,
-            content,
-            relevance,
-            source_event_ids,
-            derivation,
-            scope,
-        } => {
-            let relevance: ObservationRelevance = relevance.parse()?;
-            let ids: Vec<i64> = source_event_ids
-                .split(',')
-                .map(|s| s.trim().parse::<i64>())
-                .collect::<Result<_, _>>()
-                .map_err(|err| anyhow::anyhow!("invalid event id: {err}"))?;
-            let id = match scope.as_deref() {
-                None => store.record_observation(ObservationWrite::new(
-                    &session_id,
-                    &content,
-                    relevance,
-                    &ids,
-                    &derivation,
-                ))?,
-                Some(scope) => store.record_observation(
-                    ObservationWrite::new(&session_id, &content, relevance, &ids, &derivation)
-                        .scope(scope),
-                )?,
-            };
-            println!("observation_id={id}");
-        }
-
-        Command::RecallObservation { id } => {
-            let recall = store.recall_observation(&id)?;
-            println!("observation={}", recall.observation.content);
-            for event in recall.events {
-                println!("  event_id={} kind={}", event.id, event.kind);
-            }
-        }
-
-        Command::ObservationCoverage { session_id } => {
-            let coverage = store.observation_coverage(&session_id)?;
-            println!("event_ids={:?}", coverage.event_ids);
-            println!("covered_event_ids={:?}", coverage.covered_event_ids);
-            println!("uncovered_event_ids={:?}", coverage.uncovered_event_ids);
-        }
-
-        Command::CatchUp { session_id } => {
-            let coverage = store.observation_coverage(&session_id)?;
-            if coverage.uncovered_event_ids.is_empty() {
-                println!("catch_up=complete");
-            } else {
-                let events = store.list_events_for_session(&session_id)?;
-                let uncovered_events = events
-                    .into_iter()
-                    .filter(|event| coverage.uncovered_event_ids.contains(&event.id))
-                    .collect::<Vec<_>>();
-                let payloads = uncovered_events
-                    .iter()
-                    .map(|event| format!("{}:{}", event.id, event.payload))
-                    .collect::<Vec<_>>()
-                    .join(" | ");
-                let content = format!(
-                    "Catch-up observation for session {session_id}: uncovered event ids {:?}; payloads: {payloads}",
-                    coverage.uncovered_event_ids
-                );
-                let observation_id = store.record_observation(ObservationWrite::new(
-                    &session_id,
-                    &content,
-                    ObservationRelevance::Medium,
-                    &coverage.uncovered_event_ids,
-                    "cli-catch-up",
-                ))?;
-                println!("observation_id={observation_id}");
-            }
-        }
-
-        Command::CompactionSummary { session_id } => {
-            let summary = store.assemble_compaction_summary(&session_id)?;
-            print!("{summary}");
         }
 
         Command::Expand {

@@ -4,13 +4,14 @@
 //! concurrency, lenient replay, and the vector-chunk derived-projection
 //! boundary.
 
-use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite};
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite};
 use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::Path;
 
 use aver_core::{
-    AgentKind, ClaimStatus, ObservationRelevance, Provenance, ReplayMode, Store, replay,
-    replay_with_mode, vector::MockEmbeddingClient,
+    AgentKind, ClaimStatus, Provenance, ReplayMode, Store, replay, replay_with_mode,
+    vector::MockEmbeddingClient,
 };
 use rusqlite::Connection;
 
@@ -91,18 +92,26 @@ fn replay_preserves_scope_for_claims_events_observations() {
         let event_id = store
             .record_event(EventWrite::new("s1", "note", "payload", "src").scope("project/sub"))
             .unwrap();
-        let observation_id = store
-            .record_observation(
-                ObservationWrite::new(
-                    "s1",
-                    "an observation",
-                    ObservationRelevance::High,
-                    &[event_id],
-                    "manual",
-                )
-                .scope("project/sub"),
-            )
+        let observation_id = "historical-observation";
+        let observation = serde_json::json!({
+            "kind": "record_observation",
+            "ts": 1,
+            "observation_id": observation_id,
+            "session_id": "s1",
+            "content": "an observation",
+            "relevance": "high",
+            "source_event_ids": [event_id],
+            "agent_id": "local",
+            "agent_kind": "HUMAN",
+            "derivation": "historical",
+            "scope": "project/sub",
+        });
+        let mut log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.path().join("observations.jsonl"))
             .unwrap();
+        writeln!(log, "{observation}").unwrap();
         store.close().unwrap();
         (claim_id, event_id, observation_id)
     };
@@ -117,10 +126,15 @@ fn replay_preserves_scope_for_claims_events_observations() {
     let store = Store::open(dir.path()).unwrap();
     assert_eq!(store.get_claim(claim_id).unwrap().scope, "project/sub");
     assert_eq!(store.get_event(event_id).unwrap().scope, "project/sub");
-    assert_eq!(
-        store.get_observation(&observation_id).unwrap().scope,
-        "project/sub"
-    );
+    let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
+    let scope: String = conn
+        .query_row(
+            "SELECT scope FROM observations WHERE id = ?1",
+            [observation_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(scope, "project/sub");
 }
 
 #[test]

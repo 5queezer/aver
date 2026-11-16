@@ -108,7 +108,6 @@ pub struct Store {
     pub(crate) memory_dir: PathBuf,
     pub(crate) log_path: PathBuf,
     pub(crate) event_log_path: PathBuf,
-    pub(crate) observation_log_path: PathBuf,
     /// Writer-minted id generator shared by every logged table (ADR-0026).
     pub(crate) ids: IdGen,
 }
@@ -182,7 +181,6 @@ impl Store {
         let db_path = memory_dir.join("db.sqlite");
         let log_path = memory_dir.join("log.jsonl");
         let event_log_path = memory_dir.join("events.jsonl");
-        let observation_log_path = memory_dir.join("observations.jsonl");
 
         // ADR-0019 §5: rotation only at session boundaries — check at open.
         // Also recover any half-rotated `{series}.{N}.jsonl` left by a prior
@@ -222,7 +220,6 @@ impl Store {
             memory_dir,
             log_path,
             event_log_path,
-            observation_log_path,
             ids,
         })
     }

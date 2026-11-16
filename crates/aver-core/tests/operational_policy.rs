@@ -1,10 +1,10 @@
 //! ADR-0019 — operational policy: WAL checkpoint, vacuum, replay,
 //! log rotation, schema version.
 
-use aver_core::{ClaimWrite, EventWrite, ObservationWrite};
+use aver_core::{ClaimWrite, EventWrite};
 use std::io::Write;
 
-use aver_core::{AgentKind, LOG_ROTATE_MAX_LINES, ObservationRelevance, Store, replay, vacuum};
+use aver_core::{AgentKind, LOG_ROTATE_MAX_LINES, Store, replay, vacuum};
 use rusqlite::Connection;
 
 #[test]
@@ -266,14 +266,35 @@ fn replay_rebuilds_db_from_logs() {
                     .agent("local", AgentKind::Human),
             )
             .unwrap();
-        store
-            .record_observation(ObservationWrite::new(
-                "session1",
-                "an observation",
-                ObservationRelevance::Medium,
-                &[event_id],
-                "manual",
-            ))
+        let observation = serde_json::json!({
+            "kind": "record_observation",
+            "ts": 1,
+            "observation_id": "historical-observation",
+            "session_id": "session1",
+            "content": "an observation",
+            "relevance": "medium",
+            "source_event_ids": [event_id],
+            "agent_id": "local",
+            "agent_kind": "HUMAN",
+            "derivation": "historical",
+            "scope": "global",
+        });
+        let mut log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.path().join("observations.jsonl"))
+            .unwrap();
+        writeln!(log, "{observation}").unwrap();
+        Connection::open(dir.path().join("db.sqlite"))
+            .unwrap()
+            .execute(
+                "INSERT INTO observations
+                 (id, session_id, content, relevance, source_event_ids, agent_id, agent_kind,
+                  derivation, ts, scope)
+                 VALUES ('historical-observation', 'session1', 'an observation', 'medium',
+                         ?1, 'local', 'HUMAN', 'historical', 1, 'global')",
+                [format!("[{event_id}]")],
+            )
             .unwrap();
         store.close().unwrap();
         alpha_id
@@ -530,8 +551,15 @@ fn replay_walks_rotated_event_and_observation_logs() {
 
     let store = Store::open(dir.path()).unwrap();
     assert_eq!(store.list_events_for_session("s1").unwrap().len(), 1);
-    let observation = store.get_observation("ob1").unwrap();
-    assert_eq!(observation.content, "note");
+    let content: String = Connection::open(dir.path().join("db.sqlite"))
+        .unwrap()
+        .query_row(
+            "SELECT content FROM observations WHERE id = 'ob1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(content, "note");
 }
 
 #[test]

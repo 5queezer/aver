@@ -32,8 +32,6 @@ pub enum Error {
     InvalidClaimField { field: &'static str },
     #[error("invalid event {field}: must not be empty")]
     InvalidEventField { field: &'static str },
-    #[error("invalid observation {field}: must not be empty")]
-    InvalidObservationField { field: &'static str },
     #[error("invalid recall query: must not be empty")]
     InvalidRecallQuery,
     #[error("invalid top_k: must be greater than zero")]
@@ -70,10 +68,6 @@ pub enum Error {
     MissingEvent { event_id: i64 },
     #[error("missing candidate claim: candidate {candidate_id} does not exist")]
     MissingCandidate { candidate_id: i64 },
-    #[error("missing observation: observation {observation_id} does not exist")]
-    MissingObservation { observation_id: String },
-    #[error("observation id collision: {observation_id} already exists with different content")]
-    ObservationIdCollision { observation_id: String },
     #[error("missing entity type: {name} (ontology bootstrap incomplete)")]
     MissingEntityType { name: &'static str },
     #[error("invalid candidate claim status for candidate {candidate_id}: {status}")]

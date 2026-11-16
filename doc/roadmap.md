@@ -60,7 +60,7 @@ roadmap is safe until it lands.
    `replay_with_mode`.
 4. Collapse the combinatorial write API behind the existing `ClaimWrite`
    struct. Six `add_claim_*` variants become one; same for `record_event`,
-   `record_observation`, `propose_candidate_claim`, `recall_text`.
+   `record_event`, `propose_candidate_claim`, `recall_text`.
 5. Pick one validation layer. Keep Rust validation in core; drop the
    per-field triggers and the duplicate checks in `tools.rs`.
 6. Drop the per-agent duplicate log (`agents/<id>/log.jsonl`) or make it a

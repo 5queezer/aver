@@ -4,9 +4,8 @@
 //! preserving today's behavior for clients that haven't been updated.
 
 use aver_server::tools::{
-    AddTripleParams, AddVectorChunkParams, AverTools, ExpandParams, ObservationRelevanceParam,
-    ProposeCandidateClaimParams, RecallParams, RecordEventParams, RecordObservationParams,
-    RememberClaimParams,
+    AddTripleParams, AddVectorChunkParams, AverTools, ExpandParams, ProposeCandidateClaimParams,
+    RecallParams, RecordEventParams, RememberClaimParams,
 };
 
 #[test]
@@ -102,34 +101,6 @@ fn record_event_with_scope_is_persisted() {
             source: None,
             agent_id: None,
             agent_kind: None,
-            scope: Some("proj/aver".to_string()),
-        })
-        .unwrap();
-    assert_eq!(view.scope, "proj/aver");
-}
-
-#[test]
-fn record_observation_with_scope_is_persisted() {
-    let dir = tempfile::tempdir().unwrap();
-    let tools = AverTools::open(dir.path()).unwrap();
-    let event_view = tools
-        .record_event(RecordEventParams {
-            session_id: "s1".to_string(),
-            kind: "user_message".to_string(),
-            payload: "hi".to_string(),
-            source: None,
-            agent_id: None,
-            agent_kind: None,
-            scope: Some("proj/aver".to_string()),
-        })
-        .unwrap();
-    let view = tools
-        .record_observation(RecordObservationParams {
-            session_id: "s1".to_string(),
-            content: "obs body".to_string(),
-            relevance: ObservationRelevanceParam::Low,
-            source_event_ids: vec![event_view.id],
-            derivation: "test".to_string(),
             scope: Some("proj/aver".to_string()),
         })
         .unwrap();

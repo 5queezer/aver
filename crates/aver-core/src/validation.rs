@@ -82,14 +82,6 @@ pub(crate) fn validate_event_field(field: &'static str, value: &str) -> Result<(
     }
 }
 
-pub(crate) fn validate_observation_field(field: &'static str, value: &str) -> Result<(), Error> {
-    if value.trim().is_empty() {
-        Err(Error::InvalidObservationField { field })
-    } else {
-        Ok(())
-    }
-}
-
 pub(crate) fn validate_agent_id(agent_id: &str) -> Result<(), Error> {
     if agent_id.is_empty()
         || !agent_id

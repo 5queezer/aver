@@ -4,7 +4,9 @@ Date: 2026-05-08
 
 ## Status
 
-Accepted
+Superseded by the README-proof reduction: the observation/compaction write and
+read surfaces are removed. Historical observation and prune records remain
+parseable and replayable; this ADR describes that retained history.
 
 ## Context
 

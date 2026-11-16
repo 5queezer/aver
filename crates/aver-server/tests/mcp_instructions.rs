@@ -11,11 +11,11 @@ fn mcp_instructions_are_a_progressive_discovery_card() {
     let instructions = service.get_info().instructions.unwrap();
 
     assert!(instructions.contains(
-        "Aver exposes 21 MCP tools, but most sessions should start with the default active set."
+        "Aver exposes 17 MCP tools, but most sessions should start with the default active set."
     ));
     assert!(instructions.contains("Review tools for a review step only: reverify_claim;"));
     assert!(instructions.contains(
-        "Default active set: recall, remember_claim, record_event, record_observation, assemble_compaction_summary."
+        "Default active set: recall, remember_claim, record_event, add_triple, retire_claim."
     ));
     assert!(instructions.contains(
         "Progressively load event-to-claim tools only when converting raw events into reviewed durable claims: should_extract_memories, propose_candidate_claim, list_candidate_claims, promote_candidate_claim, reject_candidate_claim."
@@ -42,9 +42,6 @@ fn mcp_instructions_are_a_progressive_discovery_card() {
         "Progressively load graph navigation tools only after recall returns an entity or you already know an anchor: expand; both remember_claim and add_triple support explicit provenance/confidence, object_kind, event_id and strict_atomic."
     ));
     assert!(instructions.contains("Graph navigation tools available: expand, add_triple."));
-    assert!(instructions.contains(
-        "Progressively load observation audit tools only for handoff, compaction, or provenance checks: recall_observation, observation_coverage."
-    ));
     assert!(instructions.contains(
         "Keep maintenance tools hidden until there is an explicit repair need: contradict, retire_claim, consolidate, add_vector_chunk."
     ));

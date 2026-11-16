@@ -374,31 +374,6 @@ async fn read_only_scope_allows_recall_but_rejects_writes() {
             .contains("insufficient_scope"),
         "expected insufficient_scope error, got: {err}",
     );
-
-    // record_observation: out of scope (observations:write).
-    let resp = call_mcp_tool(
-        &app,
-        &token,
-        "record_observation",
-        serde_json::json!({
-            "session_id": "s",
-            "content": "c",
-            "relevance": "low",
-            "source_event_ids": [],
-            "derivation": "d",
-        }),
-    )
-    .await;
-    let err = resp
-        .get("error")
-        .expect("scope-rejected call returns error");
-    assert!(
-        err["message"]
-            .as_str()
-            .unwrap()
-            .contains("insufficient_scope"),
-        "expected insufficient_scope error, got: {err}",
-    );
 }
 
 #[tokio::test]

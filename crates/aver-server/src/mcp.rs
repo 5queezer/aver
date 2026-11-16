@@ -14,12 +14,10 @@ use crate::http::{AuthenticatedClient, GrantedScopes};
 use crate::scope_resolution::ResolvedScope;
 use crate::scopes::{Scope, ToolScope};
 use crate::tools::{
-    AddTripleParams, AddVectorChunkParams, AssembleCompactionSummaryParams, AverTools,
-    ConsolidateParams, ContradictParams, ExpandParams, ExtractParams as CoreExtractParams,
-    GetEventParams, ListCandidateClaimsParams, ObservationCoverageParams,
-    PromoteCandidateClaimParams, ProposeCandidateClaimParams, RecallObservationParams,
-    RecallParams as CoreRecallParams, RecordEventParams, RecordObservationParams,
-    RejectCandidateClaimParams, RetireClaimParams, ReverifyClaimParams,
+    AddTripleParams, AddVectorChunkParams, AverTools, ConsolidateParams, ContradictParams,
+    ExpandParams, ExtractParams as CoreExtractParams, GetEventParams, ListCandidateClaimsParams,
+    PromoteCandidateClaimParams, ProposeCandidateClaimParams, RecallParams as CoreRecallParams,
+    RecordEventParams, RejectCandidateClaimParams, RetireClaimParams, ReverifyClaimParams,
     ShouldExtractMemoriesParams,
 };
 
@@ -201,10 +199,6 @@ impl AverMcpService {
         Self::LIST_CANDIDATE_CLAIMS,
         Self::PROMOTE_CANDIDATE_CLAIM,
         Self::REJECT_CANDIDATE_CLAIM,
-        Self::RECALL_OBSERVATION,
-        Self::OBSERVATION_COVERAGE,
-        Self::ASSEMBLE_COMPACTION_SUMMARY,
-        Self::RECORD_OBSERVATION,
         Self::RETIRE_CLAIM,
         Self::REVERIFY_CLAIM,
         Self::EXTRACT,
@@ -431,73 +425,6 @@ impl AverMcpService {
         json_tool_result(&tools, result, "reject_candidate_claim")
     }
 
-    const RECORD_OBSERVATION: ToolScope =
-        ToolScope::new("record_observation", Scope::ObservationsWrite);
-    #[tool(
-        description = "Record a source-backed session observation for continuity, handoff, or compaction. Use source event ids for auditability."
-    )]
-    async fn record_observation(
-        &self,
-        Parameters(mut params): Parameters<RecordObservationParams>,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, self.local.as_ref(), Self::RECORD_OBSERVATION)?;
-        if params.scope.is_none() {
-            params.scope = Some(request_scope(&ctx, self.local.as_ref()).scope);
-        }
-        let tools = self.lock_tools()?;
-        let result = tools.record_observation(params);
-        json_tool_result(&tools, result, "record_observation")
-    }
-
-    const RECALL_OBSERVATION: ToolScope =
-        ToolScope::new("recall_observation", Scope::ObservationsRead);
-    #[tool(
-        description = "Fetch one observation plus its supporting events when you already have an observation id. Use for exact provenance, not semantic search."
-    )]
-    async fn recall_observation(
-        &self,
-        Parameters(params): Parameters<RecallObservationParams>,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, self.local.as_ref(), Self::RECALL_OBSERVATION)?;
-        let tools = self.lock_tools()?;
-        let result = tools.recall_observation(params);
-        json_tool_result(&tools, result, "recall_observation")
-    }
-
-    const OBSERVATION_COVERAGE: ToolScope =
-        ToolScope::new("observation_coverage", Scope::ObservationsRead);
-    #[tool(
-        description = "Show which session events have observation coverage and which still need summarization. Use before compaction/handoff cleanup."
-    )]
-    async fn observation_coverage(
-        &self,
-        Parameters(params): Parameters<ObservationCoverageParams>,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, self.local.as_ref(), Self::OBSERVATION_COVERAGE)?;
-        let tools = self.lock_tools()?;
-        let result = tools.observation_coverage(params);
-        json_tool_result(&tools, result, "observation_coverage")
-    }
-
-    const ASSEMBLE_COMPACTION_SUMMARY: ToolScope =
-        ToolScope::new("assemble_compaction_summary", Scope::ObservationsRead);
-    #[tool(
-        description = "Assemble a deterministic handoff/compaction summary from recorded observations. Use after source-backed observations exist."
-    )]
-    async fn assemble_compaction_summary(
-        &self,
-        Parameters(params): Parameters<AssembleCompactionSummaryParams>,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, self.local.as_ref(), Self::ASSEMBLE_COMPACTION_SUMMARY)?;
-        let tools = self.lock_tools()?;
-        let result = tools.assemble_compaction_summary(params);
-        json_tool_result(&tools, result, "assemble_compaction_summary")
-    }
-
     const ADD_VECTOR_CHUNK: ToolScope = ToolScope::new("add_vector_chunk", Scope::ClaimsWrite);
     #[tool(
         description = "Attach extra retrieval text to an existing claim for vector/hybrid recall tuning. Use sparingly when normal claim text is insufficient."
@@ -643,8 +570,8 @@ fn mcp_tool_instructions() -> String {
             "recall",
             "remember_claim",
             "record_event",
-            "record_observation",
-            "assemble_compaction_summary",
+            "add_triple",
+            "retire_claim",
         ];
         let event_tools = [
             "should_extract_memories",
@@ -653,7 +580,6 @@ fn mcp_tool_instructions() -> String {
             "promote_candidate_claim",
             "reject_candidate_claim",
         ];
-        let observation_tools = ["recall_observation", "observation_coverage"];
         let specialized_tools = ["expand", "add_triple"];
         let maintenance_tools = [
             "contradict",
@@ -667,11 +593,11 @@ fn mcp_tool_instructions() -> String {
             concat!(
                 "Aver exposes {} MCP tools, but most sessions should start with the default active set. ",
                 "Default active set: {}. ",
-                "Decision policy: recall before answering when durable memory may matter; remember_claim only for explicit stable long-term facts; record_event for useful raw history; record_observation and assemble_compaction_summary for source-backed continuity. ",
+                "Decision policy: recall before answering when durable memory may matter; remember_claim only for explicit stable long-term facts; record_event for useful raw history. ",
                 "Self-healing writes: predicates are strict, but unknown-predicate errors include fuzzy/semantic suggestions, accepted aliases, and a retry hint; retry with a suggested predicate rather than inventing new predicates or silently rewriting claims. Use `relates_to` as the safest generic fallback when no precise predicate fits. ",
                 "Scope policy: pass `scope` only for an explicit per-call override; otherwise the request's resolved scope applies. For scoped reads, use `scope_walk=ancestors` for normal project memory, `exact` for isolation, `descendants` for subtree audits, and `any` only for cross-scope search. ",
                 "Proactive memory policy: record durable user-shared preferences, project facts, and long-lived working context even without a direct remember command; only record identity details when they are necessary, user-shared, and not sensitive personal data; prefer record_event over remember_claim when durability is uncertain. Avoid storing secrets, credentials, sensitive personal data, transient chat, or facts you cannot explain with provenance. ",
-                "Default workflows: recall existing memory before answering or updating; record_event -> should_extract_memories -> propose_candidate_claim/list_candidate_claims -> promote_candidate_claim or reject_candidate_claim for event-to-claim promotion; record_observation -> recall_observation or observation_coverage -> assemble_compaction_summary for continuity and compaction. ",
+                "Default workflows: recall existing memory before answering or updating; record_event -> should_extract_memories -> propose_candidate_claim/list_candidate_claims -> promote_candidate_claim or reject_candidate_claim for event-to-claim promotion. ",
                 "Graph navigation tools available: {}. Progressively load graph navigation tools only after recall returns an entity or you already know an anchor: expand; both remember_claim and add_triple support explicit provenance/confidence, object_kind, event_id and strict_atomic. ",
                 "Keep maintenance tools hidden until there is an explicit repair need: {}. Prefer contradict for normal conflicting evidence, retire_claim only for explicit invalidation, consolidate only when you need refreshed derived state, and add_vector_chunk only for retrieval tuning. ",
                 "Structured writes: use short identifiers for entities, numeric/quoted/prose values as literals. INFERRED means your judgment (default 0.45; maximum 0.75), EXTRACTED means stated in a cited source, AMBIGUOUS means conflicting evidence. Repetition does not prove extraction. Store rationale with record_event, then write claims with its event_id in the same scope. Prose returns an atomic-triple hint; strict_atomic=true rejects it before append. Decision vocabulary: concerns/about, is/is_a, triggered_by, supersedes, has_rationale (multi); a store's ontology.json can add domain predicates with their own cardinality. Consolidate to supersede corrected single-valued facts. ",
@@ -679,9 +605,8 @@ fn mcp_tool_instructions() -> String {
                 "Source-event audit: progressively load get_event only for a known event_id (from a claim or record_event). It requires claims:read and the exact event scope, defaulting to the request scope. Recall does not expand event payloads; use get_event to read rationale on demand. ",
                 "Code extraction: extract reads a source tree on the server (operator-configured root) and writes EXTRACTED code facts; use it for project code, not for chat or user facts. ",
                 "Claim validity: remember_claim and add_triple accept `context` (an opaque entity id the claim was established under) and a `valid_from`/`valid_until` window in Unix seconds. Evidence items link with `<item> in_context <context>`, `<item> concerns <topic>` and `<item> closed_at <time>` once they have an outcome. For a claim with a context or an explicit confirmation, recall also returns last_verified_at, last_confirmed_at, the latest confirmation and evidence_since_confirmation: closed matching items (same context; concerning the claim's subject or its own concerns topics) in the claim's scope or below since the later of its last confirmation and valid_from. Review tools for a review step only: {}; refute with contradict. ",
-                "Tool groups: event workflow {}. Observation workflow {}. Full tool index: {}.",
+                "Tool groups: event workflow {}. Full tool index: {}.",
                 "Progressively load event-to-claim tools only when converting raw events into reviewed durable claims: {}. ",
-                "Progressively load observation audit tools only for handoff, compaction, or provenance checks: {}. ",
                 "Use advanced claim-maintenance tools sparingly for contradiction handling, invalidation, consolidation, and retrieval tuning: {}."
             ),
             AverMcpService::TOOLS.len(),
@@ -690,14 +615,12 @@ fn mcp_tool_instructions() -> String {
             maintenance_tools.join(", "),
             review_tools.join(", "),
             event_tools.join(", "),
-            observation_tools.join(", "),
             AverMcpService::TOOLS
                 .iter()
                 .map(|tool| tool.name)
                 .collect::<Vec<_>>()
                 .join(", "),
             event_tools.join(", "),
-            observation_tools.join(", "),
             maintenance_tools.join(", "),
         )
     }
@@ -744,10 +667,6 @@ mod tests {
             ("list_candidate_claims", Scope::CandidatesManage),
             ("promote_candidate_claim", Scope::CandidatesManage),
             ("reject_candidate_claim", Scope::CandidatesManage),
-            ("recall_observation", Scope::ObservationsRead),
-            ("observation_coverage", Scope::ObservationsRead),
-            ("assemble_compaction_summary", Scope::ObservationsRead),
-            ("record_observation", Scope::ObservationsWrite),
             ("extract", Scope::ClaimsWrite),
         ]
         .into_iter()

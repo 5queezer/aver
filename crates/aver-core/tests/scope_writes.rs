@@ -4,8 +4,8 @@
 //! provenance flow that carries scope from candidate claims through to the
 //! durable claim on promotion.
 
-use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite};
-use aver_core::{ObservationRelevance, Store};
+use aver_core::Store;
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite};
 use rusqlite::Connection;
 
 fn open_store() -> (tempfile::TempDir, Store) {
@@ -60,35 +60,6 @@ fn record_event_with_scope_persists_explicit_scope() {
         .query_row(
             "SELECT scope FROM episodic_events WHERE id = ?",
             [event_id],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(scope, "proj/aver");
-}
-
-#[test]
-fn record_observation_with_scope_persists_explicit_scope() {
-    let (dir, store) = open_store();
-    let event_id = store
-        .record_event(EventWrite::new("session_x", "user_message", "hi", "test").scope("proj/aver"))
-        .unwrap();
-    let obs_id = store
-        .record_observation(
-            ObservationWrite::new(
-                "session_x",
-                "obs body",
-                ObservationRelevance::Low,
-                &[event_id],
-                "test",
-            )
-            .scope("proj/aver"),
-        )
-        .unwrap();
-    let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
-    let scope: String = conn
-        .query_row(
-            "SELECT scope FROM observations WHERE id = ?",
-            [&obs_id],
             |row| row.get(0),
         )
         .unwrap();

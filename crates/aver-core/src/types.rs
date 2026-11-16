@@ -149,71 +149,6 @@ pub struct CandidateClaim {
     pub scope: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObservationRelevance {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-impl ObservationRelevance {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-            Self::Critical => "critical",
-        }
-    }
-}
-
-impl FromStr for ObservationRelevance {
-    type Err = Error;
-    fn from_str(s: &str) -> Result<Self, Error> {
-        match s {
-            "low" => Ok(Self::Low),
-            "medium" => Ok(Self::Medium),
-            "high" => Ok(Self::High),
-            "critical" => Ok(Self::Critical),
-            other => Err(Error::EnumParse {
-                kind: "ObservationRelevance",
-                value: other.to_string(),
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Observation {
-    pub id: String,
-    pub session_id: String,
-    pub content: String,
-    pub relevance: ObservationRelevance,
-    pub source_event_ids: Vec<i64>,
-    pub agent_id: String,
-    pub agent_kind: AgentKind,
-    pub derivation: String,
-    pub ts: i64,
-    /// ADR-0021 memory scope. Defaults to "global".
-    pub scope: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ObservationRecall {
-    pub observation: Observation,
-    pub events: Vec<EpisodicEvent>,
-    pub audit_status: Option<String>,
-    pub prune_marker_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ObservationCoverage {
-    pub event_ids: Vec<i64>,
-    pub covered_event_ids: Vec<i64>,
-    pub uncovered_event_ids: Vec<i64>,
-}
-
 #[derive(Debug, Clone)]
 pub struct GraphExpansion {
     pub nodes: Vec<String>,
@@ -386,42 +321,6 @@ impl EventWrite {
         self.agent_id = agent_id.into();
         self.agent_kind = agent_kind;
         self
-    }
-
-    pub fn scope(mut self, scope: impl Into<String>) -> Self {
-        self.scope = scope.into();
-        self
-    }
-}
-
-/// One observation write (ADR-0016). The agent attribution comes from the
-/// first source event; scope defaults to "global".
-#[derive(Debug, Clone, PartialEq)]
-pub struct ObservationWrite {
-    pub session_id: String,
-    pub content: String,
-    pub relevance: ObservationRelevance,
-    pub source_event_ids: Vec<i64>,
-    pub derivation: String,
-    pub scope: String,
-}
-
-impl ObservationWrite {
-    pub fn new(
-        session_id: impl Into<String>,
-        content: impl Into<String>,
-        relevance: ObservationRelevance,
-        source_event_ids: &[i64],
-        derivation: impl Into<String>,
-    ) -> Self {
-        Self {
-            session_id: session_id.into(),
-            content: content.into(),
-            relevance,
-            source_event_ids: source_event_ids.to_vec(),
-            derivation: derivation.into(),
-            scope: "global".to_string(),
-        }
     }
 
     pub fn scope(mut self, scope: impl Into<String>) -> Self {
@@ -653,27 +552,21 @@ pub struct ConsolidationReport {
 pub enum ExtractionTriggerReason {
     ExplicitRemember,
     EventCountThreshold,
-    ObservationTokenThreshold,
-    UncoveredCoverageGap,
     SessionEnd,
     Correction,
     CommitCompleted,
-    IdleCompaction,
 }
 
 impl ExtractionTriggerReason {
-    /// Stable snake_case name. For the five event-driven reasons this is
+    /// Stable snake_case name. For the event-driven reasons this is
     /// also the episodic event `kind` that triggers them.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::ExplicitRemember => "explicit_remember",
             Self::EventCountThreshold => "event_count_threshold",
-            Self::ObservationTokenThreshold => "observation_token_threshold",
-            Self::UncoveredCoverageGap => "uncovered_coverage_gap",
             Self::SessionEnd => "session_end",
             Self::Correction => "correction",
             Self::CommitCompleted => "commit_completed",
-            Self::IdleCompaction => "idle_compaction",
         }
     }
 }
@@ -693,25 +586,16 @@ mod extraction_trigger_reason_tests {
                 ExtractionTriggerReason::EventCountThreshold,
                 "event_count_threshold",
             ),
-            (
-                ExtractionTriggerReason::ObservationTokenThreshold,
-                "observation_token_threshold",
-            ),
-            (
-                ExtractionTriggerReason::UncoveredCoverageGap,
-                "uncovered_coverage_gap",
-            ),
             (ExtractionTriggerReason::SessionEnd, "session_end"),
             (ExtractionTriggerReason::Correction, "correction"),
             (ExtractionTriggerReason::CommitCompleted, "commit_completed"),
-            (ExtractionTriggerReason::IdleCompaction, "idle_compaction"),
         ];
         let mut seen = std::collections::HashSet::new();
         for (reason, literal) in expected {
             assert_eq!(reason.as_str(), literal);
             assert!(seen.insert(reason.as_str()), "duplicate name {literal}");
         }
-        assert_eq!(seen.len(), 8);
+        assert_eq!(seen.len(), 5);
     }
 }
 

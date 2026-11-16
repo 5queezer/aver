@@ -114,7 +114,7 @@ pub(crate) enum LogRecord {
     },
     RecordObservation {
         ts: i64,
-        /// Content hash, not a minted id (see `episodic::observation_id`).
+        /// Historical content hash, not a minted id.
         observation_id: String,
         session_id: String,
         content: String,

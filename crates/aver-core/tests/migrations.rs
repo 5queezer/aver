@@ -2,7 +2,7 @@
 //! `claims` table exists. See ADR-0006 for the schema.
 
 use aver_core::Store;
-use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite};
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite};
 
 #[test]
 fn fresh_database_has_claims_table() {
@@ -1828,15 +1828,18 @@ fn observations_source_event_ids_must_be_valid_json_array() {
             "test",
         ))
         .expect("event insert should succeed");
-    let observation_id = store
-        .record_observation(ObservationWrite::new(
-            "session-1",
-            "Aver remembers schema facts.",
-            aver_core::ObservationRelevance::High,
-            &[event_id],
-            "observer",
-        ))
-        .expect("valid source_event_ids produced by Store should insert");
+    let observation_id = "historical-observation";
+    rusqlite::Connection::open(dir.path().join("db.sqlite"))
+        .unwrap()
+        .execute(
+            "INSERT INTO observations
+             (id, session_id, content, relevance, source_event_ids, agent_id, agent_kind,
+              derivation, ts, scope)
+             VALUES (?1, 'session-1', 'Aver remembers schema facts.', 'high', ?2,
+                     'observer', 'LLM', 'historical', 1, 'global')",
+            rusqlite::params![observation_id, format!("[{event_id}]")],
+        )
+        .expect("valid source_event_ids should insert");
     drop(store);
 
     let conn = rusqlite::Connection::open(dir.path().join("db.sqlite")).unwrap();

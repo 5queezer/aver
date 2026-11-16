@@ -2,13 +2,13 @@
 //! JSONL alone is row-identical to the original, and two stores merge by
 //! concatenating their logs.
 
-use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite, ReverifyWrite};
+use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ReverifyWrite};
 use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::Path;
 
 use aver_core::{
-    AgentKind, ExtractorFact, ObservationRelevance, Provenance, Store, VECTOR_INDEX_DIM, replay,
+    AgentKind, ExtractorFact, Provenance, Store, VECTOR_INDEX_DIM, replay,
     vector::MockEmbeddingClient,
 };
 use rusqlite::{Connection, types::Value};
@@ -208,7 +208,7 @@ fn populate(dir: &Path, tag: &str) {
     assert!(store.decay_inferred_confidence_at(future, 1_000.0).unwrap() >= 1);
     store.retire_claim(inferred, "stale").unwrap();
 
-    // Events, observations (enough to prune), candidates promoted/rejected.
+    // Events, historical observations (enough to prune), candidates promoted/rejected.
     let session = format!("{tag}-session");
     let mut events = Vec::new();
     for i in 0..3 {
@@ -221,23 +221,44 @@ fn populate(dir: &Path, tag: &str) {
                 .unwrap(),
         );
     }
-    let mut observation_ids = Vec::new();
+    let observation_ids: Vec<String> = events
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("{tag}-historical-observation-{i}"))
+        .collect();
+    let mut observation_log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("observations.jsonl"))
+        .unwrap();
+    let conn = Connection::open(dir.join("db.sqlite")).unwrap();
     for (i, event) in events.iter().enumerate() {
-        observation_ids.push(
-            store
-                .record_observation(
-                    ObservationWrite::new(
-                        &session,
-                        format!("observed {i}"),
-                        ObservationRelevance::Low,
-                        &[*event],
-                        "manual",
-                    )
-                    .scope("proj/aver"),
-                )
-                .unwrap(),
-        );
+        let content = format!("observed {i}");
+        let observation = serde_json::json!({
+            "kind": "record_observation",
+            "ts": 1,
+            "observation_id": observation_ids[i],
+            "session_id": session,
+            "content": content,
+            "relevance": "low",
+            "source_event_ids": [*event],
+            "agent_id": "local",
+            "agent_kind": "HUMAN",
+            "derivation": "historical",
+            "scope": "proj/aver",
+        });
+        writeln!(observation_log, "{observation}").unwrap();
+        conn.execute(
+            "INSERT INTO observations
+             (id, session_id, content, relevance, source_event_ids, agent_id, agent_kind,
+              derivation, ts, scope)
+             VALUES (?1, ?2, ?3, 'low', ?4, 'local', 'HUMAN', 'historical', 1, 'proj/aver')",
+            rusqlite::params![observation_ids[i], session, content, format!("[{event}]")],
+        )
+        .unwrap();
     }
+    drop(conn);
+    drop(observation_log);
     let prune_marker_id = format!("{tag}-historical-prune");
     let pruned_observation_ids = serde_json::to_string(&observation_ids[..2]).unwrap();
     let prune = serde_json::json!({
