@@ -370,8 +370,19 @@ async fn mcp_recall_observation_surface_returns_audit_status_when_pruned() {
         ))
         .unwrap();
 
-    let pruned = store.prune_observations(session_id, 1).unwrap();
-    assert_eq!(pruned, 1);
+    rusqlite::Connection::open(dir.path().join("memory/db.sqlite"))
+        .unwrap()
+        .execute(
+            "INSERT INTO observation_prune_markers
+             (id, session_id, pruned_observation_ids, ts) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                "historical-prune",
+                session_id,
+                serde_json::to_string(&[&low_id]).unwrap(),
+                1
+            ],
+        )
+        .unwrap();
 
     let resp = call_mcp_tool(
         &app,

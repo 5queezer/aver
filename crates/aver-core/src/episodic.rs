@@ -422,45 +422,6 @@ impl Store {
         Ok(summary)
     }
 
-    pub fn prune_observations(&self, session_id: &str, keep: usize) -> Result<usize, Error> {
-        validate_event_field("session_id", session_id)?;
-        let mut observations = self.list_observations_for_session(session_id)?;
-        if observations.len() <= keep {
-            return Ok(0);
-        }
-        if !self
-            .observation_coverage(session_id)?
-            .uncovered_event_ids
-            .is_empty()
-        {
-            return Ok(0);
-        }
-        observations.sort_by_key(|observation| {
-            (
-                observation.relevance.rank(),
-                observation.ts,
-                observation.id.clone(),
-            )
-        });
-        let drop_count = observations.len() - keep;
-        let pruned_observation_ids: Vec<String> = observations
-            .iter()
-            .take(drop_count)
-            .map(|observation| observation.id.clone())
-            .collect();
-        let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        let marker_id = observation_prune_marker_id(session_id, &pruned_observation_ids, now);
-        let record = LogRecord::PruneObservations {
-            ts: now,
-            prune_marker_id: marker_id,
-            session_id: session_id.to_string(),
-            pruned_observation_ids,
-        };
-        append_jsonl(&self.observation_log_path, &record)?;
-        apply(&self.conn, &record)?;
-        Ok(drop_count)
-    }
-
     pub fn should_extract_memories(
         &self,
         session_id: &str,
@@ -580,32 +541,4 @@ pub(crate) fn observation_id(session_id: &str, content: &str, source_event_ids: 
     // Full 64-bit digest: truncating to 48 bits made collisions (which
     // INSERT OR REPLACE would silently overwrite with) meaningfully likely.
     format!("{hash:016x}")
-}
-
-fn observation_prune_marker_id(
-    session_id: &str,
-    pruned_observation_ids: &[String],
-    ts: i64,
-) -> String {
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-    let mut hash = FNV_OFFSET;
-    for byte in session_id
-        .as_bytes()
-        .iter()
-        .chain([0xfd].iter())
-        .chain(ts.to_le_bytes().iter())
-        .chain([0xfc].iter())
-        .chain(
-            pruned_observation_ids
-                .iter()
-                .flat_map(|id| id.as_bytes().iter().copied())
-                .collect::<Vec<_>>()
-                .iter(),
-        )
-    {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    format!("{hash:016x}")[..12].to_string()
 }

@@ -166,15 +166,6 @@ impl ObservationRelevance {
             Self::Critical => "critical",
         }
     }
-
-    pub(crate) fn rank(self) -> u8 {
-        match self {
-            Self::Low => 0,
-            Self::Medium => 1,
-            Self::High => 2,
-            Self::Critical => 3,
-        }
-    }
 }
 
 impl FromStr for ObservationRelevance {

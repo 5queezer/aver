@@ -4,6 +4,7 @@
 
 use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite, ReverifyWrite};
 use std::collections::BTreeMap;
+use std::io::Write as _;
 use std::path::Path;
 
 use aver_core::{
@@ -220,21 +221,45 @@ fn populate(dir: &Path, tag: &str) {
                 .unwrap(),
         );
     }
+    let mut observation_ids = Vec::new();
     for (i, event) in events.iter().enumerate() {
-        store
-            .record_observation(
-                ObservationWrite::new(
-                    &session,
-                    format!("observed {i}"),
-                    ObservationRelevance::Low,
-                    &[*event],
-                    "manual",
+        observation_ids.push(
+            store
+                .record_observation(
+                    ObservationWrite::new(
+                        &session,
+                        format!("observed {i}"),
+                        ObservationRelevance::Low,
+                        &[*event],
+                        "manual",
+                    )
+                    .scope("proj/aver"),
                 )
-                .scope("proj/aver"),
-            )
-            .unwrap();
+                .unwrap(),
+        );
     }
-    assert_eq!(store.prune_observations(&session, 1).unwrap(), 2);
+    let prune_marker_id = format!("{tag}-historical-prune");
+    let pruned_observation_ids = serde_json::to_string(&observation_ids[..2]).unwrap();
+    let prune = serde_json::json!({
+        "kind": "prune_observations",
+        "ts": 1,
+        "prune_marker_id": prune_marker_id,
+        "session_id": session,
+        "pruned_observation_ids": &observation_ids[..2],
+    });
+    let mut log = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("observations.jsonl"))
+        .unwrap();
+    writeln!(log, "{prune}").unwrap();
+    Connection::open(dir.join("db.sqlite"))
+        .unwrap()
+        .execute(
+            "INSERT INTO observation_prune_markers
+             (id, session_id, pruned_observation_ids, ts) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![prune_marker_id, session, pruned_observation_ids, 1],
+        )
+        .unwrap();
     let promoted = store
         .propose_candidate_claim(
             CandidateWrite::new(events[0], "alpha", "depends_on", "beta").scope("proj/aver"),

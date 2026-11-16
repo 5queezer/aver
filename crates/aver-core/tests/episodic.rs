@@ -1,6 +1,22 @@
 use aver_core::{AgentKind, ObservationRelevance, Store};
 use aver_core::{CandidateWrite, EventWrite, ObservationWrite, RecallQuery};
 use serde_json::Value;
+use std::io::Write as _;
+
+fn append_historical_prune_marker(dir: &tempfile::TempDir, observation_id: &str) {
+    let record = serde_json::json!({
+        "kind": "prune_observations",
+        "ts": 1,
+        "prune_marker_id": "historical-prune",
+        "session_id": "session-1",
+        "pruned_observation_ids": [observation_id],
+    });
+    let mut log = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.path().join("observations.jsonl"))
+        .unwrap();
+    writeln!(log, "{record}").unwrap();
+}
 
 #[test]
 fn record_event_persists_episode_event() {
@@ -721,89 +737,7 @@ fn assemble_compaction_summary_flags_uncovered_event_gaps_as_incomplete_continui
 }
 
 #[test]
-fn automatic_pruning_blocks_when_uncovered_gaps_remain_without_or_after_failed_catchup() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path()).unwrap();
-
-    let first = store
-        .record_event(EventWrite::new(
-            "session-1",
-            "user_message",
-            "one",
-            "conversation",
-        ))
-        .unwrap();
-    let second = store
-        .record_event(EventWrite::new(
-            "session-1",
-            "user_message",
-            "two",
-            "conversation",
-        ))
-        .unwrap();
-    let third = store
-        .record_event(EventWrite::new(
-            "session-1",
-            "user_message",
-            "three",
-            "conversation",
-        ))
-        .unwrap();
-
-    let low = store
-        .record_observation(ObservationWrite::new(
-            "session-1",
-            "Observed first event only.",
-            ObservationRelevance::Low,
-            &[first],
-            "mock-observer",
-        ))
-        .unwrap();
-    let high = store
-        .record_observation(ObservationWrite::new(
-            "session-1",
-            "Observed third event only.",
-            ObservationRelevance::High,
-            &[third],
-            "mock-observer",
-        ))
-        .unwrap();
-
-    let pre_summary = store.assemble_compaction_summary("session-1").unwrap();
-    assert!(pre_summary.contains("continuity is incomplete"));
-    assert!(pre_summary.contains(&format!("{second}")));
-
-    // Automatic destructive pruning should be blocked while coverage is incomplete.
-    let pruned_without_catchup = store.prune_observations("session-1", 1).unwrap();
-    assert_eq!(pruned_without_catchup, 0);
-    let observations = store.list_observations_for_session("session-1").unwrap();
-    assert_eq!(observations.len(), 2);
-    assert!(observations.iter().any(|o| o.id == low));
-    assert!(observations.iter().any(|o| o.id == high));
-
-    let pruned_after_failed_catchup = store.prune_observations("session-1", 1).unwrap();
-    assert_eq!(pruned_after_failed_catchup, 0);
-    let observations_after_failed_catchup =
-        store.list_observations_for_session("session-1").unwrap();
-    assert_eq!(observations_after_failed_catchup.len(), 2);
-    assert!(
-        observations_after_failed_catchup
-            .iter()
-            .any(|o| o.id == low)
-    );
-    assert!(
-        observations_after_failed_catchup
-            .iter()
-            .any(|o| o.id == high)
-    );
-
-    let post_summary = store.assemble_compaction_summary("session-1").unwrap();
-    assert!(post_summary.contains("continuity is incomplete"));
-    assert!(post_summary.contains(&format!("{second}")));
-}
-
-#[test]
-fn prune_observations_removes_lowest_relevance_projection_only() {
+fn historical_prune_observations_record_still_replays() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let event = store
@@ -833,49 +767,7 @@ fn prune_observations_removes_lowest_relevance_projection_only() {
         ))
         .unwrap();
 
-    let pruned = store.prune_observations("session-1", 1).unwrap();
-    let remaining = store.list_observations_for_session("session-1").unwrap();
-
-    assert_eq!(pruned, 1);
-    assert_eq!(remaining.len(), 1);
-    assert_eq!(remaining[0].id, high);
-    assert_eq!(store.get_observation(&low).unwrap().id, low);
-    assert_eq!(store.get_event(event).unwrap().payload, "Use observations.");
-}
-
-#[test]
-fn prune_observations_appends_tombstone_marker_and_preserves_original_observation_history() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path()).unwrap();
-    let event = store
-        .record_event(EventWrite::new(
-            "session-1",
-            "user_message",
-            "Use observations.",
-            "conversation",
-        ))
-        .unwrap();
-    let low = store
-        .record_observation(ObservationWrite::new(
-            "session-1",
-            "Routine status update.",
-            ObservationRelevance::Low,
-            &[event],
-            "mock-observer",
-        ))
-        .unwrap();
-    let high = store
-        .record_observation(ObservationWrite::new(
-            "session-1",
-            "User decided observations must preserve source provenance.",
-            ObservationRelevance::High,
-            &[event],
-            "mock-observer",
-        ))
-        .unwrap();
-
-    let pruned = store.prune_observations("session-1", 1).unwrap();
-    assert_eq!(pruned, 1);
+    append_historical_prune_marker(&dir, &low);
 
     let log = std::fs::read_to_string(dir.path().join("observations.jsonl")).unwrap();
     let entries: Vec<Value> = log
@@ -906,8 +798,7 @@ fn prune_observations_appends_tombstone_marker_and_preserves_original_observatio
     assert!(recorded_ids.contains(&low));
     assert!(recorded_ids.contains(&high));
 
-    // Prune should be durable and replay should still reconstruct the same
-    // underlying historical observation records and events.
+    // Replay must reconstruct the historical observation and prune records.
     drop(store);
     std::fs::remove_file(dir.path().join("db.sqlite")).unwrap();
     let _ = std::fs::remove_file(dir.path().join("db.sqlite-wal"));
@@ -921,115 +812,16 @@ fn prune_observations_appends_tombstone_marker_and_preserves_original_observatio
     assert_eq!(visible[0].id, high);
     let rebuilt = store.get_observation(&low).unwrap();
     assert_eq!(rebuilt.id, low);
-}
-
-#[test]
-fn pruned_observations_are_hidden_from_list_and_compaction_summary() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path()).unwrap();
-    let event = store
-        .record_event(EventWrite::new(
-            "session-1",
-            "user_message",
-            "Use observations.",
-            "conversation",
-        ))
-        .unwrap();
-    let low = store
-        .record_observation(ObservationWrite::new(
-            "session-1",
-            "Routine status update.",
-            ObservationRelevance::Low,
-            &[event],
-            "mock-observer",
-        ))
-        .unwrap();
-    let high = store
-        .record_observation(ObservationWrite::new(
-            "session-1",
-            "User decided observations must preserve source provenance.",
-            ObservationRelevance::High,
-            &[event],
-            "mock-observer",
-        ))
-        .unwrap();
-
-    let pruned = store.prune_observations("session-1", 1).unwrap();
-    assert_eq!(pruned, 1);
-
-    let visible = store.list_observations_for_session("session-1").unwrap();
-    assert_eq!(visible.len(), 1);
-    assert_eq!(visible[0].id, high);
-
     let summary = store.assemble_compaction_summary("session-1").unwrap();
     assert!(summary.contains("User decided observations must preserve source provenance"));
     assert!(!summary.contains("Routine status update."));
     assert!(!summary.contains(&low));
-}
-
-#[test]
-fn recall_pruned_observation_includes_audit_marker_and_prune_status() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path()).unwrap();
-    let event = store
-        .record_event(EventWrite::new(
-            "session-1",
-            "tool_result",
-            "Build failed: E0425 cannot find function assemble_compaction_summary.",
-            "cargo test",
-        ))
-        .unwrap();
-    let low = store
-        .record_observation(ObservationWrite::new(
-            "session-1",
-            "Build failed: E0425 cannot find function assemble_compaction_summary.",
-            ObservationRelevance::Low,
-            &[event],
-            "mock-observer",
-        ))
-        .unwrap();
-    let _high = store
-        .record_observation(ObservationWrite::new(
-            "session-1",
-            "Build stayed green after the observation layer shipped.",
-            ObservationRelevance::High,
-            &[event],
-            "mock-observer",
-        ))
-        .unwrap();
-
-    let pruned = store.prune_observations("session-1", 1).unwrap();
-    assert_eq!(pruned, 1);
-
-    let log = std::fs::read_to_string(dir.path().join("observations.jsonl")).unwrap();
-    let marker_id = log
-        .lines()
-        .find_map(|line| {
-            let entry: Value = serde_json::from_str(line).unwrap();
-            if entry.get("kind") == Some(&Value::String("prune_observations".into())) {
-                entry
-                    .get("prune_marker_id")
-                    .and_then(|value| value.as_str())
-                    .map(std::string::ToString::to_string)
-            } else {
-                None
-            }
-        })
-        .expect("prune marker should be present in observations.jsonl");
-
     let recalled = store.recall_observation(&low).unwrap();
-
     assert_eq!(recalled.observation.id, low);
-    assert_eq!(recalled.events.len(), 1);
-    assert_eq!(recalled.events[0].id, event);
-    assert_eq!(
-        recalled.events[0].payload,
-        "Build failed: E0425 cannot find function assemble_compaction_summary."
-    );
     assert_eq!(recalled.audit_status.as_deref(), Some("pruned"));
     assert_eq!(
         recalled.prune_marker_id.as_deref(),
-        Some(marker_id.as_str())
+        Some("historical-prune")
     );
 }
 
