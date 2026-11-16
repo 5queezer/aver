@@ -99,6 +99,7 @@ impl ReverifyWrite {
     }
 }
 
+/// Participant shape retained only for replaying historical hyperedge records.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HyperedgeParticipantInput {
     pub role: String,
