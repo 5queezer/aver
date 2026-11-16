@@ -4,7 +4,12 @@ Date: 2026-10-24
 
 ## Status
 
-Proposed
+Superseded
+
+The optional local decision model was removed on 2026-11-16. Deterministic
+trigger policy and explicit candidate promotion/rejection remain. Historical
+`decision` metadata on candidate lifecycle log records remains parseable and
+replayable; no new records carry it.
 
 ## Context
 

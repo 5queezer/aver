@@ -24,7 +24,6 @@ fn command(memory_dir: &Path) -> Command {
         .env_remove("AVER_DEFAULT_SCOPE")
         .env_remove("AVER_EMBEDDING_URL")
         .env_remove("AVER_RECALL_RECENCY_WEIGHT")
-        .env_remove("AVER_DECISION_MODEL")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

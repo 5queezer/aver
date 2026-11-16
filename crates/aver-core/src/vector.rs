@@ -158,8 +158,7 @@ pub struct OllamaEmbeddingResponse {
 pub const DEFAULT_EMBEDDING_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// `AVER_EMBEDDING_TIMEOUT_SECS` as a duration (positive whole seconds), or
-/// [`DEFAULT_EMBEDDING_TIMEOUT`] when unset or unparsable. Same shape as the
-/// decision client's `AVER_DECISION_TIMEOUT_SECS`.
+/// [`DEFAULT_EMBEDDING_TIMEOUT`] when unset or unparsable.
 pub fn embedding_timeout_from_env() -> Duration {
     std::env::var("AVER_EMBEDDING_TIMEOUT_SECS")
         .ok()

@@ -734,6 +734,35 @@ fn rejecting_candidate_twice_with_different_reason_is_rejected_without_logging()
 }
 
 #[test]
+fn legacy_candidate_decision_metadata_still_replays() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("log.jsonl"),
+        r#"{"kind":"add_claim","ts":1,"claim_id":1,"subject":"alpha","predicate":"depends_on","object":"beta","source":"s","agent_id":"local","agent_kind":"HUMAN","confidence":0.95}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("events.jsonl"),
+        r#"{"kind":"record_event","ts":1,"event_id":1,"session_id":"s","event_kind":"note","payload":"p","source":"s","agent_id":"local","agent_kind":"HUMAN"}
+{"kind":"propose_candidate_claim","ts":2,"candidate_id":1,"event_id":1,"subject":"alpha","predicate":"depends_on","object":"beta"}
+{"kind":"promote_candidate_claim","ts":3,"candidate_id":1,"claim_id":1,"decision":{"model":"legacy-model","choice":"promote"}}
+{"kind":"propose_candidate_claim","ts":4,"candidate_id":2,"event_id":1,"subject":"gamma","predicate":"depends_on","object":"delta"}
+{"kind":"reject_candidate_claim","ts":5,"candidate_id":2,"reason":"not useful","decision":{"model":"legacy-model","choice":"reject"}}
+"#,
+    )
+    .unwrap();
+
+    replay(dir.path(), false).expect("legacy decision metadata must remain replayable");
+
+    let store = Store::open(dir.path()).unwrap();
+    let promoted = store.get_candidate_claim(1).unwrap();
+    assert_eq!(promoted.status, "PROMOTED");
+    assert_eq!(promoted.promoted_claim_id, Some(1));
+    assert_eq!(store.get_candidate_claim(2).unwrap().status, "REJECTED");
+}
+
+#[test]
 fn strict_replay_rejects_conflicting_candidate_terminal_transitions() {
     let cases = [
         (

@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::candidate_decision;
 use crate::error::Error;
 use crate::types::HyperedgeParticipantInput;
 /// Log rotation thresholds (ADR-0019 §5).
@@ -42,15 +41,6 @@ pub(crate) struct ConfidenceChange {
 pub(crate) struct Decision {
     pub(crate) model: String,
     pub(crate) choice: String,
-}
-
-impl From<candidate_decision::DecisionLogField<'_>> for Decision {
-    fn from(field: candidate_decision::DecisionLogField<'_>) -> Self {
-        Self {
-            model: field.model.to_string(),
-            choice: field.choice.to_string(),
-        }
-    }
 }
 
 /// Every record the append-only log can carry (ADR-0005, ADR-0026). The

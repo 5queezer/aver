@@ -155,7 +155,6 @@ fn run_config(target: BeamTarget, data_dir: &std::path::Path) -> BeamRunConfig {
         limit_questions: None,
         data_dir: Some(data_dir.to_path_buf()),
         judge_mode: BeamJudgeMode::Generative,
-        decision_model: String::new(),
         target,
     }
 }
@@ -187,7 +186,7 @@ fn score(
         let hit = !keyword.is_empty() && answer.contains(keyword);
         Ok(format!(r#"{{"score": {}}}"#, if hit { 1.0 } else { 0.0 }))
     };
-    let report = run_beam_dataset(dataset, config, embedder, &generate, None).unwrap();
+    let report = run_beam_dataset(dataset, config, embedder, &generate).unwrap();
     (report, answer_prompts.into_inner())
 }
 

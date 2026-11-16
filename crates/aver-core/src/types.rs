@@ -845,8 +845,6 @@ pub enum ExtractionTriggerReason {
     Correction,
     CommitCompleted,
     IdleCompaction,
-    /// ADR-0024: a decision model chose `extract` for undigested events.
-    DecisionModel,
 }
 
 impl ExtractionTriggerReason {
@@ -862,7 +860,6 @@ impl ExtractionTriggerReason {
             Self::Correction => "correction",
             Self::CommitCompleted => "commit_completed",
             Self::IdleCompaction => "idle_compaction",
-            Self::DecisionModel => "decision_model",
         }
     }
 }
@@ -894,14 +891,13 @@ mod extraction_trigger_reason_tests {
             (ExtractionTriggerReason::Correction, "correction"),
             (ExtractionTriggerReason::CommitCompleted, "commit_completed"),
             (ExtractionTriggerReason::IdleCompaction, "idle_compaction"),
-            (ExtractionTriggerReason::DecisionModel, "decision_model"),
         ];
         let mut seen = std::collections::HashSet::new();
         for (reason, literal) in expected {
             assert_eq!(reason.as_str(), literal);
             assert!(seen.insert(reason.as_str()), "duplicate name {literal}");
         }
-        assert_eq!(seen.len(), 9);
+        assert_eq!(seen.len(), 8);
     }
 }
 

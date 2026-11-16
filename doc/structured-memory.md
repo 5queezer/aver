@@ -115,7 +115,7 @@ projection from the log. There is no implicit multi-call transaction or dedupe k
 
 For reviewed extraction, the existing flow remains `record_event` →
 `propose_candidate_claim(event_id, subject, predicate, object)` →
-`promote_candidate_claim(candidate_id)` (or reject/triage). Candidate promotion
+`promote_candidate_claim(candidate_id)` (or reject). Candidate promotion
 retains its source reference and conservative INFERRED default. Its historical
 explicit scope override is preserved; the new direct `event_id` field requires
 an event in the same scope.

@@ -9,7 +9,6 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use aver_core::decision::MockDecisionClient;
 use aver_core::vector::{EmbeddingClient, EmbeddingError};
 use aver_server::tools::AverTools;
 use serde_json::{Value, json};
@@ -35,16 +34,13 @@ impl EmbeddingClient for CountingEmbedder {
 
 fn tools(dir: &std::path::Path, embed_on_write: bool, fail: bool) -> (AverTools, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
-    let tools = AverTools::open_with_decision_client(
-        dir,
-        Some(Box::new(MockDecisionClient::with_indices(vec![0]))),
-    )
-    .unwrap()
-    .with_embedding_client(Some(Box::new(CountingEmbedder {
-        calls: calls.clone(),
-        fail,
-    })))
-    .with_embed_on_write(embed_on_write);
+    let tools = AverTools::open(dir)
+        .unwrap()
+        .with_embedding_client(Some(Box::new(CountingEmbedder {
+            calls: calls.clone(),
+            fail,
+        })))
+        .with_embed_on_write(embed_on_write);
     (tools, calls)
 }
 
@@ -112,8 +108,8 @@ fn unset_omits_embedding_field_makes_no_request_or_chunk() {
 }
 
 /// Every server path that creates a claim embeds it: remember_claim,
-/// add_triple, promote_candidate_claim, triage_candidate_claim and the
-/// replacement claim of contradict. The chunk is the canonical claim text,
+/// add_triple, promote_candidate_claim and the replacement claim of
+/// contradict. The chunk is the canonical claim text,
 /// written through the logged chunk path, and replay reproduces it.
 #[test]
 fn opted_in_writes_get_a_vector_chunk_and_hybrid_recall() {
@@ -134,13 +130,6 @@ fn opted_in_writes_get_a_vector_chunk_and_hybrid_recall() {
         ))
         .unwrap();
     assert_eq!(promoted.embedded, Some(true));
-    let triaged = tools
-        .triage_candidate_claim(params(
-            json!({"candidate_id": staged_candidate(&tools, "traefik")}),
-        ))
-        .unwrap();
-    assert_eq!(triaged.triage, "promote");
-    assert_eq!(triaged.embedded, Some(true));
     let contradiction = tools
         .contradict(params(json!({
             "triple_id": triple.triple_id, "reason": "replaced",
@@ -148,10 +137,10 @@ fn opted_in_writes_get_a_vector_chunk_and_hybrid_recall() {
         })))
         .unwrap();
     assert_eq!(contradiction.embedded, Some(true));
-    assert_eq!(calls.load(Ordering::SeqCst), 5);
+    assert_eq!(calls.load(Ordering::SeqCst), 4);
 
     let chunks = chunk_records(dir.path());
-    assert_eq!(chunks.len(), 5);
+    assert_eq!(chunks.len(), 4);
     assert_eq!(chunks[0]["claim_id"], remembered["id"]);
     assert_eq!(chunks[0]["text"], "api-gateway uses envoy");
     assert_eq!(chunks[0]["embedding"], json!([1.0, 0.0]));

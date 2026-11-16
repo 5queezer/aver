@@ -2,14 +2,12 @@ use aver_core::{CandidateWrite, ClaimWrite, EventWrite, ObservationWrite, Recall
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use aver_core::candidate_decision::CandidateTriage;
-use aver_core::decision::{DecisionClient, DecisionConfig, client_from_env};
 use aver_core::retrieval::{DEFAULT_RECENCY_TAU_SECS, HybridWeights};
 use aver_core::vector::{DEFAULT_OPENAI_EMBEDDING_MODEL, EmbeddingClient, VectorIndexConfig};
 use aver_core::{
     AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, Error,
-    ExtractionTriggerReason, GraphPathQuery, Observation, ObservationCoverage, ObservationRecall,
-    ObservationRelevance, PredicateWalk, RecallFilters, ReverifyWrite, ScopeWalk, Store,
+    GraphPathQuery, Observation, ObservationCoverage, ObservationRecall, ObservationRelevance,
+    PredicateWalk, RecallFilters, ReverifyWrite, ScopeWalk, Store,
 };
 use aver_extractor::LANGUAGES;
 use aver_extractor::bridge::extract_tree;
@@ -492,12 +490,6 @@ pub struct PromoteCandidateClaimParams {
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-pub struct TriageCandidateClaimParams {
-    /// PENDING candidate claim identifier to triage.
-    pub candidate_id: i64,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct RejectCandidateClaimParams {
     /// Candidate claim identifier.
     pub candidate_id: i64,
@@ -827,21 +819,6 @@ pub struct ConsolidateView {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ShouldExtractMemoriesView {
     pub should_extract: bool,
-    /// ADR-0024 trigger reasons; present only when a decision model is configured.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasons: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct TriageCandidateClaimView {
-    pub candidate_id: i64,
-    /// One of "promote", "reject", "hold".
-    pub triage: String,
-    /// Durable claim id when the candidate was promoted.
-    pub claim_id: Option<i64>,
-    /// For the promoted claim; see [`ClaimView::embedded`].
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub embedded: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -1044,11 +1021,6 @@ pub struct ExtractView {
 pub struct AverTools {
     store: Store,
     extract: ExtractLimits,
-    /// ADR-0024 decision model; `None` unless `AVER_DECISION_MODEL` opts in.
-    decision: Option<Box<dyn DecisionClient + Send + Sync>>,
-    /// ADR-0024 confidence floor (`AVER_DECISION_MIN_CONFIDENCE`); choices
-    /// below it fall back to the deterministic behaviour.
-    decision_min_confidence: f64,
     /// ADR-0004 embedding client; `None` unless `AVER_EMBEDDING_URL` opts in.
     embedder: Option<Embedder>,
     /// Model label recorded on vector chunks (`AVER_EMBEDDING_MODEL`).
@@ -1067,22 +1039,11 @@ pub struct AverTools {
 
 impl AverTools {
     pub fn open(memory_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
-        Self::open_with_decision_client(memory_dir, client_from_env())
-    }
-
-    /// Like [`AverTools::open`] with an explicit decision client (tests inject
-    /// a mock here instead of setting `AVER_DECISION_MODEL`).
-    pub fn open_with_decision_client(
-        memory_dir: impl AsRef<Path>,
-        decision: Option<Box<dyn DecisionClient + Send + Sync>>,
-    ) -> anyhow::Result<Self> {
         let (embedder, embedding_model) = embedding_from_env();
         let recall_miss_log = RecallMissLog::from_env(memory_dir.as_ref());
         Ok(Self {
             store: Store::open(memory_dir)?,
             extract: ExtractLimits::from_env(),
-            decision,
-            decision_min_confidence: DecisionConfig::from_env().min_confidence,
             embedder,
             embedding_model,
             recall_miss_log,
@@ -1728,35 +1689,10 @@ impl AverTools {
         &self,
         params: ShouldExtractMemoriesParams,
     ) -> anyhow::Result<ShouldExtractMemoriesView> {
-        let Some(client) = self.decision.as_deref() else {
-            return Ok(ShouldExtractMemoriesView {
-                should_extract: self
-                    .store
-                    .should_extract_memories(&params.session_id, params.event_threshold)?,
-                reasons: None,
-            });
-        };
-        let decision = self.store.extraction_decision_with_client(
-            &params.session_id,
-            params.event_threshold,
-            None,
-            client,
-            self.decision_min_confidence,
-        )?;
-        // Same rule as `Store::should_extract_memories`: a coverage gap alone
-        // does not justify extraction.
         Ok(ShouldExtractMemoriesView {
-            should_extract: decision
-                .reasons
-                .iter()
-                .any(|reason| *reason != ExtractionTriggerReason::UncoveredCoverageGap),
-            reasons: Some(
-                decision
-                    .reasons
-                    .iter()
-                    .map(|reason| reason.as_str().to_string())
-                    .collect(),
-            ),
+            should_extract: self
+                .store
+                .should_extract_memories(&params.session_id, params.event_threshold)?,
         })
     }
 
@@ -1798,35 +1734,6 @@ impl AverTools {
         Ok(ClaimView {
             embedded,
             ..self.store.get_claim(claim_id)?.into()
-        })
-    }
-
-    pub fn triage_candidate_claim(
-        &self,
-        params: TriageCandidateClaimParams,
-    ) -> anyhow::Result<TriageCandidateClaimView> {
-        let client = self.decision.as_deref().ok_or_else(|| {
-            anyhow::anyhow!("decision model not configured (set AVER_DECISION_MODEL)")
-        })?;
-        let (triage, claim_id) = match self.store.triage_candidate_claim(
-            params.candidate_id,
-            client,
-            self.decision_min_confidence,
-        )? {
-            CandidateTriage::Promote => (
-                "promote",
-                self.store
-                    .get_candidate_claim(params.candidate_id)?
-                    .promoted_claim_id,
-            ),
-            CandidateTriage::Reject => ("reject", None),
-            CandidateTriage::Hold => ("hold", None),
-        };
-        Ok(TriageCandidateClaimView {
-            candidate_id: params.candidate_id,
-            triage: triage.to_string(),
-            claim_id,
-            embedded: claim_id.and_then(|id| self.embed_written_claim(id)),
         })
     }
 

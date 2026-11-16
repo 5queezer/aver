@@ -2,10 +2,8 @@
 //! See doc/adr/ for architecture decisions.
 
 mod apply;
-pub mod candidate_decision;
 mod candidates;
 mod claims;
-pub mod decision;
 mod episodic;
 mod error;
 mod graph;
@@ -15,12 +13,10 @@ mod log;
 mod maintenance;
 mod objects;
 mod ontology;
-pub mod predicate_decision;
 mod privacy;
 mod recall;
 mod replay;
 pub mod retrieval;
-pub mod scope_decision;
 mod seed;
 mod store;
 mod types;

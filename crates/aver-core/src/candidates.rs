@@ -5,7 +5,6 @@ use std::str::FromStr;
 use rusqlite::{OptionalExtension, params, types::Type};
 
 use crate::apply::apply;
-use crate::candidate_decision;
 use crate::error::Error;
 use crate::log::{LogRecord, append_jsonl};
 use crate::store::Store;
@@ -125,17 +124,15 @@ impl Store {
     }
 
     pub fn promote_candidate_claim(&self, candidate_id: i64) -> Result<i64, Error> {
-        self.promote_candidate_claim_inner(candidate_id, None, None)
+        self.promote_candidate_claim_inner(candidate_id, None)
     }
 
     /// `attribution` overrides the candidate's provenance/confidence on the
-    /// durable claim; `decision` is recorded on the promotion log line
-    /// (ADR-0024).
+    /// durable claim.
     pub(crate) fn promote_candidate_claim_inner(
         &self,
         candidate_id: i64,
         attribution: Option<(Provenance, f64)>,
-        decision: Option<candidate_decision::DecisionLogField<'_>>,
     ) -> Result<i64, Error> {
         let candidate = self.get_candidate_claim(candidate_id)?;
         if candidate.status == "REJECTED" {
@@ -193,7 +190,7 @@ impl Store {
                 ts: now,
                 candidate_id,
                 claim_id,
-                decision: decision.map(Into::into),
+                decision: None,
             };
             append_jsonl(&self.event_log_path, &promotion)?;
             apply(&self.conn, &claim)?;
@@ -213,15 +210,13 @@ impl Store {
     }
 
     pub fn reject_candidate_claim(&self, candidate_id: i64, reason: &str) -> Result<(), Error> {
-        self.reject_candidate_claim_inner(candidate_id, reason, None)
+        self.reject_candidate_claim_inner(candidate_id, reason)
     }
 
-    /// `decision` is recorded on the rejection log line (ADR-0024).
     pub(crate) fn reject_candidate_claim_inner(
         &self,
         candidate_id: i64,
         reason: &str,
-        decision: Option<candidate_decision::DecisionLogField<'_>>,
     ) -> Result<(), Error> {
         let candidate = self.get_candidate_claim(candidate_id)?;
         if candidate.status == "PROMOTED" {
@@ -270,7 +265,7 @@ impl Store {
                 ts: now,
                 candidate_id,
                 reason: reason.to_string(),
-                decision: decision.map(Into::into),
+                decision: None,
             };
             append_jsonl(&self.event_log_path, &record)?;
             apply(&self.conn, &record)?;

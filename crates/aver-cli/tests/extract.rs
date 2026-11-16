@@ -14,7 +14,6 @@ fn fixture() -> PathBuf {
 fn aver(memory_dir: &Path) -> Command {
     let mut cmd = Command::cargo_bin("aver").unwrap();
     cmd.arg("--memory-dir").arg(memory_dir);
-    cmd.env_remove("AVER_DECISION_MODEL");
     cmd
 }
 

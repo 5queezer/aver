@@ -1,11 +1,9 @@
-use aver_core::decision::MockDecisionClient;
-use aver_core::{Provenance, Store};
 use aver_server::tools::{
     AddTripleParams, AssembleCompactionSummaryParams, AverTools, ConsolidateParams,
     ContradictParams, ExpandParams, ListCandidateClaimsParams, ObservationRelevanceParam,
     PromoteCandidateClaimParams, ProposeCandidateClaimParams, RecallObservationParams,
     RecallParams, RecordEventParams, RecordObservationParams, RejectCandidateClaimParams,
-    RememberClaimParams, ShouldExtractMemoriesParams, TriageCandidateClaimParams,
+    RememberClaimParams, ShouldExtractMemoriesParams,
 };
 
 #[test]
@@ -964,136 +962,4 @@ fn remember_claim_rejects_empty_object() {
         .expect_err("empty objects should be rejected");
 
     assert!(err.to_string().contains("object"));
-}
-
-// ADR-0024 decision-model wiring. Every test injects `MockDecisionClient`;
-// none reads `AVER_DECISION_MODEL` or needs Ollama.
-
-fn tools_with_decisions(dir: &std::path::Path, indices: Vec<usize>) -> AverTools {
-    AverTools::open_with_decision_client(
-        dir,
-        Some(Box::new(MockDecisionClient::with_indices(indices))),
-    )
-    .unwrap()
-}
-
-fn stage_candidate(tools: &AverTools) -> (i64, i64) {
-    let event = tools
-        .record_event(RecordEventParams {
-            session_id: "triage-session".to_string(),
-            kind: "message".to_string(),
-            payload: "Aver prefers local decision models".to_string(),
-            source: Some("mcp-test".to_string()),
-            agent_id: Some("claude".to_string()),
-            agent_kind: Some("LLM".to_string()),
-            scope: None,
-        })
-        .unwrap();
-    let candidate = tools
-        .propose_candidate_claim(ProposeCandidateClaimParams {
-            event_id: event.id,
-            subject: "Aver".to_string(),
-            predicate: "prefers".to_string(),
-            object: "local_decision_models".to_string(),
-            scope: None,
-        })
-        .unwrap();
-    (event.id, candidate.id)
-}
-
-#[test]
-fn triage_candidate_claim_promotes_with_inferred_attribution() {
-    let dir = tempfile::tempdir().unwrap();
-    let tools = tools_with_decisions(dir.path(), vec![0]);
-    let (_, candidate_id) = stage_candidate(&tools);
-
-    let view = tools
-        .triage_candidate_claim(TriageCandidateClaimParams { candidate_id })
-        .unwrap();
-
-    assert_eq!(view.candidate_id, candidate_id);
-    assert_eq!(view.triage, "promote");
-    let claim_id = view.claim_id.expect("promotion returns the claim id");
-    drop(tools);
-    let store = Store::open(dir.path()).unwrap();
-    let claim = store.get_claim(claim_id).unwrap();
-    assert_eq!(claim.provenance, Provenance::Inferred);
-    assert_eq!(claim.confidence, 0.45);
-    assert_eq!(
-        serde_json::to_value(&view).unwrap(),
-        serde_json::json!({
-            "candidate_id": candidate_id,
-            "triage": "promote",
-            "claim_id": claim_id,
-        })
-    );
-}
-
-#[test]
-fn triage_candidate_claim_hold_leaves_candidate_pending() {
-    let dir = tempfile::tempdir().unwrap();
-    let tools = tools_with_decisions(dir.path(), vec![2]);
-    let (_, candidate_id) = stage_candidate(&tools);
-
-    let view = tools
-        .triage_candidate_claim(TriageCandidateClaimParams { candidate_id })
-        .unwrap();
-
-    assert_eq!(view.triage, "hold");
-    assert_eq!(view.claim_id, None);
-    let pending = tools
-        .list_candidate_claims(ListCandidateClaimsParams {
-            session_id: Some("triage-session".to_string()),
-            status: Some("PENDING".to_string()),
-        })
-        .unwrap();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].id, candidate_id);
-}
-
-#[test]
-fn triage_candidate_claim_without_decision_model_is_a_clear_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let tools = AverTools::open_with_decision_client(dir.path(), None).unwrap();
-    let (_, candidate_id) = stage_candidate(&tools);
-
-    let err = tools
-        .triage_candidate_claim(TriageCandidateClaimParams { candidate_id })
-        .expect_err("triage needs a configured decision model");
-
-    assert_eq!(
-        tools.describe_error(&err),
-        "decision model not configured (set AVER_DECISION_MODEL)"
-    );
-}
-
-#[test]
-fn should_extract_memories_consults_decision_model_and_reports_reasons() {
-    let dir = tempfile::tempdir().unwrap();
-    let tools = tools_with_decisions(dir.path(), vec![0]);
-    stage_candidate(&tools);
-    let params = ShouldExtractMemoriesParams {
-        session_id: "triage-session".to_string(),
-        event_threshold: 10,
-    };
-
-    let view = tools.should_extract_memories(params.clone()).unwrap();
-    assert!(view.should_extract);
-    assert_eq!(
-        view.reasons,
-        Some(vec![
-            "uncovered_coverage_gap".to_string(),
-            "decision_model".to_string(),
-        ])
-    );
-
-    // Unconfigured: deterministic answer and the pre-ADR-0024 JSON shape.
-    drop(tools);
-    let unconfigured = AverTools::open_with_decision_client(dir.path(), None).unwrap();
-    let view = unconfigured.should_extract_memories(params).unwrap();
-    assert!(!view.should_extract);
-    assert_eq!(
-        serde_json::to_value(&view).unwrap(),
-        serde_json::json!({ "should_extract": false })
-    );
 }

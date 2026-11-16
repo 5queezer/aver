@@ -1,6 +1,5 @@
 //! Crate error type.
 
-use crate::decision;
 use crate::privacy::PrivacyRejection;
 use crate::vector;
 #[derive(Debug, thiserror::Error)]
@@ -13,8 +12,6 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("embedding: {0}")]
     Embedding(#[from] vector::EmbeddingError),
-    #[error("decision: {0}")]
-    Decision(#[from] decision::DecisionError),
     #[error("privacy filter rejected content: {0}")]
     Privacy(#[from] PrivacyRejection),
     #[error("invalid {kind} value in database: {value:?}")]

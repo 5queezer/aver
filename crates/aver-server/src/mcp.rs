@@ -20,7 +20,7 @@ use crate::tools::{
     ObservationCoverageParams, PathParams, PromoteCandidateClaimParams,
     ProposeCandidateClaimParams, RecallObservationParams, RecallParams as CoreRecallParams,
     RecordEventParams, RecordObservationParams, RejectCandidateClaimParams, RetireClaimParams,
-    ReverifyClaimParams, ShouldExtractMemoriesParams, TriageCandidateClaimParams,
+    ReverifyClaimParams, ShouldExtractMemoriesParams,
 };
 
 /// Verifies the request's granted scopes (carried via `http::request::Parts`
@@ -202,7 +202,6 @@ impl AverMcpService {
         Self::PROPOSE_CANDIDATE_CLAIM,
         Self::LIST_CANDIDATE_CLAIMS,
         Self::PROMOTE_CANDIDATE_CLAIM,
-        Self::TRIAGE_CANDIDATE_CLAIM,
         Self::REJECT_CANDIDATE_CLAIM,
         Self::RECALL_OBSERVATION,
         Self::OBSERVATION_COVERAGE,
@@ -460,22 +459,6 @@ impl AverMcpService {
         let tools = self.lock_tools()?;
         let result = tools.promote_candidate_claim(params);
         json_tool_result(&tools, result, "promote_candidate_claim")
-    }
-
-    const TRIAGE_CANDIDATE_CLAIM: ToolScope =
-        ToolScope::new("triage_candidate_claim", Scope::CandidatesManage);
-    #[tool(
-        description = "Let the local decision model promote, reject, or hold one staged candidate claim; promoted claims carry INFERRED provenance with confidence 0.45, and the tool errors unless AVER_DECISION_MODEL is set."
-    )]
-    async fn triage_candidate_claim(
-        &self,
-        Parameters(params): Parameters<TriageCandidateClaimParams>,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        require_scope(&ctx, self.local.as_ref(), Self::TRIAGE_CANDIDATE_CLAIM)?;
-        let tools = self.lock_tools()?;
-        let result = tools.triage_candidate_claim(params);
-        json_tool_result(&tools, result, "triage_candidate_claim")
     }
 
     const REJECT_CANDIDATE_CLAIM: ToolScope =
@@ -810,7 +793,6 @@ mod tests {
             ("propose_candidate_claim", Scope::CandidatesManage),
             ("list_candidate_claims", Scope::CandidatesManage),
             ("promote_candidate_claim", Scope::CandidatesManage),
-            ("triage_candidate_claim", Scope::CandidatesManage),
             ("reject_candidate_claim", Scope::CandidatesManage),
             ("recall_observation", Scope::ObservationsRead),
             ("observation_coverage", Scope::ObservationsRead),
