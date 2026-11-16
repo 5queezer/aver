@@ -19,14 +19,15 @@ A memory directory contains the local source of truth and projections:
 
 ```text
 .aver/
-├── log.jsonl           # durable claim and hyperedge audit log
+├── log.jsonl           # durable claims, vectors and historical hyperedges
 ├── events.jsonl        # episodic events and candidate-claim lifecycle
-├── observations.jsonl  # continuity observations and prune markers
+├── observations.jsonl  # historical observations and prune markers, if present
 ├── db.sqlite           # replayable query projection
 └── auth.db             # local OAuth/session state for the MCP server
 ```
 
-`log.jsonl` carries both new memories (`add_claim`, `add_hyperedge`) and
+`log.jsonl` carries new memories (`add_claim`, `add_vector_chunk`,
+`embed_vector_chunk`), historical hyperedge records, and
 claim lifecycle transitions (`retire_claim`, `add_contradiction`,
 `supersede_claims`, `decay_confidence`, `merge_source_refs`,
 `reverify_claim`). Consolidation
@@ -44,30 +45,58 @@ phase.
 2. Reject secrets, credential paths, and explicit `memory:ignore` content before persistence.
 3. Append auditable records before updating SQLite projections.
 4. Keep enough provenance to replay or inspect where each memory came from.
-5. Allocate ids (claims, hyperedges, events, candidates, contradictions)
+5. Allocate ids (claims, events, candidates, contradictions)
    inside a `BEGIN IMMEDIATE` write transaction that also covers the log
    append and the projection insert, so two processes cannot allocate the
    same id and poison the log with duplicates.
 
-Vector chunk writes follow the same privacy boundary as claim, event, observation, and candidate writes.
+Vector chunk writes follow the same privacy boundary as claim, event, and candidate writes.
 
 ## Main projections
 
-- **Claims** — structured `(subject, predicate, object)` records with provenance, confidence, status, source references, agent attribution, and scope.
-- **Hyperedges** — n-ary memories with role/entity participants for relationships that do not fit simple triples.
-- **Episodic events** — raw session events used as extraction and compaction source material.
-- **Observations** — privacy-checked continuity notes backed by source event IDs.
+- **Claims** — structured `(subject, predicate, object)` records with typed entity/literal objects, provenance, confidence, status, source references, agent attribution, scope, and optional validity windows.
+- **Episodic events** — raw session events that can source candidate or durable claims.
 - **Vector chunks** — local embedding metadata connected back to claims.
+
+Historical hyperedge and observation records remain in the schema and replay
+path. Current APIs do not write new records of either kind.
+
+## Structured memory and claim validity
+
+Claims use the store ontology's predicates and cardinality. Objects that look
+like prose are stored as literals instead of becoming graph entities;
+`aver migrate-literals` reclassifies that shape in older stores through
+append-only migration records. `aver extract` writes deterministic code facts
+from the CLI; extraction is not an MCP tool.
+
+Provenance distinguishes source statements (`EXTRACTED`), model judgments
+(`INFERRED`, with capped confidence), conflicting evidence (`AMBIGUOUS`), and
+explicit human assertions (`USER_ASSERTED`). A claim can name its source event
+directly, and the candidate workflow can stage an event-derived claim before
+promotion.
+
+Claims remain auditable as knowledge changes. `contradict` records conflicting
+evidence without hiding the claim, `retire_claim` explicitly invalidates it,
+and consolidation logs duplicate supersession and confidence decay.
+`reverify`/`reverify_claim` record fresh evidence and the confirming writer;
+`confirmations` lists those records. Contextual claims may carry evidence
+windows, and recall can apply opt-in recency and evidence-age weighting.
 
 ## Server surface
 
-`aver-server` exposes the memory layer over Streamable HTTP MCP. The server uses local OAuth-style registration, PKCE authorization-code exchange, bearer-token validation, scoped tool permissions, and a browser consent flow.
+`aver-server` exposes the memory layer over Streamable HTTP MCP or local
+stdio. HTTP uses local OAuth-style registration, PKCE authorization-code
+exchange, bearer-token validation, scoped tool permissions, and a browser
+consent flow.
 
 The default posture is localhost-first. Public or reverse-proxy deployments should set explicit CORS origins, protect any trusted identity header at the proxy boundary, and use HTTPS.
 
 ## Recovery and maintenance
 
-SQLite tables are projections over append-only records. Maintenance paths include replay, consolidation, vacuum, observation catch-up, coverage reporting, and log rotation. ADRs under [`adr/`](adr/) describe the design trade-offs in more detail.
+SQLite tables are projections over append-only records. Maintenance paths
+include replay, consolidation, vacuum, literal migration, vector backfill, and
+log rotation. ADRs under [`adr/`](adr/) describe the design trade-offs in more
+detail.
 
 ### Replay semantics
 
@@ -109,11 +138,9 @@ and renames atomically; recovery verifies archive integrity before dropping
 a plain intermediate, so a crash mid-compression cannot lose log tail
 records.
 
-**Derived projections are not logged.** Vector chunks (chunk text plus
-embedding vectors and the `vec0` ANN index) are deliberately absent from the
-log, so replay rebuilds claims and leaves `vector_chunks` empty. A restore must
-first regenerate chunk rows from claim text (for example with
-`Store::add_embedded_vector_chunk_for_claim`, which creates a chunk and its
-embedding). `Store::backfill_vector_embeddings` is not a standalone restore
-path: it only fills embeddings for chunk rows that already exist but have no
-embedding.
+**Vector chunks are logged.** Their text, model and embeddings replay through
+`add_vector_chunk` and `embed_vector_chunk` records, so the `vec0` ANN index is
+rebuilt with the other projections. If an embedding provider failed during a
+write, `aver backfill` uses the same provider environment as the server to fill
+existing text-only chunks and prints the resulting counts. It is idempotent,
+but it does not invent chunk rows for claims that never had one.
