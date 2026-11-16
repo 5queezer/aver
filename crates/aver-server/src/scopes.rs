@@ -1,8 +1,9 @@
 //! ADR-0020 slice 3: OAuth scope catalog. Each MCP tool declares the scope
 //! it requires next to its handler in `mcp.rs` (see [`ToolScope`]).
 //!
-//! Six scopes mirror the current MCP tool groups. The canonical string form
-//! is what clients send in `scope=` and what discovery advertises under
+//! Four scopes mirror the current MCP tool groups; two observation scopes
+//! remain parseable for historical grants. The canonical string form is what
+//! clients send in `scope=` and what discovery advertises under
 //! `scopes_supported`. The order in [`SUPPORTED`] is the deterministic
 //! rendering order used by [`serialize_scope_list`].
 

@@ -43,6 +43,37 @@ fn auth_code_exchange_issues_refresh_token_and_allows_refresh_grant() {
 }
 
 #[test]
+fn legacy_observation_scopes_survive_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = AuthDb::open(dir.path().join("auth.db")).unwrap();
+    let verifier = "verifier";
+    let redirect = "http://localhost:8080/callback";
+    let legacy_scopes = vec![
+        "observations:read".to_string(),
+        "observations:write".to_string(),
+    ];
+    let code = db
+        .store_authorization_code(
+            "client-1",
+            "user-1",
+            &aver_server::oauth::pkce_s256_challenge(verifier),
+            redirect,
+            &legacy_scopes,
+        )
+        .unwrap();
+    let tokens = db
+        .exchange_authorization_code_for_tokens(&code, "client-1", verifier, redirect)
+        .unwrap();
+
+    let refreshed = db.refresh_access_token(&tokens.refresh_token).unwrap();
+    let (_, scopes_raw) = db
+        .validate_access_token(&aver_server::auth::hash_token(&refreshed.access_token))
+        .unwrap()
+        .unwrap();
+    assert_eq!(scopes_raw, "observations:read observations:write");
+}
+
+#[test]
 fn refresh_token_reuse_revokes_token_family() {
     // RFC 6819 §5.2.2.3: presenting an already-rotated refresh token signals
     // theft; every live token of the (user, client) family is revoked.

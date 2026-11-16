@@ -41,7 +41,7 @@ use url::Url;
 use crate::auth::{AuthDb, Session, User, UserKind};
 use crate::oauth::constant_time_eq;
 use crate::origin::validate_browser_origin;
-use crate::scopes::{SUPPORTED, ScopeParseError, parse_scope_list};
+use crate::scopes::{SUPPORTED, Scope, ScopeParseError, parse_scope_list};
 
 /// Cookie name for the Aver browser session.
 pub const SESSION_COOKIE_NAME: &str = "aver_session";
@@ -327,6 +327,7 @@ struct ConsentTemplate<'a> {
 fn scope_options<'a>(requested_scopes: &'a [String]) -> Vec<ScopeOption<'a>> {
     SUPPORTED
         .iter()
+        .filter(|scope| !matches!(scope, Scope::ObservationsRead | Scope::ObservationsWrite))
         .map(|scope| {
             let scope = scope.as_str();
             ScopeOption {
@@ -1052,22 +1053,26 @@ mod tests {
     }
 
     #[test]
-    fn consent_page_lists_all_supported_scopes_as_checkboxes() {
+    fn consent_page_lists_current_scopes_without_legacy_observations() {
         let html = render_consent_page(
             "client-1",
             "Aver MCP client",
             "http://127.0.0.1:3999/callback",
             123,
-            &["claims:read".to_string()],
+            &["claims:read".to_string(), "observations:read".to_string()],
             None,
             "challenge",
             "S256",
-            Some("claims:read"),
+            Some("claims:read observations:read"),
             "csrf",
         );
 
-        for scope in crate::scopes::SUPPORTED {
-            let scope = scope.as_str();
+        for scope in [
+            "claims:read",
+            "claims:write",
+            "events:write",
+            "candidates:manage",
+        ] {
             let field = scope_checkbox_field(scope);
             assert!(
                 html.contains(&format!("name=\"{field}\" value=\"{scope}\"")),
@@ -1081,6 +1086,16 @@ mod tests {
         assert!(
             html.contains("name=\"scope_selection_present\" value=\"1\""),
             "form should mark that checkbox selection is authoritative: {html}"
+        );
+        for legacy_scope in ["observations:read", "observations:write"] {
+            assert!(
+                !html.contains(&format!("value=\"{legacy_scope}\"")),
+                "legacy scope must not be offered for a new grant: {legacy_scope}"
+            );
+        }
+        assert!(
+            html.contains("name=\"scope\" value=\"claims:read observations:read\""),
+            "the original request must survive the round trip: {html}"
         );
         let form_start = html.find("<form method=\"POST\"").unwrap();
         let form_end = html.find("</form>").unwrap();
