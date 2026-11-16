@@ -37,7 +37,7 @@ pub use store::{SCHEMA_VERSION, SqliteVecStatus, Store, VECTOR_INDEX_DIM};
 pub use types::{
     AgentKind, CandidateClaim, CandidateClaimDraft, CandidateWrite, Claim, ClaimConfirmation,
     ClaimStatus, ClaimWrite, ConsolidationReport, ContradictionRecord, EpisodicEvent, EventWrite,
-    ExtractionDecision, ExtractionTriggerReason, ExtractorFact, GraphDriftSnapshot, GraphExpansion,
+    ExtractionDecision, ExtractionTriggerReason, ExtractorFact, GraphExpansion,
     HyperedgeParticipantInput, Observation, ObservationCoverage, ObservationDraft,
     ObservationRecall, ObservationRelevance, ObservationWrite, PredicateWalk, Provenance,
     RecallFilters, RecallQuery, ReverifyWrite, ScopeWalk, VectorChunk, Verification,

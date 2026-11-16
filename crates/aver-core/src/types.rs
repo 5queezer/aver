@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use crate::{Error, ObjectKind};
@@ -752,18 +751,6 @@ mod extraction_trigger_reason_tests {
 pub struct ExtractionDecision {
     pub should_extract: bool,
     pub reasons: Vec<ExtractionTriggerReason>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct GraphDriftSnapshot {
-    pub claim_count_by_provenance: BTreeMap<String, u64>,
-    pub mean_confidence_by_provenance: BTreeMap<String, f64>,
-    pub contradicts_edge_count: u64,
-    pub ambiguous_ratio: f64,
-    pub entity_count_by_type_id: BTreeMap<String, u64>,
-    pub consolidation_merged: usize,
-    pub consolidation_superseded: usize,
-    pub privacy_rejection_counts: BTreeMap<String, u64>,
 }
 
 /// A text chunk attached to a claim for vector indexing.

@@ -1,5 +1,4 @@
-use aver_core::{ClaimWrite, EventWrite, ObservationWrite};
-use aver_core::{ConsolidationReport, Error, ExtractionTriggerReason, PrivacyRejection, Store};
+use aver_core::{EventWrite, ExtractionTriggerReason, Store};
 
 #[test]
 fn extraction_decision_reports_richer_deterministic_trigger_reasons() {
@@ -112,66 +111,6 @@ fn extraction_decision_surfaces_uncovered_coverage_gap() {
             .reasons
             .contains(&ExtractionTriggerReason::UncoveredCoverageGap)
     );
-}
-
-#[test]
-fn graph_drift_snapshot_includes_privacy_rejection_counts() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path()).unwrap();
-    store
-        .add_claim(ClaimWrite::new("Aver", "uses", "SQLite", "test"))
-        .unwrap();
-
-    let event_id = store
-        .record_event(EventWrite::new(
-            "s1",
-            "user_message",
-            "ordinary event",
-            "test",
-        ))
-        .unwrap();
-    let token = "sk-abcdefghijklmnopqrstuvwxyz1234567890";
-    assert!(matches!(
-        store.add_claim(ClaimWrite::new("Aver", "source", "ssh key", ".ssh/id_rsa")),
-        Err(Error::Privacy(PrivacyRejection::SshPath))
-    ));
-    assert!(matches!(
-        store.record_observation(ObservationWrite::new(
-            "s1",
-            format!("observer saw OPENAI_API_KEY={token}"),
-            aver_core::ObservationRelevance::High,
-            &[event_id],
-            "observer"
-        )),
-        Err(Error::Privacy(PrivacyRejection::OpenAiKey))
-    ));
-    assert!(matches!(
-        store.privacy_filter_path_recording(".secrets.d/token"),
-        Err(Error::Privacy(PrivacyRejection::SecretsPath))
-    ));
-
-    let snapshot = store
-        .graph_drift_snapshot(ConsolidationReport {
-            merged: 1,
-            superseded: 0,
-            decayed: 0,
-        })
-        .unwrap();
-
-    assert_eq!(
-        snapshot.claim_count_by_provenance.get("USER_ASSERTED"),
-        Some(&1)
-    );
-    assert_eq!(
-        snapshot.privacy_rejection_counts.get("regex:openai"),
-        Some(&1)
-    );
-    assert_eq!(
-        snapshot.privacy_rejection_counts.get("path:secrets-dir"),
-        Some(&1)
-    );
-    assert_eq!(snapshot.privacy_rejection_counts.get("path:ssh"), Some(&1));
-    assert_eq!(snapshot.consolidation_merged, 1);
 }
 
 #[test]

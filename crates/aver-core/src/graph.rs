@@ -1,90 +1,12 @@
-//! Graph traversal: expand and drift snapshots.
+//! Graph traversal: expand.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 
 use crate::error::Error;
 use crate::store::{Store, scope_filter_sql};
-use crate::types::{
-    Claim, ConsolidationReport, GraphDriftSnapshot, GraphExpansion, Provenance, ScopeWalk,
-};
+use crate::types::{Claim, GraphExpansion, ScopeWalk};
 use crate::validation::validate_scope;
 impl Store {
-    pub fn graph_drift_snapshot(
-        &self,
-        consolidation: ConsolidationReport,
-    ) -> Result<GraphDriftSnapshot, Error> {
-        let mut claim_count_by_provenance = BTreeMap::new();
-        let mut mean_confidence_by_provenance = BTreeMap::new();
-        let mut stmt = self.conn.prepare(
-            "SELECT provenance, COUNT(*), AVG(confidence)
-               FROM claims GROUP BY provenance ORDER BY provenance",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, u64>(1)?,
-                row.get::<_, f64>(2)?,
-            ))
-        })?;
-        let mut total_claims = 0_u64;
-        let mut ambiguous_claims = 0_u64;
-        for row in rows {
-            let (provenance, count, mean_confidence) = row?;
-            if provenance == Provenance::Ambiguous.as_str() {
-                ambiguous_claims = count;
-            }
-            total_claims += count;
-            claim_count_by_provenance.insert(provenance.clone(), count);
-            mean_confidence_by_provenance.insert(provenance, mean_confidence);
-        }
-
-        let contradicts_edge_count =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM contradictions", [], |row| {
-                    row.get::<_, u64>(0)
-                })?;
-        let mut entity_count_by_type_id = BTreeMap::new();
-        let mut entity_stmt = self.conn.prepare(
-            "SELECT entity_types.name, COUNT(entities.name)
-               FROM entities JOIN entity_types ON entities.type_id = entity_types.id
-              GROUP BY entity_types.name ORDER BY entity_types.name",
-        )?;
-        let entity_rows = entity_stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
-        })?;
-        for row in entity_rows {
-            let (type_id, count) = row?;
-            entity_count_by_type_id.insert(type_id, count);
-        }
-
-        let mut privacy_rejection_counts = BTreeMap::new();
-        let mut privacy_stmt = self
-            .conn
-            .prepare("SELECT reason, count FROM privacy_rejections ORDER BY reason")?;
-        let privacy_rows = privacy_stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
-        })?;
-        for row in privacy_rows {
-            let (reason, count) = row?;
-            privacy_rejection_counts.insert(reason, count);
-        }
-
-        Ok(GraphDriftSnapshot {
-            claim_count_by_provenance,
-            mean_confidence_by_provenance,
-            contradicts_edge_count,
-            ambiguous_ratio: if total_claims == 0 {
-                0.0
-            } else {
-                ambiguous_claims as f64 / total_claims as f64
-            },
-            entity_count_by_type_id,
-            consolidation_merged: consolidation.merged,
-            consolidation_superseded: consolidation.superseded,
-            privacy_rejection_counts,
-        })
-    }
-
     /// Text-only keyword recall over active claims. This is the v0.1
     /// precursor to HybridRAG: cheap SQLite substring matching across the
     /// claim triple fields, ordered deterministically by id.
