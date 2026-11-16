@@ -2,96 +2,13 @@ use aver_core::{CandidateWrite, ClaimWrite, EventWrite, RecallQuery};
 use std::path::Path;
 
 use aver_core::retrieval::{DEFAULT_RECENCY_TAU_SECS, HybridWeights};
-use aver_core::vector::{DEFAULT_OPENAI_EMBEDDING_MODEL, EmbeddingClient, VectorIndexConfig};
 use aver_core::{
     AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, Error,
     PredicateWalk, RecallFilters, ReverifyWrite, ScopeWalk, Store,
 };
 use serde::{Deserialize, Serialize};
 
-/// Query-embedding client for hybrid recall (ADR-0004), built at the server
-/// edge. `None` keeps recall on the keyword path.
-pub type Embedder = Box<dyn EmbeddingClient + Send + Sync>;
-
-/// Reads the embedding configuration once. Returns the client (if enabled)
-/// and the model label recorded on vector chunks.
-///
-/// - Default provider (`AVER_EMBEDDING_PROVIDER` unset or `ollama`):
-///   `AVER_EMBEDDING_URL` (an Ollama base URL) opts in; `AVER_EMBEDDING_MODEL`
-///   overrides the [`VectorIndexConfig`] default model.
-/// - `AVER_EMBEDDING_PROVIDER=openai`: an OpenAI-compatible endpoint.
-///   `AVER_EMBEDDING_URL` defaults to `https://api.openai.com/v1`,
-///   `AVER_EMBEDDING_MODEL` to `text-embedding-3-small`, and the API key is
-///   read from the variable named by `AVER_EMBEDDING_API_KEY_ENV` (default
-///   `OPENAI_API_KEY`). Vectors are requested at
-///   [`aver_core::VECTOR_INDEX_DIM`].
-///
-/// A misconfigured provider is reported on stderr (never with the key) and
-/// leaves recall on the keyword path.
-pub fn embedding_from_env() -> (Option<Embedder>, String) {
-    embedding_from_vars(|name| std::env::var(name).ok())
-}
-
-/// [`embedding_from_env`] over an arbitrary variable source.
-pub fn embedding_from_vars(vars: impl Fn(&str) -> Option<String>) -> (Option<Embedder>, String) {
-    let var = |name: &str| {
-        vars(name)
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    };
-    match var("AVER_EMBEDDING_PROVIDER").as_deref() {
-        None | Some("ollama") => {
-            let model = VectorIndexConfig::from_optional_config(
-                None,
-                var("AVER_EMBEDDING_MODEL").as_deref(),
-            )
-            .unwrap_or_default()
-            .embedding_model;
-            (ollama_embedder(var("AVER_EMBEDDING_URL"), &model), model)
-        }
-        Some("openai") => {
-            let model = var("AVER_EMBEDDING_MODEL")
-                .unwrap_or_else(|| DEFAULT_OPENAI_EMBEDDING_MODEL.to_string());
-            let key_var =
-                var("AVER_EMBEDDING_API_KEY_ENV").unwrap_or_else(|| "OPENAI_API_KEY".to_string());
-            let embedder = match var(&key_var) {
-                Some(api_key) => openai_embedder(
-                    var("AVER_EMBEDDING_URL")
-                        .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
-                    &model,
-                    api_key,
-                ),
-                None => {
-                    // Settings are never echoed: a key pasted into the wrong
-                    // variable must not reach stderr and the parent's logs.
-                    eprintln!(
-                        "aver-server: AVER_EMBEDDING_PROVIDER=openai but the variable named by AVER_EMBEDDING_API_KEY_ENV (default OPENAI_API_KEY) is not set, using keyword recall"
-                    );
-                    None
-                }
-            };
-            (embedder, model)
-        }
-        Some(_) => {
-            eprintln!(
-                "aver-server: unknown AVER_EMBEDDING_PROVIDER (expected ollama or openai), using keyword recall"
-            );
-            (None, VectorIndexConfig::default().embedding_model)
-        }
-    }
-}
-
-fn openai_embedder(url: String, model: &str, api_key: String) -> Option<Embedder> {
-    Some(Box::new(
-        aver_core::vector::OpenAiEmbeddingClient::new(
-            url,
-            model,
-            aver_core::VECTOR_INDEX_DIM,
-            api_key,
-        )
-        .with_timeout(aver_core::vector::embedding_timeout_from_env()),
-    ))
-}
+pub use aver_core::vector::{Embedder, embedding_from_env, embedding_from_vars};
 
 /// Reads the opt-in recall recency term (ADR-0004) once:
 /// `AVER_RECALL_RECENCY_WEIGHT` (`w` in `[0, 1]`, default `0` = off) and
@@ -154,15 +71,6 @@ pub fn evidence_half_life_from_env() -> f64 {
             0.0
         }
     }
-}
-
-fn ollama_embedder(url: Option<String>, model: &str) -> Option<Embedder> {
-    url.map(|url| {
-        Box::new(
-            aver_core::vector::OllamaEmbeddingClient::new(url, model)
-                .with_timeout(aver_core::vector::embedding_timeout_from_env()),
-        ) as Embedder
-    })
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]

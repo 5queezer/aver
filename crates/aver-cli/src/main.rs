@@ -195,6 +195,9 @@ enum Command {
     /// Run the on-demand consolidation pass.
     Consolidate,
 
+    /// Embed stored vector chunks that do not have an embedding yet.
+    Backfill,
+
     /// Compact the SQLite database (ADR-0019 §2).
     Vacuum {
         /// Run ANALYZE after vacuum to refresh planner stats.
@@ -549,6 +552,17 @@ fn main() -> anyhow::Result<()> {
             );
         }
 
+        Command::Backfill => {
+            let (embedder, _) = aver_core::vector::embedding_from_env();
+            let Some(embedder) = embedder else {
+                anyhow::bail!(
+                    "no embedding provider configured; set AVER_EMBEDDING_URL or configure AVER_EMBEDDING_PROVIDER=openai"
+                );
+            };
+            let (embedded, indexed, total) = backfill_counts(&store, embedder.as_ref())?;
+            println!("backfill: embedded={embedded} indexed={indexed} total={total}");
+        }
+
         Command::Vacuum { .. } | Command::Replay { .. } | Command::Extract { .. } => {
             unreachable!("vacuum, replay and extract are dispatched before opening the store")
         }
@@ -556,6 +570,46 @@ fn main() -> anyhow::Result<()> {
 
     store.close()?;
     Ok(())
+}
+
+fn backfill_counts(
+    store: &Store,
+    embedder: &dyn aver_core::vector::EmbeddingClient,
+) -> anyhow::Result<(usize, usize, usize)> {
+    let embedded = store.backfill_vector_embeddings(embedder)?;
+    let (indexed, total) = store.vector_chunk_embedding_status()?;
+    Ok((embedded, indexed, total))
+}
+
+#[cfg(test)]
+mod backfill_tests {
+    use super::*;
+    use aver_core::vector::MockEmbeddingClient;
+
+    #[test]
+    fn backfill_command_fills_missing_vectors_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = Cli::try_parse_from([
+            "aver",
+            "--memory-dir",
+            dir.path().to_str().unwrap(),
+            "backfill",
+        ])
+        .unwrap();
+        assert!(matches!(cli.command, Command::Backfill));
+
+        let store = Store::open(dir.path()).unwrap();
+        let claim_id = store
+            .add_claim(ClaimWrite::new("aver", "stores", "vectors", "test"))
+            .unwrap();
+        store
+            .add_vector_chunk(claim_id, "aver stores vectors", "test-embedding")
+            .unwrap();
+        let embedder = MockEmbeddingClient::new(vec![1.0, 0.0, 0.0]);
+
+        assert_eq!(backfill_counts(&store, &embedder).unwrap(), (1, 1, 1));
+        assert_eq!(backfill_counts(&store, &embedder).unwrap(), (0, 1, 1));
+    }
 }
 
 fn run_extract(

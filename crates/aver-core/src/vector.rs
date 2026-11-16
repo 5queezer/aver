@@ -58,6 +58,75 @@ pub trait EmbeddingClient {
     fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError>;
 }
 
+pub type Embedder = Box<dyn EmbeddingClient + Send + Sync>;
+
+/// Reads the shared CLI/server embedding configuration once. Returns the
+/// client (if enabled) and the model label recorded on vector chunks.
+///
+/// - Default provider (`AVER_EMBEDDING_PROVIDER` unset or `ollama`):
+///   `AVER_EMBEDDING_URL` (an Ollama base URL) opts in; `AVER_EMBEDDING_MODEL`
+///   overrides the [`VectorIndexConfig`] default model.
+/// - `AVER_EMBEDDING_PROVIDER=openai`: an OpenAI-compatible endpoint.
+///   `AVER_EMBEDDING_URL` defaults to `https://api.openai.com/v1`,
+///   `AVER_EMBEDDING_MODEL` to `text-embedding-3-small`, and the API key is
+///   read from the variable named by `AVER_EMBEDDING_API_KEY_ENV` (default
+///   `OPENAI_API_KEY`). Vectors are requested at
+///   [`crate::VECTOR_INDEX_DIM`].
+///
+/// A misconfigured provider is reported on stderr (never with the key).
+pub fn embedding_from_env() -> (Option<Embedder>, String) {
+    embedding_from_vars(|name| std::env::var(name).ok())
+}
+
+/// [`embedding_from_env`] over an arbitrary variable source.
+pub fn embedding_from_vars(vars: impl Fn(&str) -> Option<String>) -> (Option<Embedder>, String) {
+    let var = |name: &str| {
+        vars(name)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    match var("AVER_EMBEDDING_PROVIDER").as_deref() {
+        None | Some("ollama") => {
+            let model = VectorIndexConfig::from_optional_config(
+                None,
+                var("AVER_EMBEDDING_MODEL").as_deref(),
+            )
+            .unwrap_or_default()
+            .embedding_model;
+            (ollama_embedder(var("AVER_EMBEDDING_URL"), &model), model)
+        }
+        Some("openai") => {
+            let model = var("AVER_EMBEDDING_MODEL")
+                .unwrap_or_else(|| DEFAULT_OPENAI_EMBEDDING_MODEL.to_string());
+            let key_var =
+                var("AVER_EMBEDDING_API_KEY_ENV").unwrap_or_else(|| "OPENAI_API_KEY".to_string());
+            let embedder = match var(&key_var) {
+                Some(api_key) => openai_embedder(
+                    var("AVER_EMBEDDING_URL")
+                        .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+                    &model,
+                    api_key,
+                ),
+                None => {
+                    // Settings are never echoed: a key pasted into the wrong
+                    // variable must not reach stderr and the parent's logs.
+                    eprintln!(
+                        "aver: AVER_EMBEDDING_PROVIDER=openai but the variable named by AVER_EMBEDDING_API_KEY_ENV (default OPENAI_API_KEY) is not set, using keyword recall"
+                    );
+                    None
+                }
+            };
+            (embedder, model)
+        }
+        Some(_) => {
+            eprintln!(
+                "aver: unknown AVER_EMBEDDING_PROVIDER (expected ollama or openai), using keyword recall"
+            );
+            (None, VectorIndexConfig::default().embedding_model)
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MockEmbeddingClient {
     embedding: Vec<f32>,
@@ -386,6 +455,20 @@ impl EmbeddingClient for OpenAiEmbeddingClient {
         }
         Ok(embedding)
     }
+}
+
+fn openai_embedder(url: String, model: &str, api_key: String) -> Option<Embedder> {
+    Some(Box::new(
+        OpenAiEmbeddingClient::new(url, model, crate::VECTOR_INDEX_DIM, api_key)
+            .with_timeout(embedding_timeout_from_env()),
+    ))
+}
+
+fn ollama_embedder(url: Option<String>, model: &str) -> Option<Embedder> {
+    url.map(|url| {
+        Box::new(OllamaEmbeddingClient::new(url, model).with_timeout(embedding_timeout_from_env()))
+            as Embedder
+    })
 }
 
 #[cfg(test)]
