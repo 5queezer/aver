@@ -120,6 +120,55 @@ async fn mcp_call_tool(
 }
 
 #[tokio::test]
+async fn retire_claim_over_mcp_invalidates_the_stored_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_db_path = dir.path().join("auth.db");
+    let db = AuthDb::open(&auth_db_path).unwrap();
+    db.store_access_token_hash(
+        &aver_server::auth::hash_token(BEARER),
+        "user-1",
+        &["claims:read".to_string(), "claims:write".to_string()],
+    )
+    .unwrap();
+    drop(db);
+    let app = build_router(base_config(&dir, &auth_db_path)).unwrap();
+    let session = mcp_open_session(&app).await;
+
+    let written = mcp_call_tool(
+        &app,
+        &session,
+        "remember_claim",
+        serde_json::json!({
+            "subject": "synthetic-service",
+            "predicate": "uses",
+            "object": "synthetic-dependency",
+        }),
+    )
+    .await;
+    let claim: serde_json::Value =
+        serde_json::from_str(written["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    let claim_id = claim["id"].as_i64().unwrap();
+
+    let retired = mcp_call_tool(
+        &app,
+        &session,
+        "retire_claim",
+        serde_json::json!({"claim_id": claim_id, "reason": "synthetic cleanup"}),
+    )
+    .await;
+    let result: serde_json::Value =
+        serde_json::from_str(retired["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(result["claim_id"], claim_id);
+    assert_eq!(result["status"], "INVALIDATED");
+
+    let store = aver_core::Store::open(dir.path().join("memory")).unwrap();
+    assert_eq!(
+        store.get_claim(claim_id).unwrap().status,
+        aver_core::ClaimStatus::Invalidated
+    );
+}
+
+#[tokio::test]
 async fn two_concurrent_sessions_write_into_one_shared_store() {
     let dir = tempfile::tempdir().unwrap();
     let auth_db_path = dir.path().join("auth.db");

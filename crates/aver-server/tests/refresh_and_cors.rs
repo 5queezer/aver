@@ -1,5 +1,10 @@
 use aver_server::{auth::AuthDb, config::ServerConfig};
+use axum::{
+    body::Body,
+    http::{Method, Request, header},
+};
 use rusqlite::Connection;
+use tower::ServiceExt;
 
 #[test]
 fn auth_code_exchange_issues_refresh_token_and_allows_refresh_grant() {
@@ -273,5 +278,91 @@ fn server_config_reads_comma_separated_cors_origins_from_env() {
             "http://localhost:3000".to_string(),
             "https://claude.ai".to_string()
         ]
+    );
+}
+
+#[tokio::test]
+async fn unset_cors_origins_allow_any_on_loopback_and_only_base_url_elsewhere() {
+    for (host, base_url, allowed, expected_origin) in [
+        (
+            "127.0.0.1",
+            "http://127.0.0.1:3317",
+            "https://client.example",
+            "*",
+        ),
+        (
+            "0.0.0.0",
+            "https://memory.example",
+            "https://memory.example",
+            "https://memory.example",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let app = aver_server::http::build_router(ServerConfig {
+            host: host.to_string(),
+            port: 3317,
+            base_url: base_url.to_string(),
+            memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
+            auth_db_path: dir.path().join("auth.db").to_string_lossy().to_string(),
+            cors_origins: Vec::new(),
+            trusted_auth_header: None,
+        })
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/mcp")
+                    .header(header::ORIGIN, allowed)
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            expected_origin
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let app = aver_server::http::build_router(ServerConfig {
+        host: "0.0.0.0".to_string(),
+        port: 3317,
+        base_url: "https://memory.example".to_string(),
+        memory_dir: dir.path().join("memory").to_string_lossy().to_string(),
+        auth_db_path: dir.path().join("auth.db").to_string_lossy().to_string(),
+        cors_origins: Vec::new(),
+        trusted_auth_header: None,
+    })
+    .unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/mcp")
+                .header(header::ORIGIN, "https://client.example")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "https://memory.example",
+        "a disallowed origin must not be reflected or replaced by a wildcard"
     );
 }

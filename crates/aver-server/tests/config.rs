@@ -11,8 +11,10 @@ const ENV_VARS: &[&str] = &[
     "AVER_MEMORY_DIR",
     "AVER_AUTH_DB_PATH",
     "AVER_CORS_ORIGINS",
-    "AVER_LOCAL_AUTHORIZATION_TOKEN",
     "AVER_TRUSTED_AUTH_HEADER",
+    "AVER_RECALL_RECENCY_WEIGHT",
+    "AVER_RECALL_RECENCY_TAU_DAYS",
+    "AVER_RECALL_EVIDENCE_HALF_LIFE",
 ];
 
 fn clear_env() {
@@ -101,6 +103,40 @@ fn auth_db_path_defaults_under_default_memory_dir() {
 
     assert_eq!(config.memory_dir, ".aver");
     assert_eq!(config.auth_db_path, ".aver/auth.db");
+
+    clear_env();
+}
+
+#[test]
+fn server_config_defaults_to_loopback_port_and_derived_base_url() {
+    let _guard = ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    clear_env();
+
+    let config = ServerConfig::from_env().unwrap();
+
+    assert_eq!(config.host, "127.0.0.1");
+    assert_eq!(config.port, 3317);
+    assert_eq!(config.base_url, "http://127.0.0.1:3317");
+
+    clear_env();
+}
+
+#[test]
+fn recall_ranking_reads_recency_tau_and_evidence_half_life_from_env() {
+    let _guard = ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    clear_env();
+    unsafe {
+        std::env::set_var("AVER_RECALL_RECENCY_WEIGHT", "0.25");
+        std::env::set_var("AVER_RECALL_RECENCY_TAU_DAYS", "2.5");
+        std::env::set_var("AVER_RECALL_EVIDENCE_HALF_LIFE", "3");
+    }
+
+    assert_eq!(aver_server::tools::recency_from_env(), (0.25, 216_000.0));
+    assert_eq!(aver_server::tools::evidence_half_life_from_env(), 3.0);
 
     clear_env();
 }
