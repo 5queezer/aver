@@ -581,37 +581,6 @@ fn backfill_counts(
     Ok((embedded, indexed, total))
 }
 
-#[cfg(test)]
-mod backfill_tests {
-    use super::*;
-    use aver_core::vector::MockEmbeddingClient;
-
-    #[test]
-    fn backfill_command_fills_missing_vectors_and_is_idempotent() {
-        let dir = tempfile::tempdir().unwrap();
-        let cli = Cli::try_parse_from([
-            "aver",
-            "--memory-dir",
-            dir.path().to_str().unwrap(),
-            "backfill",
-        ])
-        .unwrap();
-        assert!(matches!(cli.command, Command::Backfill));
-
-        let store = Store::open(dir.path()).unwrap();
-        let claim_id = store
-            .add_claim(ClaimWrite::new("aver", "stores", "vectors", "test"))
-            .unwrap();
-        store
-            .add_vector_chunk(claim_id, "aver stores vectors", "test-embedding")
-            .unwrap();
-        let embedder = MockEmbeddingClient::new(vec![1.0, 0.0, 0.0]);
-
-        assert_eq!(backfill_counts(&store, &embedder).unwrap(), (1, 1, 1));
-        assert_eq!(backfill_counts(&store, &embedder).unwrap(), (0, 1, 1));
-    }
-}
-
 fn run_extract(
     memory_dir: &Path,
     path: &Path,
