@@ -1,0 +1,1170 @@
+{
+  "arms": [
+    {
+      "aggregates": {
+        "fallback_rate": null,
+        "mean_answer_quality": 0.85,
+        "mean_evidence_coverage": 0.8375,
+        "mean_evidence_precision": 0.4,
+        "mean_latency_micros": 2215.9,
+        "mean_payload_tokens": 34.0,
+        "ok_questions": 20,
+        "p95_latency_micros": 2408,
+        "total_payload_tokens": 680
+      },
+      "arm": "hybrid",
+      "questions": [
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.2,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2160,
+          "payload_tokens": 42,
+          "query": "What database does billing-service use?",
+          "ranked_indices": [
+            11,
+            6,
+            1,
+            32,
+            10
+          ],
+          "route": "single"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.2,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2224,
+          "payload_tokens": 42,
+          "query": "What language is auth-service written in?",
+          "ranked_indices": [
+            12,
+            2,
+            14,
+            27,
+            29
+          ],
+          "route": "single"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.2,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2171,
+          "payload_tokens": 42,
+          "query": "What message queue does notification-service use?",
+          "ranked_indices": [
+            10,
+            29,
+            11,
+            6,
+            12
+          ],
+          "route": "single"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.2,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2073,
+          "payload_tokens": 42,
+          "query": "Where is checkout-service deployed?",
+          "ranked_indices": [
+            13,
+            7,
+            8,
+            0,
+            17
+          ],
+          "route": "single"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.2,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2126,
+          "payload_tokens": 42,
+          "query": "What search engine does search-indexer use?",
+          "ranked_indices": [
+            22,
+            16,
+            9,
+            4,
+            21
+          ],
+          "route": "single"
+        },
+        {
+          "answer_quality": 0.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 0.0,
+          "evidence_precision": 0.0,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2260,
+          "payload_tokens": 10,
+          "query": "What is the latest Stripe API version used by checkout-service?",
+          "ranked_indices": [
+            17
+          ],
+          "route": "temporal"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2098,
+          "payload_tokens": 10,
+          "query": "When did api-gateway switch to envoy?",
+          "ranked_indices": [
+            20
+          ],
+          "route": "temporal"
+        },
+        {
+          "answer_quality": 0.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 0.0,
+          "evidence_precision": 0.0,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2115,
+          "payload_tokens": 10,
+          "query": "What changed in deploy-pipeline recently?",
+          "ranked_indices": [
+            23
+          ],
+          "route": "temporal"
+        },
+        {
+          "answer_quality": 0.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 0.0,
+          "evidence_precision": 0.0,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2408,
+          "payload_tokens": 10,
+          "query": "What was the most recent incident affecting checkout-service?",
+          "ranked_indices": [
+            27
+          ],
+          "route": "temporal"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2382,
+          "payload_tokens": 10,
+          "query": "Which Stripe API version was checkout-service using before the migration?",
+          "ranked_indices": [
+            17
+          ],
+          "route": "temporal"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.4,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2300,
+          "payload_tokens": 42,
+          "query": "What database do checkout-service and billing-service both depend on?",
+          "ranked_indices": [
+            6,
+            7,
+            8,
+            13,
+            11
+          ],
+          "route": "intersection"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 0.75,
+          "evidence_precision": 0.6,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2387,
+          "payload_tokens": 42,
+          "query": "What services are owned by platform-team and deployed on kubernetes-cluster-eu?",
+          "ranked_indices": [
+            14,
+            13,
+            15,
+            26,
+            2
+          ],
+          "route": "intersection"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.4,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2280,
+          "payload_tokens": 42,
+          "query": "What monitoring tool is shared between api-gateway and search-indexer?",
+          "ranked_indices": [
+            22,
+            21,
+            19,
+            16,
+            9
+          ],
+          "route": "intersection"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.4,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2438,
+          "payload_tokens": 42,
+          "query": "What do checkout-service and notification-service have in common?",
+          "ranked_indices": [
+            10,
+            7,
+            8,
+            0,
+            17
+          ],
+          "route": "intersection"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.4,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2167,
+          "payload_tokens": 42,
+          "query": "List all services owned by payments-team.",
+          "ranked_indices": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "route": "list"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.6,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2061,
+          "payload_tokens": 42,
+          "query": "Which services depend on kafka?",
+          "ranked_indices": [
+            8,
+            10,
+            9,
+            36,
+            6
+          ],
+          "route": "list"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.8,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2110,
+          "payload_tokens": 42,
+          "query": "What are the components of deploy-pipeline?",
+          "ranked_indices": [
+            26,
+            23,
+            25,
+            24,
+            34
+          ],
+          "route": "list"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.4,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2220,
+          "payload_tokens": 42,
+          "query": "Enumerate incidents caused by stripe-api-v3-migration.",
+          "ranked_indices": [
+            30,
+            33,
+            18,
+            17,
+            19
+          ],
+          "route": "list"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.6,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2118,
+          "payload_tokens": 42,
+          "query": "How many services does platform-team own?",
+          "ranked_indices": [
+            2,
+            3,
+            4,
+            0,
+            1
+          ],
+          "route": "count"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.4,
+          "fallback_reason": null,
+          "fell_back": null,
+          "latency_micros": 2220,
+          "payload_tokens": 42,
+          "query": "How many services depend on postgres?",
+          "ranked_indices": [
+            6,
+            7,
+            36,
+            8,
+            34
+          ],
+          "route": "count"
+        }
+      ],
+      "weights_summary": "for_query(query), recency off"
+    },
+    {
+      "aggregates": {
+        "fallback_rate": 0.05,
+        "mean_answer_quality": 1.0,
+        "mean_evidence_coverage": 0.9375,
+        "mean_evidence_precision": 0.6475,
+        "mean_latency_micros": 1449.4,
+        "mean_payload_tokens": 78.0,
+        "ok_questions": 20,
+        "p95_latency_micros": 2487,
+        "total_payload_tokens": 1560
+      },
+      "arm": "graph_first",
+      "questions": [
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.2,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1046,
+          "payload_tokens": 122,
+          "query": "What database does billing-service use?",
+          "ranked_indices": [
+            11,
+            1,
+            6,
+            32,
+            0
+          ],
+          "route": "single"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.2,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 865,
+          "payload_tokens": 122,
+          "query": "What language is auth-service written in?",
+          "ranked_indices": [
+            12,
+            2,
+            14,
+            3,
+            26
+          ],
+          "route": "single"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.25,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 608,
+          "payload_tokens": 98,
+          "query": "What message queue does notification-service use?",
+          "ranked_indices": [
+            10,
+            8,
+            9,
+            35
+          ],
+          "route": "single"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.2,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1436,
+          "payload_tokens": 122,
+          "query": "Where is checkout-service deployed?",
+          "ranked_indices": [
+            13,
+            14,
+            26,
+            15,
+            0
+          ],
+          "route": "single"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.2,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 965,
+          "payload_tokens": 122,
+          "query": "What search engine does search-indexer use?",
+          "ranked_indices": [
+            16,
+            10,
+            4,
+            9,
+            22
+          ],
+          "route": "single"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1641,
+          "payload_tokens": 26,
+          "query": "What is the latest Stripe API version used by checkout-service?",
+          "ranked_indices": [
+            18
+          ],
+          "route": "temporal"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1067,
+          "payload_tokens": 26,
+          "query": "When did api-gateway switch to envoy?",
+          "ranked_indices": [
+            20
+          ],
+          "route": "temporal"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 763,
+          "payload_tokens": 26,
+          "query": "What changed in deploy-pipeline recently?",
+          "ranked_indices": [
+            24
+          ],
+          "route": "temporal"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 0.0,
+          "evidence_precision": 0.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1374,
+          "payload_tokens": 26,
+          "query": "What was the most recent incident affecting checkout-service?",
+          "ranked_indices": [
+            31
+          ],
+          "route": "temporal"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": "temporal_constraint",
+          "fell_back": true,
+          "latency_micros": 2630,
+          "payload_tokens": 10,
+          "query": "Which Stripe API version was checkout-service using before the migration?",
+          "ranked_indices": [
+            17
+          ],
+          "route": "temporal"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.4,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1713,
+          "payload_tokens": 122,
+          "query": "What database do checkout-service and billing-service both depend on?",
+          "ranked_indices": [
+            6,
+            7,
+            0,
+            1,
+            34
+          ],
+          "route": "intersection"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 0.75,
+          "evidence_precision": 0.6,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 2487,
+          "payload_tokens": 122,
+          "query": "What services are owned by platform-team and deployed on kubernetes-cluster-eu?",
+          "ranked_indices": [
+            0,
+            1,
+            2,
+            3,
+            14
+          ],
+          "route": "intersection"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.4,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1328,
+          "payload_tokens": 122,
+          "query": "What monitoring tool is shared between api-gateway and search-indexer?",
+          "ranked_indices": [
+            21,
+            22,
+            3,
+            4,
+            2
+          ],
+          "route": "intersection"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.5,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1351,
+          "payload_tokens": 98,
+          "query": "What do checkout-service and notification-service have in common?",
+          "ranked_indices": [
+            8,
+            10,
+            9,
+            35
+          ],
+          "route": "intersection"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1860,
+          "payload_tokens": 50,
+          "query": "List all services owned by payments-team.",
+          "ranked_indices": [
+            0,
+            1
+          ],
+          "route": "list"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 2003,
+          "payload_tokens": 74,
+          "query": "Which services depend on kafka?",
+          "ranked_indices": [
+            8,
+            10,
+            9
+          ],
+          "route": "list"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 877,
+          "payload_tokens": 98,
+          "query": "What are the components of deploy-pipeline?",
+          "ranked_indices": [
+            23,
+            25,
+            26,
+            24
+          ],
+          "route": "list"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 905,
+          "payload_tokens": 50,
+          "query": "Enumerate incidents caused by stripe-api-v3-migration.",
+          "ranked_indices": [
+            30,
+            33
+          ],
+          "route": "list"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": true,
+          "count_value": 3,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 2186,
+          "payload_tokens": 74,
+          "query": "How many services does platform-team own?",
+          "ranked_indices": [
+            2,
+            3,
+            4
+          ],
+          "route": "count"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": true,
+          "count_value": 2,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1883,
+          "payload_tokens": 50,
+          "query": "How many services depend on postgres?",
+          "ranked_indices": [
+            6,
+            7
+          ],
+          "route": "count"
+        }
+      ],
+      "weights_summary": "for_query(query), recency off"
+    },
+    {
+      "aggregates": {
+        "fallback_rate": 0.05,
+        "mean_answer_quality": 0.95,
+        "mean_evidence_coverage": 0.875,
+        "mean_evidence_precision": 0.5875,
+        "mean_latency_micros": 1477.7,
+        "mean_payload_tokens": 78.0,
+        "ok_questions": 20,
+        "p95_latency_micros": 2522,
+        "total_payload_tokens": 1560
+      },
+      "arm": "graph_first_recency",
+      "questions": [
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.2,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 986,
+          "payload_tokens": 122,
+          "query": "What database does billing-service use?",
+          "ranked_indices": [
+            11,
+            32,
+            1,
+            6,
+            33
+          ],
+          "route": "single"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.2,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 849,
+          "payload_tokens": 122,
+          "query": "What language is auth-service written in?",
+          "ranked_indices": [
+            12,
+            14,
+            2,
+            4,
+            13
+          ],
+          "route": "single"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.25,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 598,
+          "payload_tokens": 98,
+          "query": "What message queue does notification-service use?",
+          "ranked_indices": [
+            10,
+            35,
+            9,
+            8
+          ],
+          "route": "single"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.2,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1441,
+          "payload_tokens": 122,
+          "query": "Where is checkout-service deployed?",
+          "ranked_indices": [
+            13,
+            15,
+            14,
+            26,
+            29
+          ],
+          "route": "single"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.2,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 997,
+          "payload_tokens": 122,
+          "query": "What search engine does search-indexer use?",
+          "ranked_indices": [
+            16,
+            10,
+            9,
+            22,
+            4
+          ],
+          "route": "single"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1790,
+          "payload_tokens": 26,
+          "query": "What is the latest Stripe API version used by checkout-service?",
+          "ranked_indices": [
+            18
+          ],
+          "route": "temporal"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1379,
+          "payload_tokens": 26,
+          "query": "When did api-gateway switch to envoy?",
+          "ranked_indices": [
+            20
+          ],
+          "route": "temporal"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 837,
+          "payload_tokens": 26,
+          "query": "What changed in deploy-pipeline recently?",
+          "ranked_indices": [
+            24
+          ],
+          "route": "temporal"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 0.0,
+          "evidence_precision": 0.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1385,
+          "payload_tokens": 26,
+          "query": "What was the most recent incident affecting checkout-service?",
+          "ranked_indices": [
+            31
+          ],
+          "route": "temporal"
+        },
+        {
+          "answer_quality": 0.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 0.0,
+          "evidence_precision": 0.0,
+          "fallback_reason": "temporal_constraint",
+          "fell_back": true,
+          "latency_micros": 2575,
+          "payload_tokens": 10,
+          "query": "Which Stripe API version was checkout-service using before the migration?",
+          "ranked_indices": [
+            18
+          ],
+          "route": "temporal"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.4,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1614,
+          "payload_tokens": 122,
+          "query": "What database do checkout-service and billing-service both depend on?",
+          "ranked_indices": [
+            7,
+            6,
+            0,
+            1,
+            33
+          ],
+          "route": "intersection"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 0.5,
+          "evidence_precision": 0.4,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 2522,
+          "payload_tokens": 122,
+          "query": "What services are owned by platform-team and deployed on kubernetes-cluster-eu?",
+          "ranked_indices": [
+            4,
+            13,
+            15,
+            14,
+            26
+          ],
+          "route": "intersection"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.4,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1345,
+          "payload_tokens": 122,
+          "query": "What monitoring tool is shared between api-gateway and search-indexer?",
+          "ranked_indices": [
+            21,
+            22,
+            4,
+            3,
+            13
+          ],
+          "route": "intersection"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 0.5,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1384,
+          "payload_tokens": 98,
+          "query": "What do checkout-service and notification-service have in common?",
+          "ranked_indices": [
+            10,
+            8,
+            35,
+            9
+          ],
+          "route": "intersection"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 2148,
+          "payload_tokens": 50,
+          "query": "List all services owned by payments-team.",
+          "ranked_indices": [
+            0,
+            1
+          ],
+          "route": "list"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 2010,
+          "payload_tokens": 74,
+          "query": "Which services depend on kafka?",
+          "ranked_indices": [
+            9,
+            10,
+            8
+          ],
+          "route": "list"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 879,
+          "payload_tokens": 98,
+          "query": "What are the components of deploy-pipeline?",
+          "ranked_indices": [
+            24,
+            25,
+            26,
+            23
+          ],
+          "route": "list"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": null,
+          "count_value": null,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 925,
+          "payload_tokens": 50,
+          "query": "Enumerate incidents caused by stripe-api-v3-migration.",
+          "ranked_indices": [
+            33,
+            30
+          ],
+          "route": "list"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": true,
+          "count_value": 3,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 2011,
+          "payload_tokens": 74,
+          "query": "How many services does platform-team own?",
+          "ranked_indices": [
+            4,
+            2,
+            3
+          ],
+          "route": "count"
+        },
+        {
+          "answer_quality": 1.0,
+          "count_correct": true,
+          "count_value": 2,
+          "evidence_coverage": 1.0,
+          "evidence_precision": 1.0,
+          "fallback_reason": null,
+          "fell_back": false,
+          "latency_micros": 1879,
+          "payload_tokens": 50,
+          "query": "How many services depend on postgres?",
+          "ranked_indices": [
+            7,
+            6
+          ],
+          "route": "count"
+        }
+      ],
+      "weights_summary": "for_query(query) + recency w=0.08, tau=7776000s"
+    }
+  ],
+  "claim_count": 37,
+  "event_count": 37,
+  "fixture_name": "graph_first_ops",
+  "now": 1794873600,
+  "question_count": 20,
+  "recency_tau_secs": 7776000.0,
+  "recency_weight": 0.08
+}
