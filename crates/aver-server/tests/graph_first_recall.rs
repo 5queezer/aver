@@ -119,3 +119,65 @@ fn recall_rejects_an_unknown_mode() {
 
     assert!(err.to_string().contains("invalid mode"), "{err}");
 }
+
+#[test]
+fn graph_first_never_returns_claims_or_events_from_a_foreign_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path()).unwrap();
+    let event_b = tools
+        .record_event(params(json!({
+            "session_id": "s", "kind": "decision", "payload": "b only", "scope": "proj/b",
+        })))
+        .unwrap();
+    let a = tools
+        .add_triple(params(json!({
+            "subject": "PaymentGateway", "predicate": "depends_on", "object": "StripeSDK",
+            "source": "test", "scope": "proj/a",
+        })))
+        .unwrap();
+    tools
+        .add_triple(params(json!({
+            "subject": "PaymentGateway", "predicate": "depends_on", "object": "AdyenSDK",
+            "source": "test", "scope": "proj/b", "event_id": event_b.id,
+        })))
+        .unwrap();
+    tools
+        .add_triple(params(json!({
+            "subject": "SecretVault", "predicate": "depends_on", "object": "AdyenSDK",
+            "source": "test", "scope": "proj/b",
+        })))
+        .unwrap();
+    let scoped = |query: &str| {
+        recall(
+            &tools,
+            json!({"query": query, "mode": "graph_first", "scope": "proj/a", "scope_walk": "exact"}),
+        )
+    };
+
+    let view = scoped("what does PaymentGateway depend on");
+    let foreign = scoped("what does SecretVault depend on");
+
+    assert_eq!(view["retrieval"], "graph_first");
+    let triple_ids: Vec<i64> = view["triples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(triple_ids, vec![a.triple_id]);
+    for edge in view["subgraph"]["edges"].as_array().unwrap() {
+        assert_eq!(edge["scope"], "proj/a", "{view}");
+    }
+    assert_eq!(view["graph_first"]["events"], json!([]));
+    // SecretVault exists only in proj/b, so graph-first has no anchor and
+    // the scoped default path answers: whatever it returns is from proj/a.
+    assert_eq!(foreign["graph_first"]["fallback"], "no_anchor", "{foreign}");
+    for claim in foreign["triples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(foreign["subgraph"]["edges"].as_array().unwrap())
+    {
+        assert_eq!(claim["scope"], "proj/a", "{foreign}");
+    }
+}

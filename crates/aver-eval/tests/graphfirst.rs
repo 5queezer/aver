@@ -125,8 +125,9 @@ fn comparison_report_shape_and_hybrid_baseline() {
 
 /// The graph-first arms run the real ADR-0033 entry point. The temporal
 /// assertions pin *characterized* behavior — Q6 was a review finding fixed
-/// in a2ce61f, Q10 is the remaining before/after-semantics limitation —
-/// and must change loudly if core regresses. The report is the verdict.
+/// in a2ce61f, Q10 (before the migration) now falls back to hybrid with
+/// `temporal_constraint` — and must change loudly if core regresses. The
+/// report is the verdict.
 #[test]
 fn graph_first_arms_run_the_real_entry_point() {
     let fixture = fixture();
@@ -134,9 +135,22 @@ fn graph_first_arms_run_the_real_entry_point() {
 
     for arm in &report.arms[1..] {
         assert_eq!(arm.aggregates.ok_questions, 20);
-        // Every routed question names an anchor, so nothing falls back.
-        assert_eq!(arm.aggregates.fallback_rate, Some(0.0));
-        assert!(arm.questions.iter().all(|row| row.fell_back == Some(false)));
+        // Every question names an anchor; only the one temporal question
+        // relative to an event (Q10, "before the migration") falls back.
+        assert_eq!(arm.aggregates.fallback_rate, Some(0.05));
+        let fell_back: Vec<(&str, Option<&str>)> = arm
+            .questions
+            .iter()
+            .filter(|row| row.fell_back == Some(true))
+            .map(|row| (row.query.as_str(), row.fallback_reason.as_deref()))
+            .collect();
+        assert_eq!(
+            fell_back,
+            vec![(
+                "Which Stripe API version was checkout-service using before the migration?",
+                Some("temporal_constraint")
+            )]
+        );
         // Graph-first returns evidence-bearing payloads everywhere.
         assert!(arm.questions.iter().all(|row| row.payload_tokens > 0));
     }
@@ -155,14 +169,18 @@ fn graph_first_arms_run_the_real_entry_point() {
     assert_eq!(latest.ranked_indices.first(), Some(&18));
     assert_eq!(latest.answer_quality, 1.0);
     assert_eq!(latest.evidence_coverage, 1.0);
-    // Q10 (before the migration): still no before/after semantics — the
-    // temporal route sorts newest-first, so the CURRENT version wins and
-    // the stale-but-correct claim 17 loses. Hybrid answers this one
-    // correctly; the limitation is documented in the report.
-    let before =
-        by_query("Which Stripe API version was checkout-service using before the migration?");
-    assert_eq!(before.ranked_indices.first(), Some(&18));
-    assert_eq!(before.answer_quality, 0.0);
+    // Q10 (before the migration): word cues cannot place "before X", so
+    // graph-first declines and the hybrid fallback answers, as well as the
+    // hybrid arm does (it ranked the CURRENT version first before this).
+    let q10 = "Which Stripe API version was checkout-service using before the migration?";
+    let before = by_query(q10);
+    let hybrid_before = report.arms[0]
+        .questions
+        .iter()
+        .find(|row| row.query == q10)
+        .expect("query present");
+    assert_eq!(before.ranked_indices, hybrid_before.ranked_indices);
+    assert_eq!(before.answer_quality, hybrid_before.answer_quality);
 
     // Count questions get an exact count from the graph-first arms (the
     // generic-noun anchor dilution was fixed in a2ce61f).

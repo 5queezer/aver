@@ -24,9 +24,14 @@ pub const LIST_LIMIT: usize = 25;
 
 const COUNT_CUES: &[&str] = &["count", "number"];
 const TEMPORAL_CUES: &[&str] = &[
-    "when", "latest", "recent", "recently", "last", "first", "before", "after", "since", "until",
-    "newest", "oldest", "history", "changed",
+    "when", "latest", "recent", "recently", "last", "first", "earliest", "before", "after",
+    "since", "until", "newest", "oldest", "history", "changed",
 ];
+/// Temporal cues that ask for the oldest claims first.
+const ASCENDING_CUES: &[&str] = &["first", "earliest", "oldest"];
+/// Temporal cues that place a time relative to an event; graph-first
+/// cannot resolve the event, so it falls back.
+const CONSTRAINT_CUES: &[&str] = &["before", "after", "since", "until"];
 const INTERSECTION_CUES: &[&str] = &["both", "and", "between", "common", "shared"];
 const LIST_CUES: &[&str] = &["list", "which", "all", "every", "enumerate"];
 const STOPWORDS: &[&str] = &[
@@ -68,6 +73,9 @@ const STOPWORDS: &[&str] = &[
     "there",
     "thing",
     "everything",
+    "have",
+    "has",
+    "had",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,6 +189,9 @@ pub enum GraphFirstFallback {
     NoAnchor,
     /// Anchors were found but the filters left no claim touching them.
     NoEdges,
+    /// A time relative to an event ("before the migration"), which word
+    /// cues cannot place.
+    TemporalConstraint,
 }
 
 impl GraphFirstFallback {
@@ -188,6 +199,7 @@ impl GraphFirstFallback {
         match self {
             Self::NoAnchor => "no_anchor",
             Self::NoEdges => "no_edges",
+            Self::TemporalConstraint => "temporal_constraint",
         }
     }
 }
@@ -274,6 +286,13 @@ impl Store {
         if anchors.is_empty() {
             return Ok(Err(GraphFirstFallback::NoAnchor));
         }
+        let route = route_query(query, anchors.len());
+        let query_words = words(query);
+        let has_word = |cues: &[&str]| query_words.iter().any(|w| cues.contains(&w.as_str()));
+        if route == QueryRoute::Temporal && has_word(CONSTRAINT_CUES) {
+            return Ok(Err(GraphFirstFallback::TemporalConstraint));
+        }
+        let ascending = has_word(ASCENDING_CUES);
         let (nodes, edges, reach, more_edges) =
             self.bounded_expand(&anchors, options.hops, filters)?;
         if edges.is_empty() {
@@ -329,7 +348,6 @@ impl Store {
         };
         let ts = |claim: &Claim| claim.valid_from.unwrap_or(claim.write_ts);
 
-        let route = route_query(query, anchors.len());
         let mut selected: Vec<&Edge> = edges.iter().collect();
         // List and count are about the best-named anchor(s): a type word such
         // as "services" also anchors every *-service entity, whose claims
@@ -356,7 +374,9 @@ impl Store {
                 .copied()
                 .filter(|e| matches(&e.claim) > 0)
                 .collect();
-            if !matching.is_empty() {
+            // A count whose content words match nothing is zero, not a
+            // count of everything near the anchor.
+            if !matching.is_empty() || (route == QueryRoute::Count && !content.is_empty()) {
                 selected = matching;
             }
         }
@@ -377,7 +397,12 @@ impl Store {
         let mut scored: Vec<(f64, &Edge)> = selected.into_iter().map(|e| (score(e), e)).collect();
         scored.sort_by(|(a_score, a), (b_score, b)| {
             let by_time = if route == QueryRoute::Temporal {
-                ts(&b.claim).cmp(&ts(&a.claim))
+                let newest_first = ts(&b.claim).cmp(&ts(&a.claim));
+                if ascending {
+                    newest_first.reverse()
+                } else {
+                    newest_first
+                }
             } else {
                 std::cmp::Ordering::Equal
             };
@@ -477,8 +502,18 @@ impl Store {
         // An entity whose matched words are a strict subset of another's is
         // not named by the query: in "PaymentGateway", "payment" belongs to
         // PaymentGateway, not team_payments.
+        // A fully matched entity survives when the query names it on its own:
+        // each of its words occurs more often than the longer names
+        // containing it ("billing and billing-worker" keeps billing).
         let sets: Vec<BTreeSet<String>> = ranked.iter().map(|(_, m, _)| m.clone()).collect();
-        ranked.retain(|(_, m, _)| !sets.iter().any(|other| m.is_subset(other) && m != other));
+        let occurrences = |word: &String| query_tokens.iter().filter(|t| *t == word).count();
+        ranked.retain(|(coverage, m, _)| {
+            let supersets = sets
+                .iter()
+                .filter(|other| m.is_subset(other) && m != *other)
+                .count();
+            supersets == 0 || (*coverage == 1.0 && m.iter().all(|w| occurrences(w) > supersets))
+        });
         ranked.sort_by(|a, b| {
             b.0.total_cmp(&a.0)
                 .then(b.1.len().cmp(&a.1.len()))
