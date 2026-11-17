@@ -6,6 +6,7 @@
 //! embeddings, answer generation, and judging.
 
 pub mod beam;
+pub mod graphfirst;
 pub mod recency;
 
 use anyhow::Result;
