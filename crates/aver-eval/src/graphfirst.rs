@@ -15,7 +15,7 @@
 //! Determinism: the store is seeded by replaying `record_event` / `add_claim`
 //! log lines with time-ordered ids (one source event per claim, linked via
 //! `event_id`), consolidated and embedded with
-//! [`HashedTokenEmbedder`](crate::recency::HashedTokenEmbedder), exactly as a
+//! [`HashedTokenEmbedder`], exactly as a
 //! live store would be. The clock is the fixture's `now`.
 //!
 //! Metrics per question and arm:
