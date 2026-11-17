@@ -164,6 +164,8 @@ pub struct ArmQueryOutcome {
     /// Graph-first arms only: routing produced no bounded candidate set and
     /// the caller fell back to hybrid.
     pub fell_back: Option<bool>,
+    /// Core's reason when it fell back: "no_anchor" or "no_edges".
+    pub fallback_reason: Option<String>,
     /// Count-route questions only, when the arm reports a count.
     pub count_correct: Option<bool>,
     /// The count the arm reported, when it reports one.
@@ -215,27 +217,29 @@ struct RecallData {
     /// JSON facts payload as the caller receives it (token metric input).
     payload_json: String,
     fell_back: Option<bool>,
+    fallback_reason: Option<String>,
     count: Option<usize>,
 }
 
 /// Run the real ADR-0033 entry point and normalize it for scoring.
-/// `Ok(None)` means core returned `None` (no anchor or no edge): the arm
-/// falls back to hybrid, marked so the fallback rate is measured.
+/// `Ok(Err(reason))` means core declined (no anchor or no edge): the arm
+/// falls back to hybrid, marked so the fallback rate and reason surface.
 fn graph_first_recall(
     store: &Store,
     query: &str,
     top_k: usize,
     weights: HybridWeights,
     now: i64,
-) -> Result<Option<RecallData>> {
+) -> Result<std::result::Result<RecallData, String>> {
     let options = aver_core::graph_first::GraphFirstOptions {
         top_k,
         weights,
         ..Default::default()
     };
-    let Some(result) = store.recall_graph_first(query, &RecallFilters::default(), &options, now)?
-    else {
-        return Ok(None);
+    let result = store.recall_graph_first(query, &RecallFilters::default(), &options, now)?;
+    let result = match result {
+        Ok(result) => result,
+        Err(fallback) => return Ok(Err(fallback.as_str().to_string())),
     };
     // The facts payload as the caller receives it: selected claims plus
     // their source events (response metadata like budget stays uncounted).
@@ -260,7 +264,7 @@ fn graph_first_recall(
             })
         }))
         .collect();
-    Ok(Some(RecallData {
+    Ok(Ok(RecallData {
         claim_ids: result.facts.iter().map(|fact| fact.claim.id).collect(),
         fact_entities: result
             .facts
@@ -269,11 +273,12 @@ fn graph_first_recall(
             .collect(),
         payload_json: serde_json::to_string_pretty(&facts)?,
         fell_back: Some(false),
+        fallback_reason: None,
         count: result.count,
     }))
 }
 
-/// Hybrid fallback for graph-first `None` results, marked as a fallback.
+/// Hybrid fallback for declined graph-first queries, marked with the reason.
 fn hybrid_fallback(
     store: &Store,
     embedder: &HashedTokenEmbedder,
@@ -281,9 +286,11 @@ fn hybrid_fallback(
     top_k: usize,
     weights: HybridWeights,
     now: i64,
+    reason: String,
 ) -> Result<RecallData> {
     let mut data = hybrid_recall(store, embedder, query, top_k, weights, now)?;
     data.fell_back = Some(true);
+    data.fallback_reason = Some(reason);
     Ok(data)
 }
 
@@ -314,6 +321,7 @@ fn hybrid_recall(
             .collect(),
         payload_json: serde_json::to_string_pretty(&payload)?,
         fell_back: None,
+        fallback_reason: None,
         count: None,
     })
 }
@@ -424,10 +432,16 @@ fn run_arm(
             }
             RecallArm::GraphFirst | RecallArm::GraphFirstRecency => {
                 match graph_first_recall(store, &q.query, q.top_k, weights, fixture.now)? {
-                    Some(data) => data,
-                    None => {
-                        hybrid_fallback(store, &embedder, &q.query, q.top_k, weights, fixture.now)?
-                    }
+                    Ok(data) => data,
+                    Err(reason) => hybrid_fallback(
+                        store,
+                        &embedder,
+                        &q.query,
+                        q.top_k,
+                        weights,
+                        fixture.now,
+                        reason,
+                    )?,
                 }
             }
         };
@@ -474,6 +488,7 @@ fn run_arm(
             payload_tokens: data.payload_json.split_whitespace().count(),
             latency_micros,
             fell_back: data.fell_back,
+            fallback_reason: data.fallback_reason,
             count_correct: match (q.route.as_str(), q.expected_count, data.count) {
                 ("count", Some(expected), Some(actual)) => Some(actual == expected),
                 _ => None,

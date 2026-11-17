@@ -124,9 +124,9 @@ fn comparison_report_shape_and_hybrid_baseline() {
 }
 
 /// The graph-first arms run the real ADR-0033 entry point. The temporal
-/// assertions pin *characterized* behavior — two are known review findings
-/// and must change loudly when core fixes them; the test asserts harness
-/// wiring, not a quality verdict. The report is the verdict.
+/// assertions pin *characterized* behavior — Q6 was a review finding fixed
+/// in a2ce61f, Q10 is the remaining before/after-semantics limitation —
+/// and must change loudly if core regresses. The report is the verdict.
 #[test]
 fn graph_first_arms_run_the_real_entry_point() {
     let fixture = fixture();
@@ -149,28 +149,28 @@ fn graph_first_arms_run_the_real_entry_point() {
             .find(|row| row.query == query)
             .expect("query present")
     };
-    // FINDING (anchor coverage): stripe-api-v1/v3 tokenize with digit
-    // splits, so a query naming "Stripe API" covers only 2/5 tokens and
-    // they cannot anchor. The newest stripe-matching claim in the bounded
-    // set — an incident claim — wins instead of the expected claim 18.
+    // Q6 (latest Stripe API): fixed in a2ce61f — versioned entities anchor
+    // on their words, so the newest stripe-api claim wins.
     let latest = by_query("What is the latest Stripe API version used by checkout-service?");
-    assert_eq!(latest.ranked_indices.first(), Some(&30));
-    assert_eq!(latest.answer_quality, 0.0);
-    assert_eq!(latest.evidence_coverage, 0.0);
-    // FINDING (no stemming): 'using' does not prefix-match 'uses', so
-    // narrowing keeps only the two runs_version noise claims and the newer
-    // noise claim wins instead of the expected claim 17.
+    assert_eq!(latest.ranked_indices.first(), Some(&18));
+    assert_eq!(latest.answer_quality, 1.0);
+    assert_eq!(latest.evidence_coverage, 1.0);
+    // Q10 (before the migration): still no before/after semantics — the
+    // temporal route sorts newest-first, so the CURRENT version wins and
+    // the stale-but-correct claim 17 loses. Hybrid answers this one
+    // correctly; the limitation is documented in the report.
     let before =
         by_query("Which Stripe API version was checkout-service using before the migration?");
-    assert_eq!(before.ranked_indices.first(), Some(&34));
+    assert_eq!(before.ranked_indices.first(), Some(&18));
     assert_eq!(before.answer_quality, 0.0);
 
-    // Count questions get a count verdict from the graph-first arms.
+    // Count questions get an exact count from the graph-first arms (the
+    // generic-noun anchor dilution was fixed in a2ce61f).
     for row in graph_first
         .questions
         .iter()
         .filter(|row| row.route == "count")
     {
-        assert!(row.count_correct.is_some());
+        assert_eq!(row.count_correct, Some(true), "{}", row.query);
     }
 }
