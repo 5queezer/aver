@@ -522,7 +522,7 @@ pub struct GraphFirstView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget: Option<GraphFirstBudgetView>,
     pub latency_ms: f64,
-    /// Why the default path answered instead, e.g. "no_anchor".
+    /// Why the default path answered instead: "no_anchor" or "no_edges".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fallback: Option<String>,
 }
@@ -941,10 +941,10 @@ impl AverTools {
                 .store
                 .recall_graph_first(&params.query, &filters, &options, now)?
             {
-                Some(result) => return self.graph_first_view(result, started, now),
-                None => {
+                Ok(result) => return self.graph_first_view(result, started, now),
+                Err(reason) => {
                     fallback = Some(GraphFirstView {
-                        fallback: Some("no_anchor".to_string()),
+                        fallback: Some(reason.as_str().to_string()),
                         latency_ms: elapsed_ms(started),
                         ..GraphFirstView::default()
                     })

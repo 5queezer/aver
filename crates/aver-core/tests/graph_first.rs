@@ -5,7 +5,9 @@
 
 use std::path::Path;
 
-use aver_core::graph_first::{GraphFirstOptions, MAX_ANCHORS, MAX_EDGES, QueryRoute, route_query};
+use aver_core::graph_first::{
+    GraphFirstFallback, GraphFirstOptions, MAX_ANCHORS, MAX_EDGES, QueryRoute, route_query,
+};
 use aver_core::retrieval::{DEFAULT_RECENCY_TAU_SECS, HybridWeights};
 use aver_core::{ClaimWrite, EventWrite, RecallFilters, Store, replay};
 
@@ -114,7 +116,7 @@ fn returns_none_when_no_entity_matches_so_the_caller_falls_back() {
         )
         .unwrap();
 
-    assert!(result.is_none());
+    assert!(matches!(result, Err(GraphFirstFallback::NoAnchor)));
 }
 
 #[test]
@@ -399,4 +401,179 @@ fn reports_truncation_when_already_seen_edges_fill_the_last_fetch() {
 
     assert_eq!(result.budget.edges_visited, MAX_EDGES);
     assert!(result.budget.truncated);
+}
+
+// Review findings on the first eval run (P1.1-P1.3, P2.4, P2.6, P3.7).
+
+#[test]
+fn versioned_entities_anchor_on_their_words_not_digit_fragments() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = seeded(
+        dir.path(),
+        &[
+            claim_line(
+                NOW - 300 * DAY,
+                1,
+                "checkout-service",
+                "uses",
+                "stripe-api-v1",
+            ),
+            claim_line(
+                NOW - 30 * DAY,
+                2,
+                "checkout-service",
+                "uses",
+                "stripe-api-v3",
+            ),
+            claim_line(
+                NOW - 5 * DAY,
+                3,
+                "api-gateway",
+                "depends_on",
+                "checkout-service",
+            ),
+        ],
+    );
+
+    let result = recall(
+        &store,
+        "What is the latest Stripe API version used by checkout-service?",
+    );
+
+    assert!(
+        result.anchors.contains(&"stripe-api-v3".to_string()),
+        "{:?}",
+        result.anchors
+    );
+    assert!(
+        result.anchors.contains(&"stripe-api-v1".to_string()),
+        "{:?}",
+        result.anchors
+    );
+    assert!(
+        !result.anchors.contains(&"api-gateway".to_string()),
+        "{:?}",
+        result.anchors
+    );
+    assert_eq!(claim_ids(&result)[0], 2);
+}
+
+#[test]
+fn content_words_match_claim_subjects_and_cue_words_are_not_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = seeded(
+        dir.path(),
+        &[
+            claim_line(
+                NOW - 10 * DAY,
+                1,
+                "incident-2026-09-14",
+                "concerns",
+                "checkout-service",
+            ),
+            claim_line(
+                NOW - 9 * DAY,
+                2,
+                "rollback-42",
+                "concerns",
+                "checkout-service",
+            ),
+        ],
+    );
+
+    let result = recall(
+        &store,
+        "What was the most recent incident affecting checkout-service?",
+    );
+
+    assert_eq!(result.route, QueryRoute::Temporal);
+    assert_eq!(claim_ids(&result)[0], 1, "{:?}", claim_ids(&result));
+}
+
+#[test]
+fn inflected_query_words_match_inflected_predicates() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(dir.path());
+    add(&store, "checkout-service", "owned_by", "team_pay");
+    let uses = add(&store, "checkout-service", "uses", "redis");
+
+    let result = recall(&store, "What was checkout-service using?");
+
+    assert_eq!(claim_ids(&result)[0], uses);
+}
+
+#[test]
+fn count_and_list_keep_claims_touching_the_primary_anchor() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(dir.path());
+    for svc in ["auth-service", "billing-service", "search-service"] {
+        add(&store, svc, "owned_by", "platform-team");
+    }
+    for svc in ["mail-service", "media-service"] {
+        add(&store, svc, "owned_by", "growth-team");
+    }
+    add(&store, "auth-service", "depends_on", "postgres");
+    add(&store, "billing-service", "depends_on", "postgres");
+    add(&store, "auth-service", "depends_on", "kafka");
+    add(&store, "mail-service", "depends_on", "kubernetes");
+
+    let owned = recall(&store, "How many services does platform-team own?");
+    let deps = recall(&store, "How many services depend on postgres?");
+
+    assert_eq!(owned.count, Some(3), "{:?}", claim_ids(&owned));
+    assert_eq!(deps.count, Some(2), "{:?}", claim_ids(&deps));
+}
+
+#[test]
+fn list_matches_predicates_through_the_ontology() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(dir.path());
+    let depends = add(&store, "orders-service", "depends_on", "kafka");
+    // `uses` is declared a child of `depends_on`.
+    let uses = add(&store, "notification-service", "uses", "kafka");
+    add(&store, "kafka", "owned_by", "infra-team");
+
+    let result = recall(&store, "Which services depend on kafka?");
+
+    assert_eq!(result.route, QueryRoute::List);
+    let mut ids = claim_ids(&result);
+    ids.sort_unstable();
+    assert_eq!(ids, vec![depends, uses]);
+}
+
+#[test]
+fn fallback_says_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(dir.path());
+    add(&store, "PaymentGateway", "depends_on", "StripeSDK");
+
+    let outcome = store
+        .recall_graph_first(
+            "what is the weather like",
+            &RecallFilters::default(),
+            &GraphFirstOptions::default(),
+            NOW,
+        )
+        .unwrap();
+
+    assert!(matches!(outcome, Err(GraphFirstFallback::NoAnchor)));
+}
+
+#[test]
+fn route_cue_words_never_match_claim_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(dir.path());
+    // "list" and "all" are route cues; they must not pull this claim in.
+    store
+        .add_claim(
+            ClaimWrite::new("Billing", "concerns", "list of all invoices", "test")
+                .object_kind(aver_core::ObjectKind::Literal),
+        )
+        .unwrap();
+    let owner = add(&store, "Billing", "owned_by", "team_a");
+
+    let result = recall(&store, "List all owners of Billing");
+
+    assert_eq!(result.route, QueryRoute::List);
+    assert_eq!(claim_ids(&result), vec![owner]);
 }
