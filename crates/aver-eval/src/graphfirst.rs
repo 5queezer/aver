@@ -8,11 +8,9 @@
 //!    (ADR-0004 amendment: w = 0.08, tau = 90 days), which may only re-rank
 //!    inside the bounded candidate set.
 //!
-//! Arms 2 and 3 run through [`graph_first_recall`], the single integration
-//! seam: until `Store::recall_graph_first` lands on this branch it reports
-//! every query as `unimplemented`, so fixtures, seeding, scoring and the
-//! hybrid baseline are fully testable today and integration is a one-function
-//! edit.
+//! Arms 2 and 3 run the real [`Store::recall_graph_first`]; when core
+//! returns `None` (no anchor or no edge) the row records a marked hybrid
+//! fallback, exactly as the MCP wrapper does.
 //!
 //! Determinism: the store is seeded by replaying `record_event` / `add_claim`
 //! log lines with time-ordered ids (one source event per claim, linked via
@@ -21,15 +19,16 @@
 //! live store would be. The clock is the fixture's `now`.
 //!
 //! Metrics per question and arm:
-//! - `answer_quality`: fraction of expected answer strings found in the
-//!   returned fact texts (normalized substring match; claim-id-based evidence
+//! - `answer_quality`: fraction of expected answer strings that exactly
+//!   name a returned fact's subject or object (claim-id-based evidence
 //!   metrics below stay exact).
 //! - `evidence_coverage`: fraction of relevant fixture claims returned.
 //! - `evidence_precision`: fraction of returned claims that are relevant.
-//! - `payload_tokens`: whitespace tokens of the JSON facts payload the arm
-//!   hands the caller (hybrid: triples; graph-first: facts plus the original
-//!   events of selected claims). Response metadata (budget, latency) is
-//!   excluded — this measures context cost for the consuming agent.
+//! - `payload_tokens`: whitespace tokens of the pretty-printed JSON facts
+//!   payload the arm hands the caller (hybrid: triples; graph-first: facts
+//!   plus the original events of selected claims). Response metadata
+//!   (budget, latency) is excluded — this measures context cost for the
+//!   consuming agent.
 //! - `latency_micros`: wall time of the recall call; indicative, not
 //!   benchmark-grade.
 //! - `fell_back` / `fallback_rate`: graph-first arms only.
@@ -39,7 +38,7 @@ use std::time::Instant;
 
 use anyhow::{Context as _, Result, bail};
 use aver_core::retrieval::HybridWeights;
-use aver_core::{AgentKind, ClaimStatus, Store};
+use aver_core::{AgentKind, ClaimStatus, RecallFilters, Store};
 use serde::{Deserialize, Serialize};
 
 use crate::recency::{HashedTokenEmbedder, TimedClaim};
@@ -150,21 +149,11 @@ impl RecallArm {
     }
 }
 
-/// Why a question row has no measurements.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RowStatus {
-    Ok,
-    /// The arm's integration seam has not been wired to aver-core yet.
-    Unimplemented,
-}
-
 /// Per-question, per-arm outcome.
 #[derive(Debug, Clone, Serialize)]
 pub struct ArmQueryOutcome {
     pub query: String,
     pub route: String,
-    pub status: RowStatus,
     /// Fixture indices of the returned claims, in rank order.
     pub ranked_indices: Vec<usize>,
     pub answer_quality: f64,
@@ -177,24 +166,8 @@ pub struct ArmQueryOutcome {
     pub fell_back: Option<bool>,
     /// Count-route questions only, when the arm reports a count.
     pub count_correct: Option<bool>,
-}
-
-impl ArmQueryOutcome {
-    fn unimplemented(query: &OpsQuery) -> Self {
-        Self {
-            query: query.query.clone(),
-            route: query.route.clone(),
-            status: RowStatus::Unimplemented,
-            ranked_indices: Vec::new(),
-            answer_quality: 0.0,
-            evidence_coverage: 0.0,
-            evidence_precision: 0.0,
-            payload_tokens: 0,
-            latency_micros: 0,
-            fell_back: None,
-            count_correct: None,
-        }
-    }
+    /// The count the arm reported, when it reports one.
+    pub count_value: Option<usize>,
 }
 
 /// Aggregate metrics over the arm's `ok` rows; `None` when nothing ran.
@@ -237,32 +210,112 @@ pub struct ComparisonReport {
 /// What one recall call produced, normalized across arms for scoring.
 struct RecallData {
     claim_ids: Vec<i64>,
+    /// (subject, object) of every returned fact, for exact answer matching.
+    fact_entities: Vec<(String, String)>,
     /// JSON facts payload as the caller receives it (token metric input).
     payload_json: String,
     fell_back: Option<bool>,
     count: Option<usize>,
 }
 
-/// INTEGRATION SEAM (feat/graph-first-recall). Once aver-core lands
-/// `Store::recall_graph_first`, replace this body with the real call —
-/// agreed signature (dev.build, qitem-20261117172806):
-///
-/// ```ignore
-/// let opts = GraphFirstOptions { top_k, weights, ..Default::default() };
-/// store.recall_graph_first(query, &RecallFilters::default(), &opts, now)
-/// ```
-///
-/// Map `Ok(Some(recall))` to `RecallData` (claim ids from `facts`, payload
-/// from facts + events, `count` from the response, `fell_back: Some(false)`)
-/// and `Ok(None)` to a hybrid fallback row with `fell_back: Some(true)`.
+/// Run the real ADR-0033 entry point and normalize it for scoring.
+/// `Ok(None)` means core returned `None` (no anchor or no edge): the arm
+/// falls back to hybrid, marked so the fallback rate is measured.
 fn graph_first_recall(
-    _store: &Store,
-    _query: &str,
-    _top_k: usize,
-    _weights: HybridWeights,
-    _now: i64,
+    store: &Store,
+    query: &str,
+    top_k: usize,
+    weights: HybridWeights,
+    now: i64,
 ) -> Result<Option<RecallData>> {
-    Ok(None)
+    let options = aver_core::graph_first::GraphFirstOptions {
+        top_k,
+        weights,
+        ..Default::default()
+    };
+    let Some(result) = store.recall_graph_first(query, &RecallFilters::default(), &options, now)?
+    else {
+        return Ok(None);
+    };
+    // The facts payload as the caller receives it: selected claims plus
+    // their source events (response metadata like budget stays uncounted).
+    let facts: Vec<serde_json::Value> = result
+        .facts
+        .iter()
+        .map(|fact| {
+            serde_json::json!({
+                "claim_id": fact.claim.id,
+                "subject": fact.claim.subject,
+                "predicate": fact.claim.predicate,
+                "object": fact.claim.object,
+                "anchor": fact.anchor,
+                "hop": fact.hop,
+                "ts": fact.ts,
+            })
+        })
+        .chain(result.events.iter().map(|event| {
+            serde_json::json!({
+                "event_id": event.id,
+                "payload": event.payload,
+            })
+        }))
+        .collect();
+    Ok(Some(RecallData {
+        claim_ids: result.facts.iter().map(|fact| fact.claim.id).collect(),
+        fact_entities: result
+            .facts
+            .iter()
+            .map(|fact| (fact.claim.subject.clone(), fact.claim.object.clone()))
+            .collect(),
+        payload_json: serde_json::to_string_pretty(&facts)?,
+        fell_back: Some(false),
+        count: result.count,
+    }))
+}
+
+/// Hybrid fallback for graph-first `None` results, marked as a fallback.
+fn hybrid_fallback(
+    store: &Store,
+    embedder: &HashedTokenEmbedder,
+    query: &str,
+    top_k: usize,
+    weights: HybridWeights,
+    now: i64,
+) -> Result<RecallData> {
+    let mut data = hybrid_recall(store, embedder, query, top_k, weights, now)?;
+    data.fell_back = Some(true);
+    Ok(data)
+}
+
+fn hybrid_recall(
+    store: &Store,
+    embedder: &HashedTokenEmbedder,
+    query: &str,
+    top_k: usize,
+    weights: HybridWeights,
+    now: i64,
+) -> Result<RecallData> {
+    let retrieved = store.recall_hybrid_claims(query, embedder, top_k, weights, now)?;
+    let payload: Vec<serde_json::Value> = retrieved
+        .iter()
+        .map(|claim| {
+            serde_json::json!({
+                "subject": claim.subject,
+                "predicate": claim.predicate,
+                "object": claim.object,
+            })
+        })
+        .collect();
+    Ok(RecallData {
+        claim_ids: retrieved.iter().map(|claim| claim.id).collect(),
+        fact_entities: retrieved
+            .iter()
+            .map(|claim| (claim.subject.clone(), claim.object.clone()))
+            .collect(),
+        payload_json: serde_json::to_string_pretty(&payload)?,
+        fell_back: None,
+        count: None,
+    })
 }
 
 /// (claim_id, event_id, fixture claim index) per seeded assertion.
@@ -367,40 +420,18 @@ fn run_arm(
         let started = Instant::now();
         let data = match arm {
             RecallArm::Hybrid => {
-                let retrieved = store.recall_hybrid_claims(
-                    &q.query,
-                    &embedder,
-                    q.top_k,
-                    weights,
-                    fixture.now,
-                )?;
-                let payload: Vec<serde_json::Value> = retrieved
-                    .iter()
-                    .map(|claim| {
-                        serde_json::json!({
-                            "subject": claim.subject,
-                            "predicate": claim.predicate,
-                            "object": claim.object,
-                        })
-                    })
-                    .collect();
-                Some(RecallData {
-                    claim_ids: retrieved.iter().map(|claim| claim.id).collect(),
-                    payload_json: serde_json::to_string(&payload)?,
-                    fell_back: None,
-                    count: None,
-                })
+                hybrid_recall(store, &embedder, &q.query, q.top_k, weights, fixture.now)?
             }
             RecallArm::GraphFirst | RecallArm::GraphFirstRecency => {
-                graph_first_recall(store, &q.query, q.top_k, weights, fixture.now)?
+                match graph_first_recall(store, &q.query, q.top_k, weights, fixture.now)? {
+                    Some(data) => data,
+                    None => {
+                        hybrid_fallback(store, &embedder, &q.query, q.top_k, weights, fixture.now)?
+                    }
+                }
             }
         };
         let latency_micros = started.elapsed().as_micros();
-
-        let Some(data) = data else {
-            questions.push(ArmQueryOutcome::unimplemented(q));
-            continue;
-        };
 
         let ranked_indices: Vec<usize> = data
             .claim_ids
@@ -416,17 +447,22 @@ fn run_arm(
             .iter()
             .filter(|idx| q.relevant_indices.contains(idx))
             .count();
-        let fact_texts = data.payload_json.to_ascii_lowercase();
+        // An expected answer is found when it exactly names a returned
+        // fact's subject or object. Substring matching would credit
+        // "stripe-api-v3" inside "stripe-api-v3-migration".
         let answers_found = q
             .expected_answers
             .iter()
-            .filter(|answer| fact_texts.contains(&answer.to_ascii_lowercase()))
+            .filter(|answer| {
+                data.fact_entities.iter().any(|(subject, object)| {
+                    subject.eq_ignore_ascii_case(answer) || object.eq_ignore_ascii_case(answer)
+                })
+            })
             .count();
 
         questions.push(ArmQueryOutcome {
             query: q.query.clone(),
             route: q.route.clone(),
-            status: RowStatus::Ok,
             ranked_indices,
             answer_quality: ratio(answers_found, q.expected_answers.len()),
             evidence_coverage: ratio(relevant_found, q.relevant_indices.len()),
@@ -442,13 +478,11 @@ fn run_arm(
                 ("count", Some(expected), Some(actual)) => Some(actual == expected),
                 _ => None,
             },
+            count_value: data.count,
         });
     }
 
-    let ok: Vec<&ArmQueryOutcome> = questions
-        .iter()
-        .filter(|row| row.status == RowStatus::Ok)
-        .collect();
+    let ok: Vec<&ArmQueryOutcome> = questions.iter().collect();
     let mean = |value: fn(&ArmQueryOutcome) -> f64| -> Option<f64> {
         if ok.is_empty() {
             None
