@@ -11,7 +11,7 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use crate::claims::SqlParams;
 use crate::error::Error;
 use crate::objects::ObjectKind;
-use crate::recall::tokenize_for_recall;
+use crate::recall::{normalize_recall_token, tokenize_for_recall};
 use crate::retrieval::HybridWeights;
 use crate::store::Store;
 use crate::types::{Claim, EpisodicEvent, GraphExpansion, RecallFilters};
@@ -174,16 +174,83 @@ pub struct GraphFirstRecall {
     pub subgraph: GraphExpansion,
 }
 
+/// Why graph-first did not answer; the caller falls back to hybrid recall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphFirstFallback {
+    /// No stored entity is named by the query.
+    NoAnchor,
+    /// Anchors were found but the filters left no claim touching them.
+    NoEdges,
+}
+
+impl GraphFirstFallback {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NoAnchor => "no_anchor",
+            Self::NoEdges => "no_edges",
+        }
+    }
+}
+
 struct Edge {
     claim: Claim,
     anchor: usize,
     hop: usize,
 }
 
-/// Token `t` from the query matches claim token `c` exactly or as a prefix
-/// of at least three characters ("own" matches "owned").
+/// Strips one inflection ("ing", "ed", "es", "s") and then a final "e", so
+/// "using", "used" and "use" share the stem "us".
+fn stem(word: &str) -> &str {
+    let word = ["ing", "ed", "es", "s"]
+        .iter()
+        .find_map(|suffix| word.strip_suffix(suffix).filter(|rest| rest.len() >= 2))
+        .unwrap_or(word);
+    word.strip_suffix('e')
+        .filter(|rest| rest.len() >= 2)
+        .unwrap_or(word)
+}
+
+/// Query token `t` matches claim token `c` when their stems are equal or one
+/// is a prefix of the other of at least three letters ("own" ~ "owned_by").
 fn token_match(t: &str, c: &str) -> bool {
+    let (t, c) = (stem(t), stem(c));
     t == c || (t.len() >= 3 && c.starts_with(t)) || (c.len() >= 3 && t.starts_with(c))
+}
+
+/// Stopwords and route cues: they shape the route, never the content.
+fn is_noise(token: &str) -> bool {
+    STOPWORDS
+        .iter()
+        .chain(COUNT_CUES)
+        .chain(TEMPORAL_CUES)
+        .chain(INTERSECTION_CUES)
+        .chain(LIST_CUES)
+        .any(|word| normalize_recall_token(word) == token)
+}
+
+/// An entity's own words, without the digit and acronym fragments recall
+/// tokenization adds: "stripe-api-v3" is {stripe, api, v3}.
+fn entity_words(entity: &str) -> HashSet<String> {
+    let mut words = HashSet::new();
+    for chunk in entity
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|chunk| !chunk.is_empty())
+    {
+        let mut start = 0;
+        if !chunk
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        {
+            for (i, ch) in chunk.char_indices().skip(1) {
+                if ch.is_ascii_uppercase() {
+                    words.insert(normalize_recall_token(&chunk[start..i]));
+                    start = i;
+                }
+            }
+        }
+        words.insert(normalize_recall_token(&chunk[start..]));
+    }
+    words
 }
 
 impl Store {
@@ -193,7 +260,7 @@ impl Store {
         filters: &RecallFilters,
         options: &GraphFirstOptions,
         now: i64,
-    ) -> Result<Option<GraphFirstRecall>, Error> {
+    ) -> Result<Result<GraphFirstRecall, GraphFirstFallback>, Error> {
         validate_recall_query(query)?;
         self.validate_filters(filters)?;
         if options.hops == 0 {
@@ -201,16 +268,16 @@ impl Store {
         }
         let query_tokens: Vec<String> = tokenize_for_recall(query)
             .into_iter()
-            .filter(|t| !STOPWORDS.contains(&t.as_str()))
+            .filter(|t| !is_noise(t))
             .collect();
-        let (anchors, more_anchors) = self.graph_first_anchors(&query_tokens, filters)?;
+        let (anchors, primary, more_anchors) = self.graph_first_anchors(&query_tokens, filters)?;
         if anchors.is_empty() {
-            return Ok(None);
+            return Ok(Err(GraphFirstFallback::NoAnchor));
         }
         let (nodes, edges, reach, more_edges) =
             self.bounded_expand(&anchors, options.hops, filters)?;
         if edges.is_empty() {
-            return Ok(None);
+            return Ok(Err(GraphFirstFallback::NoEdges));
         }
 
         // Tokens that say something beyond the anchors' names.
@@ -222,8 +289,23 @@ impl Store {
             .iter()
             .filter(|t| !anchor_tokens.contains(*t))
             .collect();
+        // A claim's words: subject, object, predicate and the predicate's
+        // ancestors, so "depend" also finds `uses` (a child of `depends_on`).
+        let mut predicate_words: HashMap<&str, String> = HashMap::new();
+        for edge in &edges {
+            if !predicate_words.contains_key(edge.claim.predicate.as_str()) {
+                let mut words = self.predicate_ancestors(&edge.claim.predicate)?;
+                words.push(edge.claim.predicate.clone());
+                predicate_words.insert(&edge.claim.predicate, words.join(" "));
+            }
+        }
         let matches = |claim: &Claim| {
-            let tokens = tokenize_for_recall(&format!("{} {}", claim.predicate, claim.object));
+            let tokens = tokenize_for_recall(&format!(
+                "{} {} {}",
+                claim.subject,
+                predicate_words[claim.predicate.as_str()],
+                claim.object
+            ));
             content
                 .iter()
                 .filter(|t| tokens.iter().any(|c| token_match(t, c)))
@@ -249,6 +331,20 @@ impl Store {
 
         let route = route_query(query, anchors.len());
         let mut selected: Vec<&Edge> = edges.iter().collect();
+        // List and count are about the best-named anchor(s): a type word such
+        // as "services" also anchors every *-service entity, whose claims
+        // must not be listed or counted.
+        if matches!(route, QueryRoute::List | QueryRoute::Count) {
+            let primary: HashSet<&String> = anchors[..primary].iter().collect();
+            let touching: Vec<&Edge> = selected
+                .iter()
+                .copied()
+                .filter(|e| endpoints(&e.claim).iter().any(|n| primary.contains(n)))
+                .collect();
+            if !touching.is_empty() {
+                selected = touching;
+            }
+        }
         // List, count and temporal narrow to claims matching the content
         // words when any do; an empty match keeps the whole set.
         if matches!(
@@ -312,13 +408,14 @@ impl Store {
             if let Some(id) = fact.claim.event_id
                 && seen_events.insert(id)
             {
-                let event = self.get_event(id)?;
-                if event.scope == fact.claim.scope {
-                    events.push(event);
+                match self.get_event(id) {
+                    Ok(event) if event.scope == fact.claim.scope => events.push(event),
+                    Ok(_) | Err(Error::MissingEvent { .. }) => {}
+                    Err(err) => return Err(err),
                 }
             }
         }
-        Ok(Some(GraphFirstRecall {
+        Ok(Ok(GraphFirstRecall {
             route,
             budget: GraphFirstBudget {
                 anchors: anchors.len(),
@@ -342,15 +439,16 @@ impl Store {
     }
 
     /// Entities (subjects and entity objects passing `filters`) at least half
-    /// of whose tokens appear in the query, best coverage first, capped at
-    /// [`MAX_ANCHORS`]. The flag says whether more qualified.
+    /// of whose words appear in the query, best coverage first, capped at
+    /// [`MAX_ANCHORS`]. Also returns how many leading anchors tie for the
+    /// best rank (the primary anchors) and whether more qualified.
     fn graph_first_anchors(
         &self,
         query_tokens: &[String],
         filters: &RecallFilters,
-    ) -> Result<(Vec<String>, bool), Error> {
+    ) -> Result<(Vec<String>, usize, bool), Error> {
         if query_tokens.is_empty() {
-            return Ok((Vec::new(), false));
+            return Ok((Vec::new(), 0, false));
         }
         let mut entities = BTreeSet::new();
         for sql in [
@@ -358,7 +456,7 @@ impl Store {
             "SELECT DISTINCT object FROM claims WHERE object_kind = 'entity' AND ",
         ] {
             let Some((filter_sql, params)) = self.claim_filter_sql(filters)? else {
-                return Ok((Vec::new(), false));
+                return Ok((Vec::new(), 0, false));
             };
             entities.extend(self.query_strings(&format!("{sql}{filter_sql}"), params)?);
         }
@@ -366,7 +464,7 @@ impl Store {
         let mut ranked: Vec<(f64, BTreeSet<String>, String)> = entities
             .into_iter()
             .filter_map(|entity| {
-                let tokens: HashSet<String> = tokenize_for_recall(&entity).into_iter().collect();
+                let tokens = entity_words(&entity);
                 let matched: BTreeSet<String> = tokens
                     .iter()
                     .filter(|t| query.contains(t.as_str()))
@@ -388,7 +486,31 @@ impl Store {
         });
         let more = ranked.len() > MAX_ANCHORS;
         ranked.truncate(MAX_ANCHORS);
-        Ok((ranked.into_iter().map(|(_, _, e)| e).collect(), more))
+        let primary = ranked
+            .iter()
+            .take_while(|(coverage, matched, _)| {
+                *coverage == ranked[0].0 && matched.len() == ranked[0].1.len()
+            })
+            .count();
+        Ok((
+            ranked.into_iter().map(|(_, _, e)| e).collect(),
+            primary,
+            more,
+        ))
+    }
+
+    /// Names of every ancestor of `predicate` in the ADR-0010 closure.
+    fn predicate_ancestors(&self, predicate: &str) -> Result<Vec<String>, Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ancestor.name
+               FROM predicate_types child
+               JOIN predicate_closure closure ON closure.child_id = child.id
+               JOIN predicate_types ancestor ON ancestor.id = closure.ancestor_id
+              WHERE child.name = ?1 AND ancestor.id != child.id
+              ORDER BY ancestor.id",
+        )?;
+        let rows = stmt.query_map([predicate], |row| row.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     fn query_strings(&self, sql: &str, params: SqlParams) -> Result<Vec<String>, Error> {
