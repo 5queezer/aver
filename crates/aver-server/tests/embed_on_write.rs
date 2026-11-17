@@ -322,7 +322,6 @@ fn remember_claim_over_stdio_is_embedded_and_recalled_by_the_hybrid_path() {
         "tools/call",
         json!({"name": "recall", "arguments": {"query": "api-gateway"}}),
     ));
-    drop(request);
     drop(stdin);
     let output = child.wait_with_output().unwrap();
 
