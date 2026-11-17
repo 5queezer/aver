@@ -382,3 +382,21 @@ fn honours_scope_filters_during_expansion() {
     let ids: Vec<i64> = result.subgraph.edges.iter().map(|c| c.id).collect();
     assert_eq!(ids, vec![inside]);
 }
+
+#[test]
+fn reports_truncation_when_already_seen_edges_fill_the_last_fetch() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(dir.path());
+    // The hub's own edges leave one slot; the first leaf repeats the hub
+    // edge and has two new ones, so one of them must be cut.
+    for i in 0..(MAX_EDGES - 1) {
+        add(&store, "Hub", "depends_on", &format!("leaf_{i}"));
+    }
+    add(&store, "leaf_0", "depends_on", "deep_a");
+    add(&store, "leaf_0", "depends_on", "deep_b");
+
+    let result = recall(&store, "Hub");
+
+    assert_eq!(result.budget.edges_visited, MAX_EDGES);
+    assert!(result.budget.truncated);
+}

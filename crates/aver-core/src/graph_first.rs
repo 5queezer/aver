@@ -437,8 +437,9 @@ impl Store {
                 continue;
             }
             if !adjacency.contains_key(&node) {
-                let remaining = MAX_EDGES - edges.len();
-                let claims = self.adjacent_claims(&node, filters, remaining + 1)?;
+                // Already-seen edges count toward the LIMIT, so fetch a full
+                // budget plus one: any unseen edge past the budget is seen.
+                let claims = self.adjacent_claims(&node, filters, MAX_EDGES + 1)?;
                 let mut ids = Vec::new();
                 for claim in claims {
                     if let Some(&i) = edge_index.get(&claim.id) {
