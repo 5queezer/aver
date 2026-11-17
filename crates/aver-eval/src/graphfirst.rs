@@ -9,13 +9,13 @@
 //!    inside the bounded candidate set.
 //!
 //! Arms 2 and 3 run the real [`Store::recall_graph_first`]; when core
-//! returns `None` (no anchor or no edge) the row records a marked hybrid
+//! declines (no anchor, no edge, or a time relative to an event) the row records a marked hybrid
 //! fallback, exactly as the MCP wrapper does.
 //!
 //! Determinism: the store is seeded by replaying `record_event` / `add_claim`
 //! log lines with time-ordered ids (one source event per claim, linked via
 //! `event_id`), consolidated and embedded with
-//! [`HashedTokenEmbedder`](crate::recency::HashedTokenEmbedder), exactly as a
+//! [`HashedTokenEmbedder`], exactly as a
 //! live store would be. The clock is the fixture's `now`.
 //!
 //! Metrics per question and arm:

@@ -522,7 +522,8 @@ pub struct GraphFirstView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget: Option<GraphFirstBudgetView>,
     pub latency_ms: f64,
-    /// Why the default path answered instead: "no_anchor" or "no_edges".
+    /// Why the default path answered instead: "no_anchor", "no_edges" or
+    /// "temporal_constraint".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fallback: Option<String>,
 }

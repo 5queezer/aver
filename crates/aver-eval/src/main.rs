@@ -18,6 +18,7 @@ fn run() -> anyhow::Result<()> {
     }
 
     let mut metrics = Vec::new();
+    let mut ops_reports = Vec::new();
     for fixture_path in fixture_paths {
         let fixture_json = std::fs::read_to_string(&fixture_path)
             .with_context(|| format!("read fixture {fixture_path}"))?;
@@ -30,24 +31,34 @@ fn run() -> anyhow::Result<()> {
             == Some("graphfirst");
         if is_ops {
             let fixture = aver_eval::graphfirst::load_ops_fixture(&fixture_json)?;
-            let report = aver_eval::graphfirst::run_ops_fixture(&fixture)?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
+            ops_reports.push(serde_json::to_value(
+                aver_eval::graphfirst::run_ops_fixture(&fixture)?,
+            )?);
             continue;
         }
         let fixture = aver_eval::load_fixture(&fixture_json)?;
         metrics.push(aver_eval::run_fixture(&fixture)?);
     }
 
-    if metrics.is_empty() {
-        return Ok(());
-    }
-    if metrics.len() == 1 {
-        println!("{}", serde_json::to_string_pretty(&metrics[0])?);
-    } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&aver_eval::aggregate_metrics(metrics))?
-        );
-    }
+    let keyword = match metrics.len() {
+        0 => None,
+        1 => Some(serde_json::to_value(&metrics[0])?),
+        _ => Some(serde_json::to_value(aver_eval::aggregate_metrics(metrics))?),
+    };
+    // One JSON document on stdout: a lone report as is, several under
+    // "graphfirst" (reports) and "keyword" (metrics or their aggregate).
+    let document = match (ops_reports.len(), keyword) {
+        (0, None) => return Ok(()),
+        (0, Some(keyword)) => keyword,
+        (1, None) => ops_reports.remove(0),
+        (_, keyword) => {
+            let mut document = serde_json::json!({ "graphfirst": ops_reports });
+            if let Some(keyword) = keyword {
+                document["keyword"] = keyword;
+            }
+            document
+        }
+    };
+    println!("{}", serde_json::to_string_pretty(&document)?);
     Ok(())
 }

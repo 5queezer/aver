@@ -577,3 +577,92 @@ fn route_cue_words_never_match_claim_content() {
     assert_eq!(result.route, QueryRoute::List);
     assert_eq!(claim_ids(&result), vec![owner]);
 }
+
+// CodeRabbit findings on bb1e07f.
+
+#[test]
+fn an_entity_named_on_its_own_survives_subset_pruning() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(dir.path());
+    add(&store, "billing", "depends_on", "redis");
+    add(&store, "billing-worker", "depends_on", "redis");
+
+    let both = recall(&store, "What do billing and billing-worker both depend on?");
+    let worker_only = recall(&store, "What does billing-worker depend on?");
+
+    assert!(
+        both.anchors.contains(&"billing".to_string()),
+        "{:?}",
+        both.anchors
+    );
+    assert!(both.anchors.contains(&"billing-worker".to_string()));
+    assert_eq!(both.route, QueryRoute::Intersection);
+    // Inside "billing-worker" the word "billing" names billing-worker only.
+    assert_eq!(worker_only.anchors, vec!["billing-worker".to_string()]);
+}
+
+#[test]
+fn count_with_unmatched_content_is_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(dir.path());
+    add(&store, "Billing", "owned_by", "team_a");
+
+    let result = recall(&store, "How many zebras does Billing have?");
+
+    assert_eq!(result.route, QueryRoute::Count);
+    assert_eq!(result.count, Some(0));
+    assert!(result.facts.is_empty());
+}
+
+#[test]
+fn earliest_questions_sort_oldest_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = seeded(
+        dir.path(),
+        &[
+            claim_line(NOW - 30 * DAY, 1, "Billing", "depends_on", "mysql"),
+            claim_line(NOW - DAY, 2, "Billing", "depends_on", "postgres"),
+        ],
+    );
+
+    for query in [
+        "What did Billing depend on first?",
+        "What is the oldest thing Billing depends on?",
+        "What was the earliest dependency of Billing?",
+    ] {
+        let result = recall(&store, query);
+        assert_eq!(result.route, QueryRoute::Temporal, "{query}");
+        assert_eq!(claim_ids(&result)[0], 1, "{query}");
+    }
+    assert_eq!(
+        claim_ids(&recall(&store, "What does Billing depend on latest?"))[0],
+        2
+    );
+}
+
+#[test]
+fn temporal_constraints_relative_to_an_event_fall_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(dir.path());
+    add(&store, "Billing", "depends_on", "postgres");
+
+    for query in [
+        "What did Billing depend on before the migration?",
+        "What did Billing depend on after the outage?",
+        "What has Billing depended on since the rewrite?",
+        "What did Billing depend on until the cutover?",
+    ] {
+        let outcome = store
+            .recall_graph_first(
+                query,
+                &RecallFilters::default(),
+                &GraphFirstOptions::default(),
+                NOW,
+            )
+            .unwrap();
+        assert!(
+            matches!(outcome, Err(GraphFirstFallback::TemporalConstraint)),
+            "{query}: {outcome:?}"
+        );
+    }
+}
