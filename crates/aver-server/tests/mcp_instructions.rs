@@ -27,6 +27,12 @@ fn mcp_instructions_are_a_progressive_discovery_card() {
         instructions
             .contains("Source-event audit: progressively load get_event only for a known event_id")
     );
+    assert!(instructions.contains(
+        "Recall mode: hybrid by default; pass mode=\"graph_first\" when the question names entities"
+    ));
+    assert!(instructions.contains(
+        "recall with mode=\"graph_first\" also returns the source events of the claims it selects"
+    ));
     assert!(instructions.contains("INFERRED means your judgment (default 0.45; maximum 0.75)"));
     assert!(
         instructions
@@ -79,6 +85,7 @@ fn primary_tool_schema_docs_explain_selection_and_safe_defaults() {
     assert_property_description_contains(&recall, "query", "Start broad enough");
     assert_property_description_contains(&recall, "top_k", "Defaults to 5");
     assert_property_description_contains(&recall, "scope_walk", "Use exact");
+    assert_property_description_contains(&recall, "mode", "graph_first");
 
     let record_event = schema_value::<RecordEventParams>();
     assert_property_description_contains(&record_event, "payload", "raw session content");

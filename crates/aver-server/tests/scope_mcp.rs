@@ -192,6 +192,7 @@ fn recall_with_scope_filters_by_walk() {
             status: None,
             alpha: None,
             context: None,
+            mode: None,
         })
         .unwrap();
     let scopes: Vec<String> = view.triples.iter().map(|c| c.scope.clone()).collect();
