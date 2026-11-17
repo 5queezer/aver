@@ -1,6 +1,7 @@
 use aver_core::{CandidateWrite, ClaimWrite, EventWrite, RecallQuery};
 use std::path::Path;
 
+use aver_core::graph_first::{GraphFirstOptions, GraphFirstRecall};
 use aver_core::retrieval::{DEFAULT_RECENCY_TAU_SECS, HybridWeights};
 use aver_core::{
     AgentKind, CandidateClaim, Claim, ClaimStatus, ContradictionRecord, EpisodicEvent, Error,
@@ -163,6 +164,10 @@ pub struct RecallParams {
     /// ADR-0032 filter: only claims established under this context entity.
     #[serde(default)]
     pub context: Option<String>,
+    /// "hybrid" (default) or "graph_first" (ADR-0033: bounded expansion
+    /// from entities the query names; falls back to hybrid without one).
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -495,6 +500,57 @@ pub struct RecallView {
     /// The ADR-0004 alpha used; present only when `retrieval` is "hybrid".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alpha: Option<f64>,
+    /// ADR-0033: present only when `mode` was "graph_first".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_first: Option<GraphFirstView>,
+}
+
+/// ADR-0033 graph-first details. On a fallback only `fallback` and
+/// `latency_ms` are set and `retrieval` names the path that answered.
+#[derive(Debug, Clone, Serialize, PartialEq, Default)]
+pub struct GraphFirstView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
+    pub anchors: Vec<String>,
+    pub facts: Vec<GraphFirstFactView>,
+    /// Source events of the selected claims only.
+    pub events: Vec<EventView>,
+    pub evidence_ids: EvidenceIdsView,
+    /// Count route only: matching claims in the bounded set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget: Option<GraphFirstBudgetView>,
+    pub latency_ms: f64,
+    /// Why the default path answered instead, e.g. "no_anchor".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct GraphFirstFactView {
+    pub claim_id: i64,
+    pub anchor: String,
+    pub hop: usize,
+    pub ts: i64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Default)]
+pub struct EvidenceIdsView {
+    pub claims: Vec<i64>,
+    pub events: Vec<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct GraphFirstBudgetView {
+    pub anchors: usize,
+    pub max_anchors: usize,
+    pub hops: usize,
+    pub edges_visited: usize,
+    pub max_edges: usize,
+    pub candidates: usize,
+    pub selected: usize,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -819,6 +875,13 @@ impl AverTools {
     }
 
     pub fn recall(&self, params: RecallParams) -> anyhow::Result<RecallView> {
+        let graph_first = match params.mode.as_deref() {
+            None | Some("hybrid") => false,
+            Some("graph_first") => true,
+            Some(other) => {
+                anyhow::bail!("invalid mode {other:?}: use \"hybrid\" or \"graph_first\"")
+            }
+        };
         let top_k = validate_top_k(params.top_k.unwrap_or(5))?;
         let scope = params.scope.as_deref().unwrap_or("global");
         let walk = parse_scope_walk(params.scope_walk.as_deref(), &params.scope)?;
@@ -865,6 +928,29 @@ impl AverTools {
             evidence_half_life: self.evidence_half_life,
             ..weights
         };
+        let mut fallback = None;
+        if graph_first {
+            let started = std::time::Instant::now();
+            let options = GraphFirstOptions {
+                hops: validate_hops(params.hops.unwrap_or(2))?,
+                top_k,
+                weights,
+            };
+            let now = time::OffsetDateTime::now_utc().unix_timestamp();
+            match self
+                .store
+                .recall_graph_first(&params.query, &filters, &options, now)?
+            {
+                Some(result) => return self.graph_first_view(result, started, now),
+                None => {
+                    fallback = Some(GraphFirstView {
+                        fallback: Some("no_anchor".to_string()),
+                        latency_ms: elapsed_ms(started),
+                        ..GraphFirstView::default()
+                    })
+                }
+            }
+        }
         let (mut claims, chunks, retrieval, alpha) =
             match self.recall_hybrid(&params.query, &filters, top_k, weights)? {
                 Some((claims, chunks)) => (claims, chunks, "hybrid", Some(weights.alpha)),
@@ -909,6 +995,81 @@ impl AverTools {
             confidence_floor,
             retrieval: retrieval.to_string(),
             alpha,
+            graph_first: fallback,
+        })
+    }
+
+    /// ADR-0033 answer: the selected claims as triples, the bounded
+    /// expansion as the subgraph, and the evidence and budget beside them.
+    fn graph_first_view(
+        &self,
+        result: GraphFirstRecall,
+        started: std::time::Instant,
+        now: i64,
+    ) -> anyhow::Result<RecallView> {
+        let confidence_floor = result
+            .facts
+            .iter()
+            .map(|fact| &fact.claim)
+            .chain(result.subgraph.edges.iter())
+            .map(|claim| claim.confidence)
+            .min_by(f64::total_cmp)
+            .unwrap_or(0.0);
+        let facts = result
+            .facts
+            .iter()
+            .map(|fact| GraphFirstFactView {
+                claim_id: fact.claim.id,
+                anchor: fact.anchor.clone(),
+                hop: fact.hop,
+                ts: fact.ts,
+            })
+            .collect();
+        let evidence_ids = EvidenceIdsView {
+            claims: result.facts.iter().map(|fact| fact.claim.id).collect(),
+            events: result.events.iter().map(|event| event.id).collect(),
+        };
+        let triples = result
+            .facts
+            .into_iter()
+            .map(|fact| self.confirmed_view(fact.claim, now))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let budget = result.budget;
+        Ok(RecallView {
+            triples,
+            chunks: Vec::new(),
+            subgraph: GraphView {
+                nodes: result.subgraph.nodes,
+                edges: result
+                    .subgraph
+                    .edges
+                    .into_iter()
+                    .map(ClaimView::from)
+                    .collect(),
+            },
+            confidence_floor,
+            retrieval: "graph_first".to_string(),
+            alpha: None,
+            graph_first: Some(GraphFirstView {
+                route: Some(result.route.as_str().to_string()),
+                anchors: result.anchors,
+                facts,
+                events: result.events.into_iter().map(EventView::from).collect(),
+                evidence_ids,
+                count: result.count,
+                budget: Some(GraphFirstBudgetView {
+                    anchors: budget.anchors,
+                    max_anchors: budget.max_anchors,
+                    hops: budget.hops,
+                    edges_visited: budget.edges_visited,
+                    max_edges: budget.max_edges,
+                    candidates: budget.candidates,
+                    selected: budget.selected,
+                    truncated: budget.truncated,
+                }),
+                latency_ms: elapsed_ms(started),
+                fallback: None,
+            }),
         })
     }
 
@@ -1324,6 +1485,10 @@ fn validate_hops(hops: usize) -> anyhow::Result<usize> {
     } else {
         anyhow::bail!("invalid hops: must be at most 8")
     }
+}
+
+fn elapsed_ms(started: std::time::Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
 }
 
 /// Core's `recall_text_with_filters` takes no `top_k`; the server truncates

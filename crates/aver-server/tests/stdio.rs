@@ -301,3 +301,21 @@ fn stdio_get_event_uses_the_sessions_resolved_exact_scope() {
     assert!(!outside.to_string().contains("Invented rationale"));
     assert!(session.finish().status.success());
 }
+
+/// ADR-0033: `mode` reaches core through the MCP wrapper of the real binary.
+#[test]
+fn stdio_recall_runs_graph_first_when_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::start(command(dir.path()));
+    let claim_id = remember(&mut session, "api-gateway", "envoy");
+
+    let recalled = session.call(
+        "recall",
+        json!({"query": "what does api-gateway use", "mode": "graph_first"}),
+    );
+
+    assert_eq!(recalled["retrieval"], "graph_first", "{recalled}");
+    assert_eq!(recalled["triples"][0]["id"], claim_id);
+    assert_eq!(recalled["graph_first"]["anchors"], json!(["api-gateway"]));
+    assert!(session.finish().status.success());
+}

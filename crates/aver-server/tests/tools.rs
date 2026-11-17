@@ -45,6 +45,7 @@ fn remember_claim_tool_writes_claim_and_recall_returns_it() {
             status: None,
             alpha: None,
             context: None,
+            mode: None,
         })
         .unwrap();
 
@@ -191,6 +192,7 @@ fn adr0008_five_tool_surface_covers_claim_graph_lifecycle() {
             status: None,
             alpha: None,
             context: None,
+            mode: None,
         })
         .unwrap();
     assert!(
@@ -370,6 +372,7 @@ fn add_triple_persists_valid_confidence_override() {
             status: None,
             alpha: None,
             context: None,
+            mode: None,
         })
         .unwrap();
 
@@ -419,6 +422,7 @@ fn recall_tool_rejects_zero_hops() {
             status: None,
             alpha: None,
             context: None,
+            mode: None,
         })
         .expect_err("zero hops should be rejected");
 
@@ -445,6 +449,7 @@ fn recall_tool_rejects_zero_top_k() {
             status: None,
             alpha: None,
             context: None,
+            mode: None,
         })
         .expect_err("zero top_k should be rejected");
 
@@ -491,6 +496,7 @@ fn recall_tool_returns_graph_context_for_entity_query() {
             status: None,
             alpha: None,
             context: None,
+            mode: None,
         })
         .unwrap();
 
@@ -545,6 +551,7 @@ fn recall_tool_expands_graph_from_recalled_claim_subject_when_query_is_phrase() 
             status: None,
             alpha: None,
             context: None,
+            mode: None,
         })
         .unwrap();
 
@@ -599,6 +606,7 @@ fn recall_tool_reports_confidence_floor_for_returned_triples() {
             status: None,
             alpha: None,
             context: None,
+            mode: None,
         })
         .unwrap();
 
@@ -665,6 +673,7 @@ fn recall_tool_confidence_floor_includes_subgraph_edges() {
             status: None,
             alpha: None,
             context: None,
+            mode: None,
         })
         .unwrap();
 

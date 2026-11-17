@@ -120,6 +120,7 @@ fn failing_openai_provider_falls_back_to_keyword_and_text_only_chunks() {
             status: None,
             alpha: None,
             context: None,
+            mode: None,
         })
         .unwrap();
 
