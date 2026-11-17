@@ -1,0 +1,208 @@
+{
+  "name": "graph_first_ops",
+  "harness": "graphfirst",
+  "version": 1,
+  "description": "Twenty real operating questions over one shared engineering-org memory, comparing three recall arms under a pinned clock (now = 2026-11-17): current hybrid, graph-first without recency, graph-first with the documented opt-in recency (ADR-0004 amendment, w=0.08, tau=90d). The store mixes current facts, stale-but-ACTIVE predecessors (stripe-api-v1, nginx, jenkins), multi-valued predicates, shared infrastructure, incidents, and token-overlapping noise (postgres/kafka version facts, an unrelated ml-training-cluster). Route labels follow the deterministic precedence: count > temporal > intersection > list > single. Design traps: Q6-Q9 reward freshness; Q10's correct answer is the STALE claim, so a recency arm that always prefers new fails it; Q12's distractor search-indexer shares one anchor but not both; Q16's expected answers span two predicates (depends_on and uses) plus a kafka-version noise claim; Q17's expected list deliberately includes stale jenkins because nothing invalidated it; Q20's noise claim about postgres itself must not inflate the count. Temporal questions use top_k=1 so rank order is what is measured; other questions use top_k=5.",
+  "now": 1794873600,
+  "claims": [
+    {"subject": "checkout-service", "predicate": "owned_by", "object": "payments-team", "ts": 1736899200},
+    {"subject": "billing-service", "predicate": "owned_by", "object": "payments-team", "ts": 1736899200},
+    {"subject": "auth-service", "predicate": "owned_by", "object": "platform-team", "ts": 1736899200},
+    {"subject": "api-gateway", "predicate": "owned_by", "object": "platform-team", "ts": 1736899200},
+    {"subject": "search-indexer", "predicate": "owned_by", "object": "platform-team", "ts": 1744156800},
+    {"subject": "ml-training-cluster", "predicate": "owned_by", "object": "data-team", "ts": 1749600000},
+    {"subject": "billing-service", "predicate": "depends_on", "object": "postgres", "ts": 1736899200},
+    {"subject": "checkout-service", "predicate": "depends_on", "object": "postgres", "ts": 1739145600},
+    {"subject": "checkout-service", "predicate": "depends_on", "object": "kafka", "ts": 1739145600},
+    {"subject": "search-indexer", "predicate": "depends_on", "object": "kafka", "ts": 1747180800},
+    {"subject": "notification-service", "predicate": "uses", "object": "kafka", "ts": 1741737600},
+    {"subject": "billing-service", "predicate": "uses", "object": "redis", "ts": 1739145600},
+    {"subject": "auth-service", "predicate": "written_in", "object": "rust", "ts": 1736899200},
+    {"subject": "checkout-service", "predicate": "deployed_on", "object": "kubernetes-cluster-eu", "ts": 1741737600},
+    {"subject": "auth-service", "predicate": "deployed_on", "object": "kubernetes-cluster-eu", "ts": 1739145600},
+    {"subject": "api-gateway", "predicate": "deployed_on", "object": "kubernetes-cluster-eu", "ts": 1741737600},
+    {"subject": "search-indexer", "predicate": "uses", "object": "opensearch", "ts": 1744156800},
+    {"subject": "checkout-service", "predicate": "uses", "object": "stripe-api-v1", "ts": 1739145600},
+    {"subject": "checkout-service", "predicate": "uses", "object": "stripe-api-v3", "ts": 1781049600},
+    {"subject": "api-gateway", "predicate": "uses", "object": "nginx", "ts": 1736899200},
+    {"subject": "api-gateway", "predicate": "uses", "object": "envoy-proxy", "ts": 1770768000},
+    {"subject": "api-gateway", "predicate": "monitors_with", "object": "prometheus", "ts": 1747180800},
+    {"subject": "search-indexer", "predicate": "monitors_with", "object": "prometheus", "ts": 1747180800},
+    {"subject": "deploy-pipeline", "predicate": "depends_on", "object": "jenkins", "ts": 1736899200},
+    {"subject": "deploy-pipeline", "predicate": "depends_on", "object": "github-actions-runner", "ts": 1778630400},
+    {"subject": "deploy-pipeline", "predicate": "depends_on", "object": "terraform", "ts": 1739145600},
+    {"subject": "deploy-pipeline", "predicate": "depends_on", "object": "kubernetes-cluster-eu", "ts": 1739145600},
+    {"subject": "incident-2025-11-02", "predicate": "concerns", "object": "checkout-service", "ts": 1762041600},
+    {"subject": "incident-2025-11-02", "predicate": "caused_by", "object": "jenkins", "ts": 1762041600},
+    {"subject": "incident-2026-09-14", "predicate": "concerns", "object": "checkout-service", "ts": 1789344000},
+    {"subject": "incident-2026-09-14", "predicate": "caused_by", "object": "stripe-api-v3-migration", "ts": 1789344000},
+    {"subject": "incident-2026-09-14", "predicate": "mitigated_by", "object": "hotfix-2026-09-15", "ts": 1789430400},
+    {"subject": "incident-2026-09-20", "predicate": "concerns", "object": "billing-service", "ts": 1789862400},
+    {"subject": "incident-2026-09-20", "predicate": "caused_by", "object": "stripe-api-v3-migration", "ts": 1789862400},
+    {"subject": "postgres", "predicate": "runs_version", "object": "15.4", "ts": 1773187200},
+    {"subject": "kafka", "predicate": "runs_version", "object": "3.7", "ts": 1755043200},
+    {"subject": "ml-training-cluster", "predicate": "runs_on", "object": "on-prem-gpu-nodes", "ts": 1749600000}
+  ],
+  "queries": [
+    {
+      "query": "What database does billing-service use?",
+      "route": "single",
+      "relevant_indices": [6],
+      "top_k": 5,
+      "expected_answers": ["postgres"],
+      "note": "No cue words; 'database' has no token overlap with the claim, so the anchor's edges must be selected, not matched."
+    },
+    {
+      "query": "What language is auth-service written in?",
+      "route": "single",
+      "relevant_indices": [12],
+      "top_k": 5,
+      "expected_answers": ["rust"]
+    },
+    {
+      "query": "What message queue does notification-service use?",
+      "route": "single",
+      "relevant_indices": [10],
+      "top_k": 5,
+      "expected_answers": ["kafka"],
+      "note": "'queue' has no token overlap with 'kafka'; retrieval must go through the anchor."
+    },
+    {
+      "query": "Where is checkout-service deployed?",
+      "route": "single",
+      "relevant_indices": [13],
+      "top_k": 5,
+      "expected_answers": ["kubernetes-cluster-eu"],
+      "note": "Easy control: 'deployed' and the object share tokens with the query, every arm should score 1.0."
+    },
+    {
+      "query": "What search engine does search-indexer use?",
+      "route": "single",
+      "relevant_indices": [16],
+      "top_k": 5,
+      "expected_answers": ["opensearch"]
+    },
+    {
+      "query": "What is the latest Stripe API version used by checkout-service?",
+      "route": "temporal",
+      "relevant_indices": [18],
+      "stale_index": 17,
+      "top_k": 1,
+      "expected_answers": ["stripe-api-v3"],
+      "note": "Freshness trap: query omits the version, so relevance alone ties the stale v1 and id order prefers it. top_k=1 makes rank the measurement."
+    },
+    {
+      "query": "When did api-gateway switch to envoy?",
+      "route": "temporal",
+      "relevant_indices": [20],
+      "stale_index": 19,
+      "top_k": 1,
+      "expected_answers": ["envoy-proxy"],
+      "note": "Freshness trap: nginx is older and shorter-texted."
+    },
+    {
+      "query": "What changed in deploy-pipeline recently?",
+      "route": "temporal",
+      "relevant_indices": [24],
+      "stale_index": 23,
+      "top_k": 1,
+      "expected_answers": ["github-actions-runner"],
+      "note": "Freshness trap: jenkins claim is the older competing depends_on edge."
+    },
+    {
+      "query": "What was the most recent incident affecting checkout-service?",
+      "route": "temporal",
+      "relevant_indices": [29],
+      "stale_index": 27,
+      "top_k": 1,
+      "expected_answers": ["incident-2026-09-14"],
+      "note": "Freshness trap: two 'concerns checkout-service' incidents, the older one must lose."
+    },
+    {
+      "query": "Which Stripe API version was checkout-service using before the migration?",
+      "route": "temporal",
+      "relevant_indices": [17],
+      "top_k": 1,
+      "expected_answers": ["stripe-api-v1"],
+      "note": "Inverse control: the correct answer IS the stale claim. A recency setting that flips this answer is too strong."
+    },
+    {
+      "query": "What database do checkout-service and billing-service both depend on?",
+      "route": "intersection",
+      "relevant_indices": [6, 7],
+      "top_k": 5,
+      "expected_answers": ["postgres"],
+      "note": "Two anchors, 'both' cue. The shared owner payments-team is a second common neighbor; expected answer is only the database."
+    },
+    {
+      "query": "What services are owned by platform-team and deployed on kubernetes-cluster-eu?",
+      "route": "intersection",
+      "relevant_indices": [2, 3, 14, 15],
+      "top_k": 5,
+      "expected_answers": ["auth-service", "api-gateway"],
+      "note": "Distractor: search-indexer is owned by platform-team but not deployed on kubernetes, so it must not appear."
+    },
+    {
+      "query": "What monitoring tool is shared between api-gateway and search-indexer?",
+      "route": "intersection",
+      "relevant_indices": [21, 22],
+      "top_k": 5,
+      "expected_answers": ["prometheus"]
+    },
+    {
+      "query": "What do checkout-service and notification-service have in common?",
+      "route": "intersection",
+      "relevant_indices": [8, 10],
+      "top_k": 5,
+      "expected_answers": ["kafka"],
+      "note": "Common neighbor reached through two different predicates (depends_on vs uses)."
+    },
+    {
+      "query": "List all services owned by payments-team.",
+      "route": "list",
+      "relevant_indices": [0, 1],
+      "top_k": 5,
+      "expected_answers": ["checkout-service", "billing-service"]
+    },
+    {
+      "query": "Which services depend on kafka?",
+      "route": "list",
+      "relevant_indices": [8, 9, 10],
+      "top_k": 5,
+      "expected_answers": ["checkout-service", "search-indexer", "notification-service"],
+      "note": "Expected answers span depends_on and uses edges; the kafka runs_version noise claim (35) is about kafka itself and is not a service dependency."
+    },
+    {
+      "query": "What are the components of deploy-pipeline?",
+      "route": "list",
+      "relevant_indices": [23, 24, 25, 26],
+      "top_k": 5,
+      "expected_answers": ["jenkins", "github-actions-runner", "terraform", "kubernetes-cluster-eu"],
+      "note": "Stale jenkins is deliberately expected: nothing invalidated it, so an exhaustive list includes it and recency must re-rank, not filter."
+    },
+    {
+      "query": "Enumerate incidents caused by stripe-api-v3-migration.",
+      "route": "list",
+      "relevant_indices": [30, 33],
+      "top_k": 5,
+      "expected_answers": ["incident-2026-09-14", "incident-2026-09-20"]
+    },
+    {
+      "query": "How many services does platform-team own?",
+      "route": "count",
+      "relevant_indices": [2, 3, 4],
+      "top_k": 5,
+      "expected_answers": ["auth-service", "api-gateway", "search-indexer"],
+      "expected_count": 3
+    },
+    {
+      "query": "How many services depend on postgres?",
+      "route": "count",
+      "relevant_indices": [6, 7],
+      "top_k": 5,
+      "expected_answers": ["billing-service", "checkout-service"],
+      "expected_count": 2,
+      "note": "Noise claim 34 (postgres runs_version 15.4) is about postgres itself and must not inflate the count."
+    }
+  ]
+}
