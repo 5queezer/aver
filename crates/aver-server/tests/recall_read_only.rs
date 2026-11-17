@@ -43,6 +43,7 @@ fn recall_leaves_log_and_database_bytes_unchanged() {
             status: None,
             alpha: None,
             context: None,
+            mode: None,
         })
         .unwrap();
 

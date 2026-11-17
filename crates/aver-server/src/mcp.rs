@@ -74,6 +74,9 @@ pub struct RecallParams {
     /// ADR-0032 filter: only claims established under this context entity.
     #[serde(default)]
     pub context: Option<String>,
+    /// "hybrid" (default) or "graph_first": opt-in bounded expansion from entities the query names, with routing, evidence ids and budget; falls back to hybrid when no entity matches.
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 fn default_top_k() -> usize {
@@ -460,7 +463,7 @@ impl AverMcpService {
 
     const RECALL: ToolScope = ToolScope::new("recall", Scope::ClaimsRead);
     #[tool(
-        description = "Search durable claims by text query. Start here for stored facts, preferences, project context, or when you do not know an exact entity id. Hybrid vector + graph ranking (ADR-0004) when the server has embeddings configured; the result's `retrieval` field says which path ran."
+        description = "Search durable claims by text query. Start here for stored facts, preferences, project context, or when you do not know an exact entity id. Hybrid vector + graph ranking (ADR-0004) when the server has embeddings configured; the result's `retrieval` field says which path ran. Opt-in mode=\"graph_first\" (ADR-0033) answers from a bounded expansion around entities the query names."
     )]
     async fn recall(
         &self,
@@ -492,6 +495,7 @@ impl AverMcpService {
                 status: None,
                 alpha: params.alpha,
                 context: params.context,
+                mode: params.mode,
             }
         };
         let result = tools.recall(params);
@@ -554,7 +558,8 @@ fn mcp_tool_instructions() -> String {
                 "Keep maintenance tools hidden until there is an explicit repair need: {}. Prefer contradict for normal conflicting evidence, retire_claim only for explicit invalidation, consolidate only when you need refreshed derived state, and add_vector_chunk only for retrieval tuning. ",
                 "Structured writes: use short identifiers for entities, numeric/quoted/prose values as literals. INFERRED means your judgment (default 0.45; maximum 0.75), EXTRACTED means stated in a cited source, AMBIGUOUS means conflicting evidence. Repetition does not prove extraction. Store rationale with record_event, then write claims with its event_id in the same scope. Prose returns an atomic-triple hint; strict_atomic=true rejects it before append. Decision vocabulary: concerns/about, is/is_a, triggered_by, supersedes, has_rationale (multi); a store's ontology.json can add domain predicates with their own cardinality. Consolidate to supersede corrected single-valued facts. ",
                 "Embedding on write: when a result of remember_claim, add_triple or promote_candidate_claim carries `embedded`, true means the claim is eligible for hybrid recall and false means it was saved keyword-only (not retried); without the field the server does not embed on write. ",
-                "Source-event audit: progressively load get_event only for a known event_id (from a claim or record_event). It requires claims:read and the exact event scope, defaulting to the request scope. Recall does not expand event payloads; use get_event to read rationale on demand. ",
+                "Source-event audit: progressively load get_event only for a known event_id (from a claim or record_event). It requires claims:read and the exact event scope, defaulting to the request scope. Default recall does not expand event payloads; use get_event to read rationale on demand. Only recall with mode=\"graph_first\" also returns the source events of the claims it selects. ",
+                "Recall mode: hybrid by default; pass mode=\"graph_first\" when the question names entities (one fact, when/latest, both X and Y, list, how many). It expands from at most 15 named entities under an edge budget and returns evidence_ids, budget and latency_ms; with no named entity, or a time relative to an event (before, after, since, until), it falls back to the default path and says why in graph_first.fallback. ",
                 "Claim validity: remember_claim and add_triple accept `context` (an opaque entity id the claim was established under) and a `valid_from`/`valid_until` window in Unix seconds. Evidence items link with `<item> in_context <context>`, `<item> concerns <topic>` and `<item> closed_at <time>` once they have an outcome. For a claim with a context or an explicit confirmation, recall also returns last_verified_at, last_confirmed_at, the latest confirmation and evidence_since_confirmation: closed matching items (same context; concerning the claim's subject or its own concerns topics) in the claim's scope or below since the later of its last confirmation and valid_from. Review tools for a review step only: {}; refute with contradict. ",
                 "Tool groups: event workflow {}. Full tool index: {}. ",
                 "Progressively load event-to-claim tools only when converting raw events into reviewed durable claims: {}. ",
@@ -724,6 +729,7 @@ mod tests {
                 status: None,
                 alpha: None,
                 context: None,
+                mode: None,
             })
             .unwrap();
         let subjects: Vec<&str> = recalled

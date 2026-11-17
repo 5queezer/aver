@@ -46,6 +46,7 @@ fn recall_params(query: &str, alpha: Option<f64>) -> RecallParams {
         status: None,
         alpha,
         context: None,
+        mode: None,
     }
 }
 

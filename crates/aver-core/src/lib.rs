@@ -7,6 +7,7 @@ mod claims;
 mod episodic;
 mod error;
 mod graph;
+pub mod graph_first;
 mod ids;
 mod log;
 mod maintenance;
