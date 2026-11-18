@@ -154,5 +154,5 @@ Vector chunks were only written by the maintenance tool `add_vector_chunk`, so t
 
 - Opt-in by its own setting, not implied by a provider: it adds an embedding request, made under the server's tool lock, to every claim write.
 - The claim write (validation, privacy gate, log append, commit) completes first. The chunk is best effort through the existing logged chunk path, so no new record type exists and replay is unchanged. A provider failure leaves a text-only chunk and the result says `embedded: false`; nothing retries it.
-- Not covered automatically: `aver extract`, consolidation, and claims written before the setting was on. Run `aver backfill` with the same embedding-provider environment as the server to embed their stored text-only chunks through the append-only `embed_vector_chunk` path.
+- Not covered automatically: `aver extract`, consolidation, and claims written before the setting was on. Run `aver backfill` with the same embedding-provider environment as the server to embed existing text-only chunks through the append-only `embed_vector_chunk` path. A failed embed-on-write leaves such a chunk, but claims written by `aver extract` or any other path without a chunk have nothing for backfill to embed.
 - Known limit: re-assertions add chunks with identical vectors, and chunks of superseded duplicates stay in the index.
