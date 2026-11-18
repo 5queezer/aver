@@ -85,6 +85,9 @@ pub fn embedding_from_vars(vars: impl Fn(&str) -> Option<String>) -> (Option<Emb
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
     };
+    let timeout = var("AVER_EMBEDDING_TIMEOUT_SECS")
+        .and_then(|value| parse_timeout_secs(&value))
+        .unwrap_or(DEFAULT_EMBEDDING_TIMEOUT);
     match var("AVER_EMBEDDING_PROVIDER").as_deref() {
         None | Some("ollama") => {
             let model = VectorIndexConfig::from_optional_config(
@@ -93,7 +96,10 @@ pub fn embedding_from_vars(vars: impl Fn(&str) -> Option<String>) -> (Option<Emb
             )
             .unwrap_or_default()
             .embedding_model;
-            (ollama_embedder(var("AVER_EMBEDDING_URL"), &model), model)
+            (
+                ollama_embedder(var("AVER_EMBEDDING_URL"), &model, timeout),
+                model,
+            )
         }
         Some("openai") => {
             let model = var("AVER_EMBEDDING_MODEL")
@@ -106,6 +112,7 @@ pub fn embedding_from_vars(vars: impl Fn(&str) -> Option<String>) -> (Option<Emb
                         .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
                     &model,
                     api_key,
+                    timeout,
                 ),
                 None => {
                     // Settings are never echoed: a key pasted into the wrong
@@ -457,17 +464,21 @@ impl EmbeddingClient for OpenAiEmbeddingClient {
     }
 }
 
-fn openai_embedder(url: String, model: &str, api_key: String) -> Option<Embedder> {
+fn openai_embedder(
+    url: String,
+    model: &str,
+    api_key: String,
+    timeout: Duration,
+) -> Option<Embedder> {
     Some(Box::new(
         OpenAiEmbeddingClient::new(url, model, crate::VECTOR_INDEX_DIM, api_key)
-            .with_timeout(embedding_timeout_from_env()),
+            .with_timeout(timeout),
     ))
 }
 
-fn ollama_embedder(url: Option<String>, model: &str) -> Option<Embedder> {
+fn ollama_embedder(url: Option<String>, model: &str, timeout: Duration) -> Option<Embedder> {
     url.map(|url| {
-        Box::new(OllamaEmbeddingClient::new(url, model).with_timeout(embedding_timeout_from_env()))
-            as Embedder
+        Box::new(OllamaEmbeddingClient::new(url, model).with_timeout(timeout)) as Embedder
     })
 }
 
@@ -483,6 +494,37 @@ mod timeout_tests {
         assert_eq!(parse_timeout_secs("-1"), None);
         assert_eq!(parse_timeout_secs("fast"), None);
         assert_eq!(DEFAULT_EMBEDDING_TIMEOUT, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn embedding_from_vars_uses_supplied_timeout() {
+        use std::io::Read;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        });
+
+        let (embedder, _) = embedding_from_vars(|name| match name {
+            "AVER_EMBEDDING_URL" => Some(format!("http://{addr}")),
+            "AVER_EMBEDDING_TIMEOUT_SECS" => Some("1".to_string()),
+            _ => None,
+        });
+        let err = embedder
+            .unwrap()
+            .embed("hello")
+            .expect_err("no response must be an error");
+        assert!(
+            err.to_string().contains("timed out after 1.0s"),
+            "the supplied timeout must configure the client: {err}"
+        );
+        server.join().unwrap();
     }
 
     /// A socket that accepts and never answers must fail within the
