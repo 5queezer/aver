@@ -83,7 +83,8 @@ def check_quickstart(readme):
     commands, expected = match.groups()
     # Run in a private copy of the committed tree, so the check never touches a
     # store (or anything else) in the working checkout; only that copy is removed.
-    target = os.environ.get("CARGO_TARGET_DIR") or os.path.join(ROOT, "target")
+    # Absolute, so cargo doesn't resolve a relative CARGO_TARGET_DIR inside the copy.
+    target = os.path.abspath(os.environ.get("CARGO_TARGET_DIR") or os.path.join(ROOT, "target"))
     os.makedirs(target, exist_ok=True)
     work = tempfile.mkdtemp(prefix="readme-check-", dir=target)
     try:
