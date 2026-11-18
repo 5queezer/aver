@@ -7,7 +7,8 @@
    be the line that declares it, so the link opens on the test. CI then runs
    the tests.
 2. The block between <!-- quickstart --> and <!-- /quickstart --> runs
-   verbatim with bash from the repository root, and its stdout must equal the
+   verbatim with bash in a private copy of the committed tree (git archive
+   HEAD, under the cargo target dir), and its stdout must equal the
    "Expected output" block exactly. `<number>` in the expected text matches
    one or more digits (claim ids differ on every run).
 
@@ -17,11 +18,14 @@ Usage: python3 -I scripts/readme_check.py [--links-only | --fix]
 exits; CI never runs it.
 """
 
+import io
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 README = os.path.join(ROOT, "README.md")
@@ -77,18 +81,28 @@ def check_quickstart(readme):
     if not match:
         return ["README has no quickstart block between the markers"]
     commands, expected = match.groups()
-    store = os.path.join(ROOT, ".aver")
-    if os.path.exists(store):
-        return [".aver already exists in the repository root; refusing to touch it"]
+    # Run in a private copy of the committed tree, so the check never touches a
+    # store (or anything else) in the working checkout; only that copy is removed.
+    target = os.environ.get("CARGO_TARGET_DIR") or os.path.join(ROOT, "target")
+    os.makedirs(target, exist_ok=True)
+    work = tempfile.mkdtemp(prefix="readme-check-", dir=target)
     try:
+        archive = subprocess.run(
+            ["git", "-C", ROOT, "archive", "--format=tar", "HEAD"],
+            stdout=subprocess.PIPE,
+            check=True,
+        ).stdout
+        with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+            tar.extractall(work, filter="data")
         run = subprocess.run(
             ["bash", "-euo", "pipefail", "-c", commands],
-            cwd=ROOT,
+            cwd=work,
+            env={**os.environ, "CARGO_TARGET_DIR": target},
             stdout=subprocess.PIPE,
             text=True,
         )
     finally:
-        shutil.rmtree(store, ignore_errors=True)
+        shutil.rmtree(work, ignore_errors=True)
     if run.returncode != 0:
         return [f"quickstart exited with {run.returncode}"]
     pattern = "".join(
@@ -98,7 +112,6 @@ def check_quickstart(readme):
     if not re.fullmatch(pattern, run.stdout):
         return [f"quickstart output differs.\nexpected:\n{expected}\ngot:\n{run.stdout}"]
     return []
-
 
 def fix_anchors(readme):
     def anchored(match):
