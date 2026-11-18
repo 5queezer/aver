@@ -30,7 +30,8 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 README = os.path.join(ROOT, "README.md")
 
-PROOF = re.compile(r'\]\(([^)\s#]+)(?:#L(\d+))? "([^"]+)"\)')
+PROOF = re.compile(r'\]\(([^)\s#]+)(?:#([^)\s]*))? "([^"]+)"\)')
+ANCHOR = re.compile(r"L(\d+)")
 QUICKSTART = re.compile(
     r"<!-- quickstart -->\s*```bash\n(.*?)```.*?```text\n(.*?)```\s*<!-- /quickstart -->",
     re.S,
@@ -59,7 +60,8 @@ def defines(path, name):
 def check_links(readme):
     errors = []
     links = PROOF.findall(readme)
-    for path, anchor, name in links:
+    for path, fragment, name in links:
+        anchor = ANCHOR.fullmatch(fragment)
         full = os.path.join(ROOT, path)
         if not os.path.isfile(full):
             errors.append(f"proof link to missing file: {path}")
@@ -67,10 +69,12 @@ def check_links(readme):
         line = defines(full, name)
         if line is None:
             errors.append(f"{path} does not define test {name!r}")
-        elif not anchor:
+        elif not fragment:
             errors.append(f"proof link to {name!r} has no #L anchor (run --fix)")
-        elif int(anchor) != line:
-            errors.append(f"{path}#L{anchor} is not {name!r}, which is at line {line} (run --fix)")
+        elif not anchor:
+            errors.append(f"{path}#{fragment} is not a single-line #L<n> anchor (run --fix)")
+        elif int(anchor.group(1)) != line:
+            errors.append(f"{path}#{fragment} is not {name!r}, which is at line {line} (run --fix)")
     if not links:
         errors.append("README has no proof links")
     return errors
