@@ -1101,14 +1101,23 @@ impl AverTools {
                 return Ok(None);
             }
         };
-        let claims = self.store.recall_hybrid_claims_with_filters(
+        let claims = match self.store.recall_hybrid_claims_with_filters(
             query,
             &query_embedding,
             top_k,
             weights,
             filters,
             time::OffsetDateTime::now_utc().unix_timestamp(),
-        )?;
+        ) {
+            Ok(claims) => claims,
+            Err(Error::InvalidEmbeddingVector) => {
+                eprintln!(
+                    "aver-server: query embedding failed, using keyword recall: invalid embedding vector"
+                );
+                return Ok(None);
+            }
+            Err(err) => return Err(err.into()),
+        };
         let mut chunks = Vec::new();
         for claim in &claims {
             for chunk in self.store.list_vector_chunks_for_claim(claim.id)? {
@@ -1426,15 +1435,20 @@ impl AverTools {
                 }
             });
         Ok(match embedding {
-            Some(embedding) => (
-                self.store.add_vector_chunk_with_embedding(
-                    claim_id,
-                    text,
-                    &self.embedding_model,
-                    &embedding,
-                )?,
-                true,
-            ),
+            Some(embedding) => match self.store.add_vector_chunk_with_embedding(
+                claim_id,
+                text,
+                &self.embedding_model,
+                &embedding,
+            ) {
+                Ok(chunk_id) => (chunk_id, true),
+                Err(Error::InvalidEmbeddingVector) => (
+                    self.store
+                        .add_vector_chunk(claim_id, text, &self.embedding_model)?,
+                    false,
+                ),
+                Err(err) => return Err(err.into()),
+            },
             None => (
                 self.store
                     .add_vector_chunk(claim_id, text, &self.embedding_model)?,

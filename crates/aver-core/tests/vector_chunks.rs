@@ -582,6 +582,7 @@ fn add_vector_chunk_with_embedding_rejects_non_finite_embedding_values() {
         .expect_err("non-finite embeddings should be rejected");
 
     assert!(err.to_string().contains("embedding vector"));
+    assert!(err.to_string().contains("finite"));
 }
 
 #[test]
@@ -597,10 +598,10 @@ fn add_vector_chunk_with_embedding_rejects_zero_vector() {
         ))
         .unwrap();
 
-    let result =
-        store.add_vector_chunk_with_embedding(claim_id, "auth", "nomic-embed-text", &[0.0, 0.0]);
-
-    assert!(result.is_err());
+    let err = store
+        .add_vector_chunk_with_embedding(claim_id, "auth", "nomic-embed-text", &[0.0, 0.0])
+        .expect_err("zero vectors should be rejected");
+    assert!(err.to_string().contains("non-zero"));
 }
 
 #[test]

@@ -10,6 +10,14 @@ use aver_server::tools::{AddTripleParams, AddVectorChunkParams, AverTools, Recal
 /// standing in for an unreachable Ollama.
 struct LookupEmbedder(HashMap<&'static str, Vec<f32>>);
 
+struct ZeroEmbedder;
+
+impl EmbeddingClient for ZeroEmbedder {
+    fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        Ok(vec![0.0, 0.0])
+    }
+}
+
 impl EmbeddingClient for LookupEmbedder {
     fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
         self.0
@@ -177,6 +185,20 @@ fn recall_falls_back_to_keyword_when_query_embedding_fails() {
     assert!(recalled.chunks.is_empty());
     let ids: Vec<i64> = recalled.triples.iter().map(|claim| claim.id).collect();
     assert_eq!(ids, vec![graph_claim]);
+}
+
+#[test]
+fn recall_falls_back_to_keyword_when_query_embedding_is_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tools, graph_claim, _) = seeded_tools(&dir);
+    let tools = tools.with_embedding_client(Some(Box::new(ZeroEmbedder)));
+
+    let recalled = tools.recall(recall_params("billing", None)).unwrap();
+
+    assert_eq!(recalled.retrieval, "keyword");
+    assert_eq!(recalled.alpha, None);
+    assert!(recalled.chunks.is_empty());
+    assert_eq!(recalled.triples[0].id, graph_claim);
 }
 
 #[test]

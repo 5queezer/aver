@@ -17,6 +17,14 @@ struct CountingEmbedder {
     fail: bool,
 }
 
+struct ZeroEmbedder;
+
+impl EmbeddingClient for ZeroEmbedder {
+    fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        Ok(vec![0.0, 0.0])
+    }
+}
+
 impl EmbeddingClient for CountingEmbedder {
     fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -184,6 +192,27 @@ fn provider_failure_keeps_the_claim_and_reports_keyword_only() {
         .unwrap();
     assert_eq!(recalled.retrieval, "keyword");
     assert_eq!(json!(recalled.triples[0].id), claim["id"]);
+}
+
+#[test]
+fn zero_embedding_keeps_a_text_only_chunk_for_backfill() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = AverTools::open(dir.path())
+        .unwrap()
+        .with_embedding_client(Some(Box::new(ZeroEmbedder)))
+        .with_embed_on_write(true);
+
+    let claim = remember(&tools, "envoy");
+
+    assert_eq!(claim["embedded"], false);
+    let chunks = chunk_records(dir.path());
+    assert_eq!(chunks.len(), 1);
+    assert!(chunks[0].get("embedding").is_none(), "{}", chunks[0]);
+    drop(tools);
+
+    let store = aver_core::Store::open(dir.path()).unwrap();
+    let client = aver_core::vector::MockEmbeddingClient::new(vec![1.0, 0.0]);
+    assert_eq!(store.backfill_vector_embeddings(&client).unwrap(), 1);
 }
 
 /// A write that validation or the privacy filter rejects never reaches the

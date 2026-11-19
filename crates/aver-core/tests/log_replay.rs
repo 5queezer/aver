@@ -706,6 +706,79 @@ fn legacy_unnormalized_vectors_match_replay_after_migration() {
 }
 
 #[test]
+fn legacy_zero_vectors_are_unembedded_replayable_and_backfillable() {
+    let dir = tempfile::tempdir().unwrap();
+    let (claim_id, chunk_id) = {
+        let store = Store::open(dir.path()).unwrap();
+        let claim_id = store
+            .add_claim(ClaimWrite::new("auth", "is", "ready", "test"))
+            .unwrap();
+        let mut embedding = vec![0.0; aver_core::VECTOR_INDEX_DIM];
+        embedding[0] = 1.0;
+        let chunk_id = store
+            .add_vector_chunk_with_embedding(claim_id, "auth is ready", "test", &embedding)
+            .unwrap();
+        store.close().unwrap();
+        (claim_id, chunk_id)
+    };
+
+    let zero = vec![0.0; aver_core::VECTOR_INDEX_DIM];
+    let zero_json = serde_json::to_string(&zero).unwrap();
+    let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.execute(
+        "UPDATE vector_chunks SET embedding_json = ?1 WHERE id = ?2",
+        (&zero_json, chunk_id),
+    )
+    .unwrap();
+    conn.pragma_update(None, "user_version", aver_core::SCHEMA_VERSION - 1)
+        .unwrap();
+    drop(conn);
+
+    let log_path = dir.path().join("log.jsonl");
+    let log = std::fs::read_to_string(&log_path)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            let mut record: serde_json::Value = serde_json::from_str(line).unwrap();
+            if record["kind"] == "add_vector_chunk" {
+                record["embedding"] = serde_json::to_value(&zero).unwrap();
+            }
+            record.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&log_path, format!("{log}\n")).unwrap();
+
+    let migrated = Store::open(dir.path()).unwrap();
+    assert_eq!(migrated.get_vector_chunk(chunk_id).unwrap().embedding, None);
+    assert_eq!(migrated.vector_index_row_count().unwrap(), 0);
+    let mut query = vec![0.0; aver_core::VECTOR_INDEX_DIM];
+    query[0] = 1.0;
+    let client = MockEmbeddingClient::new(query);
+    let recalled = migrated
+        .recall_hybrid_claims("auth", &client, 1, HybridWeights::for_query("auth"), 0)
+        .unwrap();
+    assert_eq!(recalled[0].id, claim_id);
+    assert_eq!(migrated.backfill_vector_embeddings(&client).unwrap(), 1);
+    assert!(
+        migrated
+            .get_vector_chunk(chunk_id)
+            .unwrap()
+            .embedding
+            .is_some()
+    );
+    assert_eq!(migrated.vector_index_row_count().unwrap(), 1);
+    let expected = migrated.get_vector_chunk(chunk_id).unwrap();
+    migrated.close().unwrap();
+
+    delete_db(dir.path());
+    replay(dir.path(), false).unwrap();
+    let replayed = Store::open(dir.path()).unwrap();
+    assert_eq!(replayed.get_vector_chunk(chunk_id).unwrap(), expected);
+    assert_eq!(replayed.vector_index_row_count().unwrap(), 1);
+}
+
+#[test]
 fn old_log_lines_without_scope_and_provenance_still_replay() {
     let dir = tempfile::tempdir().unwrap();
     // Line format from before the scope/provenance fields were logged.

@@ -26,7 +26,7 @@ pub enum Error {
     InvalidVectorChunkText,
     #[error("invalid embedding model: must not be empty")]
     InvalidEmbeddingModel,
-    #[error("invalid embedding vector: must not be empty")]
+    #[error("invalid embedding vector: must be non-empty, finite, and have a non-zero L2 norm")]
     InvalidEmbeddingVector,
     #[error("invalid claim {field}: must not be empty")]
     InvalidClaimField { field: &'static str },

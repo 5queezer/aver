@@ -23,7 +23,7 @@ use crate::ontology::ensure_entity_on;
 use crate::seed;
 use crate::store::VECTOR_INDEX_DIM;
 use crate::types::{AgentKind, HyperedgeParticipantInput, Provenance};
-use crate::vector::normalize_embedding;
+use crate::vector::{EmbeddingError, normalize_embedding};
 
 /// Outcome of applying one record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1089,6 +1089,26 @@ fn index_embedding(
     Ok(())
 }
 
+fn normalize_stored_embedding(chunk_id: i64, embedding: &[f32]) -> Result<Option<Vec<f32>>, Error> {
+    match normalize_embedding(embedding) {
+        Ok(normalized) => Ok(Some(normalized)),
+        Err(EmbeddingError::ZeroVector) => {
+            eprintln!(
+                "aver: chunk {chunk_id} has an empty, non-finite or zero embedding; storing text only"
+            );
+            Ok(None)
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn remove_embedding_index(conn: &Connection, chunk_id: i64) -> Result<(), Error> {
+    if has_table(conn, "vector_index")? {
+        conn.execute("DELETE FROM vector_index WHERE chunk_id = ?1", [chunk_id])?;
+    }
+    Ok(())
+}
+
 fn add_vector_chunk(
     conn: &Connection,
     ts: i64,
@@ -1098,7 +1118,10 @@ fn add_vector_chunk(
     embedding_model: &str,
     embedding: Option<&[f32]>,
 ) -> Result<Applied, Error> {
-    let normalized = embedding.map(normalize_embedding).transpose()?;
+    let normalized = match embedding {
+        Some(embedding) => normalize_stored_embedding(chunk_id, embedding)?,
+        None => None,
+    };
     let embedding = normalized.as_deref();
     let embedding_json = embedding.map(serde_json::to_string).transpose()?;
     let existing: Option<(i64, String, String, Option<String>)> = conn
@@ -1135,9 +1158,6 @@ fn embed_vector_chunk(
     chunk_id: i64,
     embedding: &[f32],
 ) -> Result<Applied, Error> {
-    let normalized = normalize_embedding(embedding)?;
-    let embedding = normalized.as_slice();
-    let embedding_json = serde_json::to_string(embedding)?;
     let existing: Option<Option<String>> = conn
         .query_row(
             "SELECT embedding_json FROM vector_chunks WHERE id = ?1",
@@ -1145,10 +1165,23 @@ fn embed_vector_chunk(
             |row| row.get(0),
         )
         .optional()?;
-    match existing {
-        None => Err(invalid(format!(
+    if existing.is_none() {
+        return Err(invalid(format!(
             "embed_vector_chunk references missing chunk {chunk_id}"
-        ))),
+        )));
+    }
+    let Some(normalized) = normalize_stored_embedding(chunk_id, embedding)? else {
+        conn.execute(
+            "UPDATE vector_chunks SET embedding_json = NULL WHERE id = ?1",
+            [chunk_id],
+        )?;
+        remove_embedding_index(conn, chunk_id)?;
+        return Ok(Applied::Applied);
+    };
+    let embedding = normalized.as_slice();
+    let embedding_json = serde_json::to_string(embedding)?;
+    match existing {
+        None => unreachable!("missing chunks were rejected above"),
         Some(Some(current)) if current == embedding_json => Ok(Applied::Duplicate),
         Some(Some(_)) => Err(duplicate(format!(
             "chunk_id={chunk_id} already has a different embedding"
@@ -1177,7 +1210,14 @@ pub(crate) fn normalize_vector_projection(conn: &Connection) -> Result<(), Error
     };
     for (chunk_id, embedding_json) in rows {
         let embedding: Vec<f32> = serde_json::from_str(&embedding_json)?;
-        let normalized = normalize_embedding(&embedding)?;
+        let Some(normalized) = normalize_stored_embedding(chunk_id, &embedding)? else {
+            conn.execute(
+                "UPDATE vector_chunks SET embedding_json = NULL WHERE id = ?1",
+                [chunk_id],
+            )?;
+            remove_embedding_index(conn, chunk_id)?;
+            continue;
+        };
         let normalized_json = serde_json::to_string(&normalized)?;
         conn.execute(
             "UPDATE vector_chunks SET embedding_json = ?1 WHERE id = ?2",

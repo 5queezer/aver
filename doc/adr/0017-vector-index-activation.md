@@ -159,24 +159,9 @@ Vector chunks were only written by the maintenance tool `add_vector_chunk`, so t
 
 ## Amendment (2026-11-19): unit-vector projection and Ollama `/api/embed`
 
-The original Ollama client used `/api/embeddings`, whose `nomic-embed-text`
-responses are not unit length. Measurements on the CPU endpoint found norms of
-20.7–22.7, while `/api/embed` returned norm 1.000. Raw L2 distances in `vec0`
-therefore made the `1 - distance / 2` similarity clamp to zero even for related
-texts; hybrid recall was effectively keyword-only while still labelled hybrid.
+The original Ollama client used `/api/embeddings`, whose `nomic-embed-text` responses are not unit length. Measurements on the CPU endpoint found norms of 20.7–22.7, while `/api/embed` returned norm 1.000. Raw L2 distances in `vec0` therefore made the `1 - distance / 2` similarity clamp to zero even for related texts; hybrid recall was effectively keyword-only while still labelled hybrid.
 
-- Every vector in the derived SQLite projection is L2-normalized at the single
-  `apply` boundary used by live writes, backfill and replay. The append-only log
-  retains the provider's original vector. Query embeddings are normalized before
-  either `vec0` or JSON scoring. Zero vectors are rejected before a live log
-  append and by the normalization boundary during replay.
-- Migration `0014_unit_embeddings` raises `user_version` to 124. `Store::open`
-  normalizes existing `vector_chunks` and rebuilds the derived `vector_index`
-  inside the existing migration transaction. Older binaries refuse version 124
-  through the existing `SchemaTooNew` path. Replaying the unchanged log produces
-  the same normalized projection as migrating an old store.
-- The Ollama client uses `POST /api/embed` with `model`, `input` and
-  `truncate: true`, and reads `embeddings[0]`. Truncation follows Ollama's
-  context handling instead of failing long local inputs with HTTP 500.
-- OpenAI-compatible over-length input is deliberately unchanged here: this
-  amendment does not add OpenAI truncation, chunking or retry behavior.
+- Every vector in the derived SQLite projection is L2-normalized at the single `apply` boundary used by live writes, backfill and replay. The append-only log retains the provider's original vector. Query embeddings are normalized before either `vec0` or JSON scoring. Empty, non-finite and zero vectors are rejected before an explicit live vector append; a zero provider result on embed-on-write instead leaves a text-only chunk, and a zero query embedding falls back to keyword recall.
+- Migration `0014_unit_embeddings` raises `user_version` to 124. `Store::open` normalizes existing `vector_chunks` and rebuilds the derived `vector_index` inside the existing migration transaction. Empty, non-finite or zero vectors already present in old stores and logs become text-only chunks outside `vector_index`, so startup and strict replay continue and backfill can retry them. Older binaries refuse version 124 through the existing `SchemaTooNew` path. Replaying the unchanged log produces the same normalized projection as migrating an old store.
+- The Ollama client uses `POST /api/embed` with `model`, `input` and `truncate: true`, and reads `embeddings[0]`. Truncation follows Ollama's context handling instead of failing long local inputs with HTTP 500.
+- OpenAI-compatible over-length input is deliberately unchanged here: this amendment does not add OpenAI truncation, chunking or retry behavior.

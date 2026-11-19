@@ -17,7 +17,7 @@ pub enum EmbeddingError {
     Http(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
-    #[error("embedding vector must have a non-zero L2 norm")]
+    #[error("embedding vector must be non-empty, finite, and have a non-zero L2 norm")]
     ZeroVector,
 }
 
@@ -218,7 +218,7 @@ pub(crate) fn normalize_embedding(embedding: &[f32]) -> Result<Vec<f32>, Embeddi
         .map(|component| f64::from(*component) * f64::from(*component))
         .sum::<f64>()
         .sqrt();
-    if norm == 0.0 {
+    if !norm.is_finite() || norm == 0.0 {
         return Err(EmbeddingError::ZeroVector);
     }
     Ok(embedding
