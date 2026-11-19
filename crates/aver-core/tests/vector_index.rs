@@ -191,13 +191,13 @@ fn migration_backfills_existing_vector_chunks_rows() {
             .unwrap();
         conn.execute(
             "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
-             VALUES (?1, 't', 'nomic-embed-text', ?2, 1)",
+             VALUES (?1, 't', 'other-model', ?2, 1)",
             rusqlite::params![claim_id, matching_json],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO vector_chunks (claim_id, text, embedding_model, embedding_json, created_at)
-             VALUES (?1, 't', 'nomic-embed-text', '[1,0,0]', 1)",
+             VALUES (?1, 't', 'other-model', '[1,0,0]', 1)",
             rusqlite::params![claim_id],
         )
         .unwrap();

@@ -91,7 +91,7 @@ fn backfill_command_fills_missing_vectors_and_is_idempotent() {
     );
     let request = requests.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(request.starts_with("POST /api/embed HTTP/1.1\r\n"));
-    assert!(request.contains("\"input\":\"aver stores vectors\""));
+    assert!(request.contains("\"input\":\"search_document: aver stores vectors\""));
     assert!(request.contains("\"truncate\":true"));
 
     let second = run(aver(dir.path()).env("AVER_EMBEDDING_URL", &url));

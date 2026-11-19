@@ -11,7 +11,9 @@ use std::path::Path;
 
 use aver_core::{
     AgentKind, ClaimStatus, Provenance, ReplayMode, Store, replay, replay_with_mode,
-    retrieval::HybridWeights, vector::MockEmbeddingClient,
+    retrieval::HybridWeights,
+    vector::MockEmbeddingClient,
+    vector::{EmbeddingClient, EmbeddingConvention, EmbeddingError},
 };
 use rusqlite::Connection;
 
@@ -19,6 +21,20 @@ fn delete_db(dir: &Path) {
     std::fs::remove_file(dir.join("db.sqlite")).unwrap();
     let _ = std::fs::remove_file(dir.join("db.sqlite-wal"));
     let _ = std::fs::remove_file(dir.join("db.sqlite-shm"));
+}
+
+struct PrefixedMockEmbeddingClient {
+    embedding: Vec<f32>,
+}
+
+impl EmbeddingClient for PrefixedMockEmbeddingClient {
+    fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        Ok(self.embedding.clone())
+    }
+
+    fn embedding_convention(&self) -> EmbeddingConvention {
+        EmbeddingConvention::NomicSearchDocument
+    }
 }
 
 /// (id, subject, predicate, object, provenance, confidence, status,
@@ -658,8 +674,7 @@ fn legacy_unnormalized_vectors_match_replay_after_migration() {
         )
         .unwrap();
     }
-    conn.pragma_update(None, "user_version", aver_core::SCHEMA_VERSION - 1)
-        .unwrap();
+    conn.pragma_update(None, "user_version", 123).unwrap();
     drop(conn);
 
     let migrated = Store::open(dir.path()).unwrap();
@@ -730,8 +745,7 @@ fn legacy_zero_vectors_are_unembedded_replayable_and_backfillable() {
         (&zero_json, chunk_id),
     )
     .unwrap();
-    conn.pragma_update(None, "user_version", aver_core::SCHEMA_VERSION - 1)
-        .unwrap();
+    conn.pragma_update(None, "user_version", 123).unwrap();
     drop(conn);
 
     let log_path = dir.path().join("log.jsonl");
@@ -825,8 +839,7 @@ fn legacy_null_vector_components_are_unembedded_and_backfillable() {
         "../migrations-legacy/0015_vector_embedding_numeric_checks.sql"
     ))
     .unwrap();
-    conn.pragma_update(None, "user_version", aver_core::SCHEMA_VERSION - 1)
-        .unwrap();
+    conn.pragma_update(None, "user_version", 123).unwrap();
     drop(conn);
 
     let migrated = Store::open(dir.path()).expect("legacy null components must not block opening");
@@ -855,6 +868,130 @@ fn legacy_null_vector_components_are_unembedded_and_backfillable() {
             .is_some()
     );
     assert_eq!(migrated.vector_index_row_count().unwrap(), 2);
+}
+
+#[test]
+fn legacy_nomic_vectors_are_backfilled_with_a_replayable_prefix_convention() {
+    let dir = tempfile::tempdir().unwrap();
+    let (nomic_chunk_id, backfilled_chunk_id, other_chunk_id) = {
+        let store = Store::open(dir.path()).unwrap();
+        let nomic_claim_id = store
+            .add_claim(ClaimWrite::new("legacy", "has", "nomic vector", "test"))
+            .unwrap();
+        let other_claim_id = store
+            .add_claim(ClaimWrite::new("legacy", "has", "other vector", "test"))
+            .unwrap();
+        let mut embedding = vec![0.0; aver_core::VECTOR_INDEX_DIM];
+        embedding[0] = 1.0;
+        let nomic_chunk_id = store
+            .add_vector_chunk_with_embedding(
+                nomic_claim_id,
+                "legacy has nomic vector",
+                "nomic-embed-text:v1.5",
+                &embedding,
+            )
+            .unwrap();
+        let backfilled_chunk_id = store
+            .add_vector_chunk(
+                nomic_claim_id,
+                "legacy backfilled nomic vector",
+                "nomic-embed-text:v1.5",
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .backfill_vector_embeddings(&MockEmbeddingClient::new(embedding.clone()))
+                .unwrap(),
+            1
+        );
+        let other_chunk_id = store
+            .add_vector_chunk_with_embedding(
+                other_claim_id,
+                "legacy has other vector",
+                "other-model",
+                &embedding,
+            )
+            .unwrap();
+        store.close().unwrap();
+        (nomic_chunk_id, backfilled_chunk_id, other_chunk_id)
+    };
+
+    let log_path = dir.path().join("log.jsonl");
+    let legacy_log = std::fs::read_to_string(&log_path)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            let mut record: serde_json::Value = serde_json::from_str(line).unwrap();
+            if let Some(object) = record.as_object_mut() {
+                object.remove("embedding_convention");
+            }
+            record.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&log_path, format!("{legacy_log}\n")).unwrap();
+    let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.pragma_update(None, "user_version", 124).unwrap();
+    drop(conn);
+
+    let migrated = Store::open(dir.path()).unwrap();
+    assert_eq!(
+        migrated.get_vector_chunk(nomic_chunk_id).unwrap().embedding,
+        None
+    );
+    assert_eq!(
+        migrated
+            .get_vector_chunk(backfilled_chunk_id)
+            .unwrap()
+            .embedding,
+        None
+    );
+    assert!(
+        migrated
+            .get_vector_chunk(other_chunk_id)
+            .unwrap()
+            .embedding
+            .is_some()
+    );
+    assert_eq!(migrated.vector_index_row_count().unwrap(), 1);
+    let keyword_only = migrated
+        .recall_text(aver_core::RecallQuery::new("nomic"))
+        .unwrap();
+    assert_eq!(keyword_only.len(), 1);
+
+    let mut embedding = vec![0.0; aver_core::VECTOR_INDEX_DIM];
+    embedding[1] = 1.0;
+    let client = PrefixedMockEmbeddingClient { embedding };
+    assert_eq!(migrated.backfill_vector_embeddings(&client).unwrap(), 2);
+    let new_claim_id = migrated
+        .add_claim(ClaimWrite::new("fresh", "has", "prefixed vector", "test"))
+        .unwrap();
+    let new_chunk_id = migrated
+        .add_embedded_vector_chunk_for_claim(new_claim_id, "nomic-embed-text:v1.5", &client)
+        .unwrap();
+    let expected = vec![
+        migrated.get_vector_chunk(nomic_chunk_id).unwrap(),
+        migrated.get_vector_chunk(backfilled_chunk_id).unwrap(),
+        migrated.get_vector_chunk(other_chunk_id).unwrap(),
+        migrated.get_vector_chunk(new_chunk_id).unwrap(),
+    ];
+    let log = std::fs::read_to_string(&log_path).unwrap();
+    assert!(log.contains(r#""embedding_convention":"nomic_search_document""#));
+    migrated.close().unwrap();
+
+    delete_db(dir.path());
+    replay(dir.path(), false).unwrap();
+    let replayed = Store::open(dir.path()).unwrap();
+    assert_eq!(
+        vec![
+            replayed.get_vector_chunk(nomic_chunk_id).unwrap(),
+            replayed.get_vector_chunk(backfilled_chunk_id).unwrap(),
+            replayed.get_vector_chunk(other_chunk_id).unwrap(),
+            replayed.get_vector_chunk(new_chunk_id).unwrap(),
+        ],
+        expected
+    );
+    assert_eq!(replayed.vector_index_row_count().unwrap(), 4);
 }
 
 #[test]

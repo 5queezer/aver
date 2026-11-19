@@ -423,12 +423,13 @@ impl BeamMemory<'_> {
                         ClaimWrite::new(&subject, &predicate, &object, BEAM_SOURCE)
                             .confidence(BEAM_CLAIM_CONFIDENCE),
                     )?;
-                    let embedding = embedder.embed(embedding_text)?;
-                    store.add_vector_chunk_with_embedding(
+                    let embedding = embedder.embed_document(embedding_text)?;
+                    store.add_vector_chunk_with_embedding_convention(
                         id,
                         embedding_text,
                         embedding_model,
                         &embedding,
+                        embedder.embedding_convention(),
                     )?;
                 }
                 Self::Mcp { client, scope } => {
@@ -677,6 +678,27 @@ impl EmbeddingClient for BeamEmbeddingClient {
         match self {
             Self::Ollama(client) => client.embed(text),
             Self::OpenAi(client) => client.embed(text),
+        }
+    }
+
+    fn embed_document(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        match self {
+            Self::Ollama(client) => client.embed_document(text),
+            Self::OpenAi(client) => client.embed_document(text),
+        }
+    }
+
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        match self {
+            Self::Ollama(client) => client.embed_query(text),
+            Self::OpenAi(client) => client.embed_query(text),
+        }
+    }
+
+    fn embedding_convention(&self) -> aver_core::vector::EmbeddingConvention {
+        match self {
+            Self::Ollama(client) => client.embedding_convention(),
+            Self::OpenAi(client) => client.embedding_convention(),
         }
     }
 }

@@ -1094,7 +1094,7 @@ impl AverTools {
         if self.store.vector_chunk_embedding_status()?.0 == 0 {
             return Ok(None);
         }
-        let query_embedding = match embedder.embed(query) {
+        let query_embedding = match embedder.embed_query(query) {
             Ok(embedding) => embedding,
             Err(err) => {
                 eprintln!("aver-server: query embedding failed, using keyword recall: {err}");
@@ -1423,32 +1423,35 @@ impl AverTools {
         // Embed only text that core's validation and privacy filter would
         // accept, so rejected text never leaves the process. Without a client,
         // or when embedding fails, the chunk is stored text-only.
-        let embedding = self
+        let embedded = self
             .embedder
             .as_deref()
             .filter(|_| !text.trim().is_empty() && aver_core::privacy_filter(text).is_ok())
-            .and_then(|embedder| match embedder.embed(text) {
-                Ok(embedding) => Some(embedding),
+            .and_then(|embedder| match embedder.embed_document(text) {
+                Ok(embedding) => Some((embedding, embedder.embedding_convention())),
                 Err(err) => {
                     eprintln!("aver-server: chunk embedding failed, storing text only: {err}");
                     None
                 }
             });
-        Ok(match embedding {
-            Some(embedding) => match self.store.add_vector_chunk_with_embedding(
-                claim_id,
-                text,
-                &self.embedding_model,
-                &embedding,
-            ) {
-                Ok(chunk_id) => (chunk_id, true),
-                Err(Error::InvalidEmbeddingVector) => (
-                    self.store
-                        .add_vector_chunk(claim_id, text, &self.embedding_model)?,
-                    false,
-                ),
-                Err(err) => return Err(err.into()),
-            },
+        Ok(match embedded {
+            Some((embedding, convention)) => {
+                match self.store.add_vector_chunk_with_embedding_convention(
+                    claim_id,
+                    text,
+                    &self.embedding_model,
+                    &embedding,
+                    convention,
+                ) {
+                    Ok(chunk_id) => (chunk_id, true),
+                    Err(Error::InvalidEmbeddingVector) => (
+                        self.store
+                            .add_vector_chunk(claim_id, text, &self.embedding_model)?,
+                        false,
+                    ),
+                    Err(err) => return Err(err.into()),
+                }
+            }
             None => (
                 self.store
                     .add_vector_chunk(claim_id, text, &self.embedding_model)?,

@@ -58,8 +58,27 @@ impl fmt::Display for VectorBackend {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingConvention {
+    Unprefixed,
+    NomicSearchDocument,
+}
+
 pub trait EmbeddingClient {
     fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError>;
+
+    fn embed_document(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        self.embed(text)
+    }
+
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        self.embed(text)
+    }
+
+    fn embedding_convention(&self) -> EmbeddingConvention {
+        EmbeddingConvention::Unprefixed
+    }
 }
 
 pub type Embedder = Box<dyn EmbeddingClient + Send + Sync>;
@@ -363,6 +382,32 @@ impl EmbeddingClient for OllamaEmbeddingClient {
             .into_string()?;
         Ok(self.parse_response_body(&response)?)
     }
+
+    fn embed_document(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        if self.model.starts_with("nomic-embed-text") {
+            return self.embed(&format!("search_document: {text}"));
+        }
+        self.embed(text)
+    }
+
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        if self.model.starts_with("nomic-embed-text") {
+            return self.embed(&format!("search_query: {text}"));
+        }
+        self.embed(text)
+    }
+
+    fn embedding_convention(&self) -> EmbeddingConvention {
+        if self.model.starts_with("nomic-embed-text") {
+            EmbeddingConvention::NomicSearchDocument
+        } else {
+            EmbeddingConvention::Unprefixed
+        }
+    }
+}
+
+pub(crate) fn is_nomic_embedding_model(model: &str) -> bool {
+    model.starts_with("nomic-embed-text")
 }
 
 /// OpenAI model used when the OpenAI-compatible provider is selected

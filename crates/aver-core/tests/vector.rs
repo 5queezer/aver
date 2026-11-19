@@ -2,12 +2,52 @@
 //! before any network I/O. ADR-0013 requires Rust HTTP to local Ollama; ADR-0004
 //! supplies HybridRAG's vector side.
 
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
+use std::sync::mpsc;
+
 use aver_core::ClaimWrite;
 use aver_core::vector::{
-    EmbeddingClient, MockEmbeddingClient, VectorBackend, VectorIndexConfig, cosine_similarity,
-    normalized_cosine_score,
+    EmbeddingClient, EmbeddingError, MockEmbeddingClient, VectorBackend, VectorIndexConfig,
+    cosine_similarity, normalized_cosine_score,
 };
 use aver_core::vector::{OllamaEmbeddingClient, OllamaEmbeddingRequest, OllamaEmbeddingResponse};
+
+fn ollama_request_json(
+    model: &str,
+    call: impl FnOnce(&OllamaEmbeddingClient) -> Result<Vec<f32>, EmbeddingError>,
+) -> serde_json::Value {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut content_length = 0;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                content_length = value.trim().parse().unwrap();
+            }
+            if line == "\r\n" {
+                break;
+            }
+        }
+        let mut body = vec![0; content_length];
+        reader.read_exact(&mut body).unwrap();
+        sender.send(body).unwrap();
+        let body = r#"{"embeddings":[[1.0,0.0]]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        reader.get_mut().write_all(response.as_bytes()).unwrap();
+    });
+    let client = OllamaEmbeddingClient::new(url, model);
+    call(&client).unwrap();
+    serde_json::from_slice(&receiver.recv().unwrap()).unwrap()
+}
 
 #[test]
 fn ollama_embedding_request_serializes_model_input_and_truncation() {
@@ -43,6 +83,30 @@ fn ollama_embedding_client_builds_truncating_request_with_configured_model() {
     assert_eq!(json["model"], "nomic-embed-text");
     assert_eq!(json["input"], "remembered claim text");
     assert_eq!(json["truncate"], true);
+}
+
+#[test]
+fn nomic_ollama_document_and_query_embeddings_use_task_prefixes() {
+    let document = ollama_request_json("nomic-embed-text:v1.5", |client| {
+        client.embed_document("stored memory")
+    });
+    let query = ollama_request_json("nomic-embed-text", |client| {
+        client.embed_query("memory lookup")
+    });
+
+    assert_eq!(document["input"], "search_document: stored memory");
+    assert_eq!(query["input"], "search_query: memory lookup");
+}
+
+#[test]
+fn other_ollama_models_do_not_use_nomic_task_prefixes() {
+    let document = ollama_request_json("all-minilm", |client| {
+        client.embed_document("stored memory")
+    });
+    let query = ollama_request_json("all-minilm", |client| client.embed_query("memory lookup"));
+
+    assert_eq!(document["input"], "stored memory");
+    assert_eq!(query["input"], "memory lookup");
 }
 
 #[test]

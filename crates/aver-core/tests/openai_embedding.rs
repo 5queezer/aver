@@ -89,6 +89,25 @@ fn request_follows_the_embeddings_api_contract() {
     );
 }
 
+#[test]
+fn nomic_model_name_does_not_add_ollama_task_prefixes() {
+    let (url, requests) = mock_server("200 OK", embedding_body(&[1.0, 0.0]));
+    let client = OpenAiEmbeddingClient::new(url, "nomic-embed-text", 2, KEY);
+    client.embed_document("stored memory").unwrap();
+    let request = requests.recv().unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&request[request.find('{').unwrap()..]).unwrap();
+    assert_eq!(json["input"], "stored memory");
+
+    let (url, requests) = mock_server("200 OK", embedding_body(&[1.0, 0.0]));
+    let client = OpenAiEmbeddingClient::new(url, "nomic-embed-text", 2, KEY);
+    client.embed_query("memory lookup").unwrap();
+    let request = requests.recv().unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&request[request.find('{').unwrap()..]).unwrap();
+    assert_eq!(json["input"], "memory lookup");
+}
+
 /// An authentication error can echo part of the key. Neither the response
 /// body nor the key may reach the error text or the client's Debug output.
 #[test]

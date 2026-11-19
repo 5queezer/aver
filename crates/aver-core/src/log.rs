@@ -204,12 +204,16 @@ pub(crate) enum LogRecord {
         embedding_model: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         embedding: Option<Vec<f32>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        embedding_convention: Option<crate::vector::EmbeddingConvention>,
     },
     /// Backfilled embedding for a chunk logged without one.
     EmbedVectorChunk {
         ts: i64,
         chunk_id: i64,
         embedding: Vec<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        embedding_convention: Option<crate::vector::EmbeddingConvention>,
     },
     /// ADR-0004 recency: a re-assertion of an existing claim refreshes its
     /// `last_verified_at`. The outcome (`verified_at`) is logged, not the
@@ -850,6 +854,7 @@ mod record_tests {
                 ts: 1,
                 chunk_id: 1,
                 embedding,
+                embedding_convention: None,
             },
             LogRecord::DecayConfidence { ts: 1, changes },
         ];

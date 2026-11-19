@@ -16,7 +16,7 @@ use crate::validation::{
     validate_embedding_model, validate_embedding_vector, validate_recall_query, validate_top_k,
     validate_vector_chunk_text,
 };
-use crate::vector;
+use crate::vector::{self, EmbeddingConvention};
 impl Store {
     /// Insert vector chunk metadata for a claim without an embedding (to be
     /// backfilled by [`Store::backfill_vector_embeddings`]). `vector_chunks`
@@ -33,7 +33,7 @@ impl Store {
         validate_embedding_model(embedding_model)?;
         self.privacy_filter_recording(text)?;
         self.privacy_filter_path_recording(embedding_model)?;
-        self.insert_vector_chunk(claim_id, text, embedding_model, None)
+        self.insert_vector_chunk(claim_id, text, embedding_model, None, None)
     }
 
     /// Insert vector chunk metadata with its embedding vector serialized for
@@ -49,13 +49,36 @@ impl Store {
         embedding_model: &str,
         embedding: &[f32],
     ) -> Result<i64, Error> {
+        self.add_vector_chunk_with_embedding_convention(
+            claim_id,
+            text,
+            embedding_model,
+            embedding,
+            EmbeddingConvention::Unprefixed,
+        )
+    }
+
+    pub fn add_vector_chunk_with_embedding_convention(
+        &self,
+        claim_id: i64,
+        text: &str,
+        embedding_model: &str,
+        embedding: &[f32],
+        embedding_convention: EmbeddingConvention,
+    ) -> Result<i64, Error> {
         self.ensure_claim_exists(claim_id)?;
         validate_vector_chunk_text(text)?;
         validate_embedding_model(embedding_model)?;
         validate_embedding_vector(embedding)?;
         self.privacy_filter_recording(text)?;
         self.privacy_filter_path_recording(embedding_model)?;
-        self.insert_vector_chunk(claim_id, text, embedding_model, Some(embedding.to_vec()))
+        self.insert_vector_chunk(
+            claim_id,
+            text,
+            embedding_model,
+            Some(embedding.to_vec()),
+            Some(embedding_convention),
+        )
     }
 
     /// Log-first chunk write (ADR-0005/0026): mint the id, append the record
@@ -67,6 +90,7 @@ impl Store {
         text: &str,
         embedding_model: &str,
         embedding: Option<Vec<f32>>,
+        embedding_convention: Option<EmbeddingConvention>,
     ) -> Result<i64, Error> {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
@@ -79,6 +103,7 @@ impl Store {
                 text: text.to_string(),
                 embedding_model: embedding_model.to_string(),
                 embedding,
+                embedding_convention,
             };
             append_jsonl(&self.log_path, &record)?;
             apply(&self.conn, &record)?;
@@ -122,8 +147,14 @@ impl Store {
         self.ensure_claim_exists(claim_id)?;
         let claim = self.get_claim(claim_id)?;
         let text = claim.text();
-        let embedding = client.embed(&text)?;
-        self.add_vector_chunk_with_embedding(claim_id, &text, embedding_model, &embedding)
+        let embedding = client.embed_document(&text)?;
+        self.add_vector_chunk_with_embedding_convention(
+            claim_id,
+            &text,
+            embedding_model,
+            &embedding,
+            client.embedding_convention(),
+        )
     }
 
     /// Retrieve vector chunk metadata by id.
@@ -207,7 +238,8 @@ impl Store {
         drop(stmt);
         let mut count = 0;
         for (chunk_id, text) in rows {
-            let embedding = client.embed(&text)?;
+            let embedding = client.embed_document(&text)?;
+            let embedding_convention = client.embedding_convention();
             validate_embedding_vector(&embedding)?;
             let now = time::OffsetDateTime::now_utc().unix_timestamp();
             self.conn.execute_batch("BEGIN IMMEDIATE")?;
@@ -216,6 +248,7 @@ impl Store {
                     ts: now,
                     chunk_id,
                     embedding,
+                    embedding_convention: Some(embedding_convention),
                 };
                 append_jsonl(&self.log_path, &record)?;
                 apply(&self.conn, &record)?;
@@ -240,7 +273,7 @@ impl Store {
         query: &str,
         client: &dyn crate::vector::EmbeddingClient,
     ) -> Result<Vec<Claim>, Error> {
-        let query_embedding = client.embed(query)?;
+        let query_embedding = client.embed_query(query)?;
 
         // Score each claim that has a stored embedding.
         let mut scores: HashMap<i64, f64> = HashMap::new();
@@ -353,7 +386,7 @@ impl Store {
         }
         validate_recall_query(query)?;
 
-        let query_embedding = vector::normalize_embedding(&client.embed(query)?)?;
+        let query_embedding = vector::normalize_embedding(&client.embed_query(query)?)?;
         self.rank_vector_chunks_by_embedding(&query_embedding, top_k)
     }
 
@@ -403,7 +436,7 @@ impl Store {
             return Ok(Vec::new());
         }
         validate_recall_query(query)?;
-        let embedding = client.embed(query)?;
+        let embedding = client.embed_query(query)?;
         self.recall_hybrid_claims_with_filters(
             query,
             &embedding,

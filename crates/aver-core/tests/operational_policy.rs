@@ -63,9 +63,9 @@ fn fresh_open_sets_user_version_to_current_schema_version() {
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
     assert_eq!(v, aver_core::SCHEMA_VERSION);
-    // Baseline119 plus cardinality, object kind, direct source-event links and
-    // claim validity (ADR-0032).
-    assert_eq!(v, 124);
+    // Baseline119 plus cardinality, object kind, direct source-event links,
+    // claim validity, unit embeddings and nomic task-prefix conventions.
+    assert_eq!(v, 125);
 }
 
 #[test]

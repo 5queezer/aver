@@ -23,7 +23,9 @@ use crate::ontology::ensure_entity_on;
 use crate::seed;
 use crate::store::VECTOR_INDEX_DIM;
 use crate::types::{AgentKind, HyperedgeParticipantInput, Provenance};
-use crate::vector::{EmbeddingError, normalize_embedding};
+use crate::vector::{
+    EmbeddingConvention, EmbeddingError, is_nomic_embedding_model, normalize_embedding,
+};
 
 /// Outcome of applying one record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,6 +269,7 @@ pub(crate) fn apply(conn: &Connection, record: &LogRecord) -> Result<Applied, Er
             text,
             embedding_model,
             embedding,
+            embedding_convention,
         } => add_vector_chunk(
             conn,
             *ts,
@@ -274,13 +277,17 @@ pub(crate) fn apply(conn: &Connection, record: &LogRecord) -> Result<Applied, Er
             *claim_id,
             text,
             embedding_model,
-            embedding.as_deref(),
+            embedding.as_deref().map(|values| VectorChunkEmbedding {
+                values,
+                convention: *embedding_convention,
+            }),
         ),
         LogRecord::EmbedVectorChunk {
             chunk_id,
             embedding,
+            embedding_convention,
             ..
-        } => embed_vector_chunk(conn, *chunk_id, embedding),
+        } => embed_vector_chunk(conn, *chunk_id, embedding, *embedding_convention),
         LogRecord::ReverifyClaim {
             ts,
             claim_id,
@@ -1125,6 +1132,11 @@ fn remove_embedding_index(conn: &Connection, chunk_id: i64) -> Result<(), Error>
     Ok(())
 }
 
+struct VectorChunkEmbedding<'a> {
+    values: &'a [f32],
+    convention: Option<EmbeddingConvention>,
+}
+
 fn add_vector_chunk(
     conn: &Connection,
     ts: i64,
@@ -1132,10 +1144,18 @@ fn add_vector_chunk(
     claim_id: i64,
     text: &str,
     embedding_model: &str,
-    embedding: Option<&[f32]>,
+    embedding: Option<VectorChunkEmbedding<'_>>,
 ) -> Result<Applied, Error> {
     let normalized = match embedding {
-        Some(embedding) => normalize_stored_embedding(chunk_id, embedding)?,
+        Some(embedding)
+            if is_nomic_embedding_model(embedding_model) && embedding.convention.is_none() =>
+        {
+            eprintln!(
+                "aver: chunk {chunk_id} has a legacy unprefixed nomic embedding; storing text only"
+            );
+            None
+        }
+        Some(embedding) => normalize_stored_embedding(chunk_id, embedding.values)?,
         None => None,
     };
     let embedding = normalized.as_deref();
@@ -1173,18 +1193,30 @@ fn embed_vector_chunk(
     conn: &Connection,
     chunk_id: i64,
     embedding: &[f32],
+    embedding_convention: Option<EmbeddingConvention>,
 ) -> Result<Applied, Error> {
-    let existing: Option<Option<String>> = conn
+    let existing: Option<(String, Option<String>)> = conn
         .query_row(
-            "SELECT embedding_json FROM vector_chunks WHERE id = ?1",
+            "SELECT embedding_model, embedding_json FROM vector_chunks WHERE id = ?1",
             [chunk_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    if existing.is_none() {
+    let Some((embedding_model, existing)) = existing else {
         return Err(invalid(format!(
             "embed_vector_chunk references missing chunk {chunk_id}"
         )));
+    };
+    if is_nomic_embedding_model(&embedding_model) && embedding_convention.is_none() {
+        eprintln!(
+            "aver: chunk {chunk_id} has a legacy unprefixed nomic embedding; storing text only"
+        );
+        conn.execute(
+            "UPDATE vector_chunks SET embedding_json = NULL WHERE id = ?1",
+            [chunk_id],
+        )?;
+        remove_embedding_index(conn, chunk_id)?;
+        return Ok(Applied::Applied);
     }
     let Some(normalized) = normalize_stored_embedding(chunk_id, embedding)? else {
         conn.execute(
@@ -1197,12 +1229,11 @@ fn embed_vector_chunk(
     let embedding = normalized.as_slice();
     let embedding_json = serde_json::to_string(embedding)?;
     match existing {
-        None => unreachable!("missing chunks were rejected above"),
-        Some(Some(current)) if current == embedding_json => Ok(Applied::Duplicate),
-        Some(Some(_)) => Err(duplicate(format!(
+        Some(current) if current == embedding_json => Ok(Applied::Duplicate),
+        Some(_) => Err(duplicate(format!(
             "chunk_id={chunk_id} already has a different embedding"
         ))),
-        Some(None) => {
+        None => {
             conn.execute(
                 "UPDATE vector_chunks SET embedding_json = ?1 WHERE id = ?2",
                 params![embedding_json, chunk_id],
