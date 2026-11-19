@@ -1102,6 +1102,22 @@ fn normalize_stored_embedding(chunk_id: i64, embedding: &[f32]) -> Result<Option
     }
 }
 
+fn normalize_stored_embedding_json(
+    chunk_id: i64,
+    embedding_json: &str,
+) -> Result<Option<Vec<f32>>, Error> {
+    let embedding = match serde_json::from_str::<Vec<f32>>(embedding_json) {
+        Ok(embedding) => embedding,
+        Err(_) => {
+            eprintln!(
+                "aver: chunk {chunk_id} has an empty, non-finite or zero embedding; storing text only"
+            );
+            return Ok(None);
+        }
+    };
+    normalize_stored_embedding(chunk_id, &embedding)
+}
+
 fn remove_embedding_index(conn: &Connection, chunk_id: i64) -> Result<(), Error> {
     if has_table(conn, "vector_index")? {
         conn.execute("DELETE FROM vector_index WHERE chunk_id = ?1", [chunk_id])?;
@@ -1209,8 +1225,7 @@ pub(crate) fn normalize_vector_projection(conn: &Connection) -> Result<(), Error
         .collect::<Result<Vec<_>, _>>()?
     };
     for (chunk_id, embedding_json) in rows {
-        let embedding: Vec<f32> = serde_json::from_str(&embedding_json)?;
-        let Some(normalized) = normalize_stored_embedding(chunk_id, &embedding)? else {
+        let Some(normalized) = normalize_stored_embedding_json(chunk_id, &embedding_json)? else {
             conn.execute(
                 "UPDATE vector_chunks SET embedding_json = NULL WHERE id = ?1",
                 [chunk_id],

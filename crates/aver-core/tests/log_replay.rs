@@ -779,6 +779,85 @@ fn legacy_zero_vectors_are_unembedded_replayable_and_backfillable() {
 }
 
 #[test]
+fn legacy_null_vector_components_are_unembedded_and_backfillable() {
+    let dir = tempfile::tempdir().unwrap();
+    let (bad_chunk_id, valid_chunk_id) = {
+        let store = Store::open(dir.path()).unwrap();
+        let bad_claim_id = store
+            .add_claim(ClaimWrite::new("legacy", "has", "bad vector", "test"))
+            .unwrap();
+        let valid_claim_id = store
+            .add_claim(ClaimWrite::new("legacy", "has", "valid vector", "test"))
+            .unwrap();
+        let mut embedding = vec![0.0; aver_core::VECTOR_INDEX_DIM];
+        embedding[0] = 1.0;
+        let bad_chunk_id = store
+            .add_vector_chunk_with_embedding(
+                bad_claim_id,
+                "legacy has bad vector",
+                "test",
+                &embedding,
+            )
+            .unwrap();
+        let valid_chunk_id = store
+            .add_vector_chunk_with_embedding(
+                valid_claim_id,
+                "legacy has valid vector",
+                "test",
+                &embedding,
+            )
+            .unwrap();
+        store.close().unwrap();
+        (bad_chunk_id, valid_chunk_id)
+    };
+
+    let mut legacy_json = vec![serde_json::Value::from(1.0); aver_core::VECTOR_INDEX_DIM];
+    legacy_json[0] = serde_json::Value::Null;
+    let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.execute_batch("DROP TRIGGER vector_chunks_embedding_json_numeric_update")
+        .unwrap();
+    conn.execute(
+        "UPDATE vector_chunks SET embedding_json = ?1 WHERE id = ?2",
+        (serde_json::to_string(&legacy_json).unwrap(), bad_chunk_id),
+    )
+    .unwrap();
+    conn.execute_batch(include_str!(
+        "../migrations-legacy/0015_vector_embedding_numeric_checks.sql"
+    ))
+    .unwrap();
+    conn.pragma_update(None, "user_version", aver_core::SCHEMA_VERSION - 1)
+        .unwrap();
+    drop(conn);
+
+    let migrated = Store::open(dir.path()).expect("legacy null components must not block opening");
+    assert_eq!(
+        migrated.get_vector_chunk(bad_chunk_id).unwrap().embedding,
+        None
+    );
+    assert!(
+        migrated
+            .get_vector_chunk(valid_chunk_id)
+            .unwrap()
+            .embedding
+            .is_some()
+    );
+    assert_eq!(migrated.vector_index_row_count().unwrap(), 1);
+
+    let mut embedding = vec![0.0; aver_core::VECTOR_INDEX_DIM];
+    embedding[0] = 1.0;
+    let client = MockEmbeddingClient::new(embedding);
+    assert_eq!(migrated.backfill_vector_embeddings(&client).unwrap(), 1);
+    assert!(
+        migrated
+            .get_vector_chunk(bad_chunk_id)
+            .unwrap()
+            .embedding
+            .is_some()
+    );
+    assert_eq!(migrated.vector_index_row_count().unwrap(), 2);
+}
+
+#[test]
 fn old_log_lines_without_scope_and_provenance_still_replay() {
     let dir = tempfile::tempdir().unwrap();
     // Line format from before the scope/provenance fields were logged.
