@@ -61,7 +61,7 @@ fn ollama_stub() -> (String, mpsc::Receiver<String>) {
             .send(head + &String::from_utf8(request_body).unwrap())
             .unwrap();
 
-        let response_body = serde_json::json!({"embedding": vec![0.25; VECTOR_INDEX_DIM]});
+        let response_body = serde_json::json!({"embeddings": [vec![0.25; VECTOR_INDEX_DIM]]});
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{response_body}",
             response_body.to_string().len()
@@ -90,8 +90,9 @@ fn backfill_command_fills_missing_vectors_and_is_idempotent() {
         "backfill: embedded=1 indexed=1 total=1\n"
     );
     let request = requests.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert!(request.starts_with("POST /api/embeddings HTTP/1.1\r\n"));
-    assert!(request.contains("\"prompt\":\"aver stores vectors\""));
+    assert!(request.starts_with("POST /api/embed HTTP/1.1\r\n"));
+    assert!(request.contains("\"input\":\"aver stores vectors\""));
+    assert!(request.contains("\"truncate\":true"));
 
     let second = run(aver(dir.path()).env("AVER_EMBEDDING_URL", &url));
     assert_eq!(

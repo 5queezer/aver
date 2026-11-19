@@ -157,7 +157,7 @@ Vector chunks were only written by the maintenance tool `add_vector_chunk`, so t
 - Not covered automatically: `aver extract`, consolidation, and claims written before the setting was on. Run `aver backfill` with the same embedding-provider environment as the server to embed existing text-only chunks through the append-only `embed_vector_chunk` path. A failed embed-on-write leaves such a chunk, but claims written by `aver extract` or any other path without a chunk have nothing for backfill to embed.
 - Known limit: re-assertions add chunks with identical vectors, and chunks of superseded duplicates stay in the index.
 
-## Amendment (2026-11-19): unit-vector projection
+## Amendment (2026-11-19): unit-vector projection and Ollama `/api/embed`
 
 The original Ollama client used `/api/embeddings`, whose `nomic-embed-text`
 responses are not unit length. Measurements on the CPU endpoint found norms of
@@ -175,5 +175,8 @@ texts; hybrid recall was effectively keyword-only while still labelled hybrid.
   inside the existing migration transaction. Older binaries refuse version 124
   through the existing `SchemaTooNew` path. Replaying the unchanged log produces
   the same normalized projection as migrating an old store.
+- The Ollama client uses `POST /api/embed` with `model`, `input` and
+  `truncate: true`, and reads `embeddings[0]`. Truncation follows Ollama's
+  context handling instead of failing long local inputs with HTTP 500.
 - OpenAI-compatible over-length input is deliberately unchanged here: this
   amendment does not add OpenAI truncation, chunking or retry behavior.

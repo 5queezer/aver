@@ -7,6 +7,8 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
+use serde::de::Error as _;
+
 #[derive(Debug, thiserror::Error)]
 pub enum EmbeddingError {
     #[error("json: {0}")]
@@ -228,18 +230,23 @@ pub(crate) fn normalize_embedding(embedding: &[f32]) -> Result<Vec<f32>, Embeddi
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct OllamaEmbeddingRequest<'a> {
     model: &'a str,
-    prompt: &'a str,
+    input: &'a str,
+    truncate: bool,
 }
 
 impl<'a> OllamaEmbeddingRequest<'a> {
-    pub fn new(model: &'a str, prompt: &'a str) -> Self {
-        Self { model, prompt }
+    pub fn new(model: &'a str, input: &'a str) -> Self {
+        Self {
+            model,
+            input,
+            truncate: true,
+        }
     }
 }
 
 #[derive(Debug, Clone, serde::Deserialize, PartialEq)]
 pub struct OllamaEmbeddingResponse {
-    pub embedding: Vec<f32>,
+    pub embeddings: Vec<Vec<f32>>,
 }
 
 /// Default for [`OllamaEmbeddingClient::with_timeout`] and
@@ -321,7 +328,7 @@ impl OllamaEmbeddingClient {
     }
 
     pub fn embeddings_url(&self) -> String {
-        format!("{}/api/embeddings", self.base_url)
+        format!("{}/api/embed", self.base_url)
     }
 
     pub fn model(&self) -> &str {
@@ -334,7 +341,11 @@ impl OllamaEmbeddingClient {
 
     pub fn parse_response_body(&self, body: &str) -> Result<Vec<f32>, serde_json::Error> {
         let response: OllamaEmbeddingResponse = serde_json::from_str(body)?;
-        Ok(response.embedding)
+        response
+            .embeddings
+            .into_iter()
+            .next()
+            .ok_or_else(|| serde_json::Error::custom("Ollama returned no embeddings"))
     }
 
     pub fn embed(&self, prompt: &str) -> Result<Vec<f32>, EmbeddingError> {

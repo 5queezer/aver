@@ -10,40 +10,39 @@ use aver_core::vector::{
 use aver_core::vector::{OllamaEmbeddingClient, OllamaEmbeddingRequest, OllamaEmbeddingResponse};
 
 #[test]
-fn ollama_embedding_request_serializes_model_and_prompt() {
+fn ollama_embedding_request_serializes_model_input_and_truncation() {
     let request = OllamaEmbeddingRequest::new("nomic-embed-text", "auth service depends on stripe");
 
     let json = serde_json::to_value(&request).unwrap();
     assert_eq!(json["model"], "nomic-embed-text");
-    assert_eq!(json["prompt"], "auth service depends on stripe");
+    assert_eq!(json["input"], "auth service depends on stripe");
+    assert_eq!(json["truncate"], true);
 }
 
 #[test]
-fn ollama_embedding_response_deserializes_embedding_vector() {
+fn ollama_embedding_response_deserializes_first_embedding_vector() {
     let response: OllamaEmbeddingResponse =
-        serde_json::from_str(r#"{"embedding":[0.125,-0.5,1.0]}"#).unwrap();
+        serde_json::from_str(r#"{"embeddings":[[0.125,-0.5,1.0]]}"#).unwrap();
 
-    assert_eq!(response.embedding, vec![0.125, -0.5, 1.0]);
+    assert_eq!(response.embeddings, vec![vec![0.125, -0.5, 1.0]]);
 }
 
 #[test]
-fn ollama_embedding_client_normalizes_embeddings_endpoint_url() {
+fn ollama_embedding_client_normalizes_embed_endpoint_url() {
     let client = OllamaEmbeddingClient::new("http://localhost:11434/", "nomic-embed-text");
 
-    assert_eq!(
-        client.embeddings_url(),
-        "http://localhost:11434/api/embeddings"
-    );
+    assert_eq!(client.embeddings_url(), "http://localhost:11434/api/embed");
 }
 
 #[test]
-fn ollama_embedding_client_builds_request_with_configured_model() {
+fn ollama_embedding_client_builds_truncating_request_with_configured_model() {
     let client = OllamaEmbeddingClient::new("http://localhost:11434", "nomic-embed-text");
 
     let json = serde_json::to_value(client.request("remembered claim text")).unwrap();
 
     assert_eq!(json["model"], "nomic-embed-text");
-    assert_eq!(json["prompt"], "remembered claim text");
+    assert_eq!(json["input"], "remembered claim text");
+    assert_eq!(json["truncate"], true);
 }
 
 #[test]
@@ -111,10 +110,17 @@ fn ollama_embedding_client_parses_response_body_to_vector() {
     let client = OllamaEmbeddingClient::new("http://localhost:11434", "nomic-embed-text");
 
     let embedding = client
-        .parse_response_body(r#"{"embedding":[0.25,0.75]}"#)
+        .parse_response_body(r#"{"embeddings":[[0.25,0.75]]}"#)
         .unwrap();
 
     assert_eq!(embedding, vec![0.25, 0.75]);
+}
+
+#[test]
+fn ollama_embedding_client_rejects_empty_embedding_batch() {
+    let client = OllamaEmbeddingClient::new("http://localhost:11434", "nomic-embed-text");
+
+    assert!(client.parse_response_body(r#"{"embeddings":[]}"#).is_err());
 }
 
 #[test]
