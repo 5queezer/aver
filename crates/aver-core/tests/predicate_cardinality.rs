@@ -177,6 +177,32 @@ fn single_valued_retirement_does_not_revive_an_older_value() {
 }
 
 #[test]
+fn single_valued_duplicate_retirement_does_not_revive_the_older_duplicate() {
+    for consolidate_before_retirement in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let older = store
+            .add_claim(ClaimWrite::new("User", "prefers", "a", "chat"))
+            .unwrap();
+        let newer = store
+            .add_claim(ClaimWrite::new("User", "prefers", "a", "chat"))
+            .unwrap();
+        if consolidate_before_retirement {
+            store.consolidate_report().unwrap();
+        }
+        store.retire_claim(newer, "explicitly invalid").unwrap();
+        store.consolidate_report().unwrap();
+
+        assert_eq!(
+            statuses(&store, &[older, newer]),
+            vec![ClaimStatus::Superseded, ClaimStatus::Invalidated],
+            "consolidate_before_retirement={consolidate_before_retirement}"
+        );
+        assert_eq!(store.consolidate_report().unwrap().superseded, 0);
+    }
+}
+
+#[test]
 fn ontology_extensions_default_to_multi_valued() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

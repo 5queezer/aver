@@ -583,6 +583,17 @@ impl Store {
                           FROM claims
                          GROUP BY subject, predicate, object, object_kind, scope, context
                         HAVING COUNT(CASE WHEN status = 'ACTIVE' THEN 1 END) > 0
+                            AND (
+                                predicate NOT IN (
+                                    SELECT name FROM predicate_types WHERE cardinality = 'single'
+                                    UNION
+                                    SELECT predicate_alias.alias
+                                      FROM predicate_alias
+                                      JOIN predicate_types ON predicate_types.id = predicate_alias.predicate_id
+                                     WHERE predicate_types.cardinality = 'single'
+                                )
+                                OR MAX(id) IS NOT MAX(CASE WHEN status = 'INVALIDATED' THEN id END)
+                            )
                     )
                   ORDER BY id",
             )?;
