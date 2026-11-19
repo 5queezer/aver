@@ -23,6 +23,7 @@ use crate::ontology::ensure_entity_on;
 use crate::seed;
 use crate::store::VECTOR_INDEX_DIM;
 use crate::types::{AgentKind, HyperedgeParticipantInput, Provenance};
+use crate::vector::normalize_embedding;
 
 /// Outcome of applying one record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1097,6 +1098,8 @@ fn add_vector_chunk(
     embedding_model: &str,
     embedding: Option<&[f32]>,
 ) -> Result<Applied, Error> {
+    let normalized = embedding.map(normalize_embedding).transpose()?;
+    let embedding = normalized.as_deref();
     let embedding_json = embedding.map(serde_json::to_string).transpose()?;
     let existing: Option<(i64, String, String, Option<String>)> = conn
         .query_row(
@@ -1132,6 +1135,8 @@ fn embed_vector_chunk(
     chunk_id: i64,
     embedding: &[f32],
 ) -> Result<Applied, Error> {
+    let normalized = normalize_embedding(embedding)?;
+    let embedding = normalized.as_slice();
     let embedding_json = serde_json::to_string(embedding)?;
     let existing: Option<Option<String>> = conn
         .query_row(
@@ -1157,4 +1162,28 @@ fn embed_vector_chunk(
             Ok(Applied::Applied)
         }
     }
+}
+
+pub(crate) fn normalize_vector_projection(conn: &Connection) -> Result<(), Error> {
+    let rows = {
+        let mut stmt = conn.prepare(
+            "SELECT id, embedding_json FROM vector_chunks
+             WHERE embedding_json IS NOT NULL ORDER BY id",
+        )?;
+        stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?
+    };
+    for (chunk_id, embedding_json) in rows {
+        let embedding: Vec<f32> = serde_json::from_str(&embedding_json)?;
+        let normalized = normalize_embedding(&embedding)?;
+        let normalized_json = serde_json::to_string(&normalized)?;
+        conn.execute(
+            "UPDATE vector_chunks SET embedding_json = ?1 WHERE id = ?2",
+            params![normalized_json, chunk_id],
+        )?;
+        index_embedding(conn, chunk_id, &normalized, &normalized_json)?;
+    }
+    Ok(())
 }

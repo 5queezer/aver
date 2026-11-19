@@ -40,6 +40,8 @@ const BASELINE_VERSION: i64 = PRE_BASELINE_COUNT as i64 + LEGACY_MIGRATIONS.len(
 pub const SCHEMA_VERSION: i64 =
     BASELINE_VERSION + (MIGRATIONS.len() - PRE_BASELINE_COUNT - 1) as i64;
 
+const UNIT_EMBEDDINGS_VERSION: i64 = 124;
+
 /// SQL to apply, in order, to bring a store at user_version `current` up to
 /// [`SCHEMA_VERSION`]. Shared by [`Store::open`] and replay.
 pub(crate) fn pending_migrations(current: i64) -> Result<Vec<&'static str>, Error> {
@@ -210,6 +212,9 @@ impl Store {
         let current: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
         for sql in pending_migrations(current)? {
             conn.execute_batch(sql)?;
+        }
+        if current < UNIT_EMBEDDINGS_VERSION {
+            crate::apply::normalize_vector_projection(&conn)?;
         }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         seed_ontology(&conn, &memory_dir)?;

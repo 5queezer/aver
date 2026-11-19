@@ -15,6 +15,8 @@ pub enum EmbeddingError {
     Http(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("embedding vector must have a non-zero L2 norm")]
+    ZeroVector,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -206,6 +208,21 @@ pub fn cosine_similarity(left: &[f32], right: &[f32]) -> Option<f32> {
 
 pub fn normalized_cosine_score(left: &[f32], right: &[f32]) -> Option<f32> {
     cosine_similarity(left, right).map(|score| (score + 1.0) / 2.0)
+}
+
+pub(crate) fn normalize_embedding(embedding: &[f32]) -> Result<Vec<f32>, EmbeddingError> {
+    let norm = embedding
+        .iter()
+        .map(|component| f64::from(*component) * f64::from(*component))
+        .sum::<f64>()
+        .sqrt();
+    if norm == 0.0 {
+        return Err(EmbeddingError::ZeroVector);
+    }
+    Ok(embedding
+        .iter()
+        .map(|component| (f64::from(*component) / norm) as f32)
+        .collect())
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

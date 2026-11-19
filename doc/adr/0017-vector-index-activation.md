@@ -156,3 +156,24 @@ Vector chunks were only written by the maintenance tool `add_vector_chunk`, so t
 - The claim write (validation, privacy gate, log append, commit) completes first. The chunk is best effort through the existing logged chunk path, so no new record type exists and replay is unchanged. A provider failure leaves a text-only chunk and the result says `embedded: false`; nothing retries it.
 - Not covered automatically: `aver extract`, consolidation, and claims written before the setting was on. Run `aver backfill` with the same embedding-provider environment as the server to embed existing text-only chunks through the append-only `embed_vector_chunk` path. A failed embed-on-write leaves such a chunk, but claims written by `aver extract` or any other path without a chunk have nothing for backfill to embed.
 - Known limit: re-assertions add chunks with identical vectors, and chunks of superseded duplicates stay in the index.
+
+## Amendment (2026-11-19): unit-vector projection
+
+The original Ollama client used `/api/embeddings`, whose `nomic-embed-text`
+responses are not unit length. Measurements on the CPU endpoint found norms of
+20.7–22.7, while `/api/embed` returned norm 1.000. Raw L2 distances in `vec0`
+therefore made the `1 - distance / 2` similarity clamp to zero even for related
+texts; hybrid recall was effectively keyword-only while still labelled hybrid.
+
+- Every vector in the derived SQLite projection is L2-normalized at the single
+  `apply` boundary used by live writes, backfill and replay. The append-only log
+  retains the provider's original vector. Query embeddings are normalized before
+  either `vec0` or JSON scoring. Zero vectors are rejected before a live log
+  append and by the normalization boundary during replay.
+- Migration `0014_unit_embeddings` raises `user_version` to 124. `Store::open`
+  normalizes existing `vector_chunks` and rebuilds the derived `vector_index`
+  inside the existing migration transaction. Older binaries refuse version 124
+  through the existing `SchemaTooNew` path. Replaying the unchanged log produces
+  the same normalized projection as migrating an old store.
+- OpenAI-compatible over-length input is deliberately unchanged here: this
+  amendment does not add OpenAI truncation, chunking or retry behavior.

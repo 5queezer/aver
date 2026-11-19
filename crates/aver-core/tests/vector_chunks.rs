@@ -217,7 +217,14 @@ fn add_vector_chunk_with_embedding_persists_embedding_vector() {
         .unwrap();
     let chunk = store.get_vector_chunk(chunk_id).unwrap();
 
-    assert_eq!(chunk.embedding, Some(vec![0.1, 0.2, 0.3]));
+    let embedding = chunk.embedding.unwrap();
+    let norm = embedding
+        .iter()
+        .map(|value| value * value)
+        .sum::<f32>()
+        .sqrt();
+    assert!((norm - 1.0).abs() < 1e-6);
+    assert!(embedding[0] < embedding[1] && embedding[1] < embedding[2]);
 }
 
 #[test]
@@ -240,7 +247,14 @@ fn add_embedded_vector_chunk_for_claim_uses_embedding_client() {
     let chunk = store.get_vector_chunk(chunk_id).unwrap();
 
     assert_eq!(chunk.text, "auth_service depends_on stripe_sdk");
-    assert_eq!(chunk.embedding, Some(vec![0.4, 0.5]));
+    let embedding = chunk.embedding.unwrap();
+    let norm = embedding
+        .iter()
+        .map(|value| value * value)
+        .sum::<f32>()
+        .sqrt();
+    assert!((norm - 1.0).abs() < 1e-6);
+    assert!(embedding[0] < embedding[1]);
 }
 
 #[test]
@@ -568,6 +582,49 @@ fn add_vector_chunk_with_embedding_rejects_non_finite_embedding_values() {
         .expect_err("non-finite embeddings should be rejected");
 
     assert!(err.to_string().contains("embedding vector"));
+}
+
+#[test]
+fn add_vector_chunk_with_embedding_rejects_zero_vector() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim(ClaimWrite::new(
+            "auth_service",
+            "depends_on",
+            "stripe_sdk",
+            "test_session",
+        ))
+        .unwrap();
+
+    let result =
+        store.add_vector_chunk_with_embedding(claim_id, "auth", "nomic-embed-text", &[0.0, 0.0]);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn backfill_rejects_zero_vector_before_logging() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let claim_id = store
+        .add_claim(ClaimWrite::new(
+            "auth_service",
+            "depends_on",
+            "stripe_sdk",
+            "test_session",
+        ))
+        .unwrap();
+    let chunk_id = store
+        .add_vector_chunk(claim_id, "auth", "nomic-embed-text")
+        .unwrap();
+
+    let result = store.backfill_vector_embeddings(&MockEmbeddingClient::new(vec![0.0, 0.0]));
+
+    assert!(result.is_err());
+    assert_eq!(store.get_vector_chunk(chunk_id).unwrap().embedding, None);
+    let log = std::fs::read_to_string(dir.path().join("log.jsonl")).unwrap();
+    assert!(!log.contains("embed_vector_chunk"));
 }
 
 #[test]

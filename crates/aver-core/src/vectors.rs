@@ -208,6 +208,7 @@ impl Store {
         let mut count = 0;
         for (chunk_id, text) in rows {
             let embedding = client.embed(&text)?;
+            validate_embedding_vector(&embedding)?;
             let now = time::OffsetDateTime::now_utc().unix_timestamp();
             self.conn.execute_batch("BEGIN IMMEDIATE")?;
             let result = (|| -> Result<(), Error> {
@@ -302,6 +303,7 @@ impl Store {
     ) -> Result<Vec<VectorChunk>, Error> {
         validate_top_k(top_k)?;
         validate_embedding_vector(query_embedding)?;
+        let query_embedding = vector::normalize_embedding(query_embedding)?;
         let mut stmt = self.conn.prepare(
             "SELECT id, claim_id, text, embedding_model, embedding_json
                FROM vector_chunks
@@ -323,7 +325,7 @@ impl Store {
         for row in rows {
             let chunk = row?;
             if let Some(embedding) = &chunk.embedding
-                && let Some(score) = vector::normalized_cosine_score(query_embedding, embedding)
+                && let Some(score) = vector::normalized_cosine_score(&query_embedding, embedding)
             {
                 scored.push((score, chunk));
             }
@@ -351,7 +353,7 @@ impl Store {
         }
         validate_recall_query(query)?;
 
-        let query_embedding = client.embed(query)?;
+        let query_embedding = vector::normalize_embedding(&client.embed(query)?)?;
         self.rank_vector_chunks_by_embedding(&query_embedding, top_k)
     }
 
@@ -512,11 +514,12 @@ impl Store {
     /// match `normalized_cosine_score`. Off-dimension queries and unindexed
     /// installs fall back to the JSON full scan.
     fn vector_scores(&self, embedding: &[f32], top_k: usize) -> Result<HashMap<i64, f64>, Error> {
+        let embedding = vector::normalize_embedding(embedding)?;
         let mut vector_scores: HashMap<i64, f64> = HashMap::new();
         let use_vec_index = embedding.len() == VECTOR_INDEX_DIM && self.has_table("vector_index");
         if use_vec_index {
             let fanout = top_k.saturating_mul(4).max(64);
-            let q_json = serde_json::to_string(embedding)?;
+            let q_json = serde_json::to_string(&embedding)?;
             let mut stmt = self.conn.prepare(
                 "SELECT vc.claim_id, vi.distance
                    FROM vector_index vi
@@ -549,7 +552,7 @@ impl Store {
             for row in rows {
                 let (claim_id, embedding_json) = row?;
                 if let Some(stored) = parse_optional_embedding(embedding_json)?
-                    && let Some(score) = vector::normalized_cosine_score(embedding, &stored)
+                    && let Some(score) = vector::normalized_cosine_score(&embedding, &stored)
                 {
                     vector_scores
                         .entry(claim_id)
@@ -570,4 +573,40 @@ fn parse_optional_embedding(value: Option<String>) -> rusqlite::Result<Option<Ve
             })
         })
         .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ClaimWrite;
+
+    #[test]
+    fn vector_scores_normalize_stored_and_query_embeddings() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let unrelated_id = store
+            .add_claim(ClaimWrite::new("unrelated", "is", "other", "test"))
+            .unwrap();
+        let related_id = store
+            .add_claim(ClaimWrite::new("related", "is", "match", "test"))
+            .unwrap();
+        let mut unrelated = vec![0.0; VECTOR_INDEX_DIM];
+        unrelated[0] = -20.0;
+        let mut related = vec![0.0; VECTOR_INDEX_DIM];
+        related[0] = 20.0;
+        store
+            .add_vector_chunk_with_embedding(unrelated_id, "unrelated", "test", &unrelated)
+            .unwrap();
+        store
+            .add_vector_chunk_with_embedding(related_id, "related", "test", &related)
+            .unwrap();
+        let mut query = vec![0.0; VECTOR_INDEX_DIM];
+        query[0] = 14.0;
+        query[1] = 14.0;
+
+        let scores = store.vector_scores(&query, 8).unwrap();
+
+        assert!(scores[&related_id] > 0.0);
+        assert!(scores[&related_id] > scores[&unrelated_id]);
+    }
 }

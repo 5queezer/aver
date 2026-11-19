@@ -18,7 +18,10 @@ pub(crate) fn validate_embedding_model(value: &str) -> Result<(), Error> {
 }
 
 pub(crate) fn validate_embedding_vector(value: &[f32]) -> Result<(), Error> {
-    if value.is_empty() || value.iter().any(|component| !component.is_finite()) {
+    if value.is_empty()
+        || value.iter().any(|component| !component.is_finite())
+        || value.iter().all(|component| *component == 0.0)
+    {
         Err(Error::InvalidEmbeddingVector)
     } else {
         Ok(())

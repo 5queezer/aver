@@ -11,7 +11,7 @@ use std::path::Path;
 
 use aver_core::{
     AgentKind, ClaimStatus, Provenance, ReplayMode, Store, replay, replay_with_mode,
-    vector::MockEmbeddingClient,
+    retrieval::HybridWeights, vector::MockEmbeddingClient,
 };
 use rusqlite::Connection;
 
@@ -609,6 +609,100 @@ fn vector_chunks_are_rebuilt_by_replay() {
     assert!(chunks.iter().all(|chunk| chunk.embedding.is_some()));
     assert_eq!(store.vector_index_row_count().unwrap(), 2);
     assert_eq!(store.vector_chunk_embedding_status().unwrap(), (2, 2));
+}
+
+#[test]
+fn legacy_unnormalized_vectors_match_replay_after_migration() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut unrelated = vec![0.0; aver_core::VECTOR_INDEX_DIM];
+    unrelated[0] = -20.0;
+    let mut related = vec![0.0; aver_core::VECTOR_INDEX_DIM];
+    related[0] = 20.0;
+    let (unrelated_id, related_id, unrelated_chunk_id, related_chunk_id) = {
+        let store = Store::open(dir.path()).unwrap();
+        let unrelated_id = store
+            .add_claim(ClaimWrite::new("unrelated", "is", "other", "test"))
+            .unwrap();
+        let related_id = store
+            .add_claim(ClaimWrite::new("related", "is", "match", "test"))
+            .unwrap();
+        let unrelated_chunk_id = store
+            .add_vector_chunk_with_embedding(unrelated_id, "unrelated", "test", &unrelated)
+            .unwrap();
+        let related_chunk_id = store
+            .add_vector_chunk_with_embedding(related_id, "related", "test", &related)
+            .unwrap();
+        store.close().unwrap();
+        (
+            unrelated_id,
+            related_id,
+            unrelated_chunk_id,
+            related_chunk_id,
+        )
+    };
+    let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
+    conn.execute("DELETE FROM vector_index", []).unwrap();
+    for (chunk_id, embedding) in [
+        (unrelated_chunk_id, &unrelated),
+        (related_chunk_id, &related),
+    ] {
+        let json = serde_json::to_string(embedding).unwrap();
+        conn.execute(
+            "UPDATE vector_chunks SET embedding_json = ?1 WHERE id = ?2",
+            (&json, chunk_id),
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO vector_index(chunk_id, embedding) VALUES (?1, ?2)",
+            (chunk_id, &json),
+        )
+        .unwrap();
+    }
+    conn.pragma_update(None, "user_version", aver_core::SCHEMA_VERSION - 1)
+        .unwrap();
+    drop(conn);
+
+    let migrated = Store::open(dir.path()).unwrap();
+    let migrated_chunks = migrated.list_vector_chunks_for_claim(related_id).unwrap();
+    let migrated_embedding = migrated_chunks[0].embedding.as_ref().unwrap();
+    let norm = migrated_embedding
+        .iter()
+        .map(|component| component * component)
+        .sum::<f32>()
+        .sqrt();
+    assert!((norm - 1.0).abs() < 1e-6);
+    let mut query = vec![0.0; aver_core::VECTOR_INDEX_DIM];
+    query[0] = 14.0;
+    query[1] = 14.0;
+    let client = MockEmbeddingClient::new(query);
+    let ranked = migrated
+        .recall_hybrid_claims(
+            "semantic lookup",
+            &client,
+            2,
+            HybridWeights::for_query("semantic lookup"),
+            0,
+        )
+        .unwrap();
+    assert_eq!(ranked[0].id, related_id);
+    assert_eq!(migrated.vector_index_row_count().unwrap(), 2);
+    migrated.close().unwrap();
+
+    delete_db(dir.path());
+    replay(dir.path(), false).unwrap();
+    let replayed = Store::open(dir.path()).unwrap();
+    assert_eq!(
+        replayed.list_vector_chunks_for_claim(related_id).unwrap(),
+        migrated_chunks
+    );
+    assert_eq!(
+        replayed.list_vector_chunks_for_claim(unrelated_id).unwrap()[0]
+            .embedding
+            .as_ref()
+            .unwrap()[0],
+        -1.0
+    );
+    assert_eq!(replayed.vector_index_row_count().unwrap(), 2);
 }
 
 #[test]

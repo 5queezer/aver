@@ -431,9 +431,6 @@ fn an_upgraded_store_equals_its_replay() {
     seeded(dir.path(), &lines).close().unwrap();
     // Back to the schema before migration 0013, as an older binary left it.
     let conn = Connection::open(dir.path().join("db.sqlite")).unwrap();
-    let version: i64 = conn
-        .pragma_query_value(None, "user_version", |r| r.get(0))
-        .unwrap();
     conn.execute_batch(
         "DROP INDEX claims_scope_context;
          DROP TRIGGER claims_validity_window_insert;
@@ -444,8 +441,7 @@ fn an_upgraded_store_equals_its_replay() {
          ALTER TABLE claims DROP COLUMN context;",
     )
     .unwrap();
-    conn.pragma_update(None, "user_version", version - 1)
-        .unwrap();
+    conn.pragma_update(None, "user_version", 122).unwrap();
     drop(conn);
     Store::open(dir.path()).unwrap().close().unwrap();
     let upgraded = dump(dir.path());
