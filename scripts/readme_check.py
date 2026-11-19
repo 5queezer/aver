@@ -92,6 +92,15 @@ def check_quickstart(readme):
     os.makedirs(target, exist_ok=True)
     work = tempfile.mkdtemp(prefix="readme-check-", dir=target)
     try:
+        install = os.path.join(work, "install")
+        env = {
+            **os.environ,
+            "CARGO_TARGET_DIR": target,
+            "CARGO_INSTALL_ROOT": install,
+            "PATH": os.path.join(install, "bin") + os.pathsep + os.environ.get("PATH", ""),
+        }
+        if os.path.commonpath([work, env["CARGO_INSTALL_ROOT"]]) != work:
+            return ["quickstart install root escapes the private work directory"]
         archive = subprocess.run(
             ["git", "-C", ROOT, "archive", "--format=tar", "HEAD"],
             stdout=subprocess.PIPE,
@@ -102,7 +111,7 @@ def check_quickstart(readme):
         run = subprocess.run(
             ["bash", "-euo", "pipefail", "-c", commands],
             cwd=work,
-            env={**os.environ, "CARGO_TARGET_DIR": target},
+            env=env,
             stdout=subprocess.PIPE,
             text=True,
         )
