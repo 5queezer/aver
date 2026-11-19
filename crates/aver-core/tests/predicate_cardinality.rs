@@ -2,7 +2,7 @@
 //! object only for single-valued predicates; multi-valued predicates such
 //! as `defines` and `calls` keep every object.
 
-use aver_core::{ClaimStatus, ClaimWrite, Store};
+use aver_core::{ClaimStatus, ClaimWrite, Store, replay};
 use rusqlite::Connection;
 
 fn statuses(store: &Store, ids: &[i64]) -> Vec<ClaimStatus> {
@@ -77,6 +77,102 @@ fn single_valued_predicates_are_superseded_by_a_newer_object() {
             ClaimStatus::Superseded,
             ClaimStatus::Active,
         ]
+    );
+}
+
+fn assert_newest_single_valued_claim_survives(values: &[&str]) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let ids = values
+        .iter()
+        .map(|value| {
+            store
+                .add_claim(ClaimWrite::new("User", "prefers", *value, "chat"))
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    let report = store.consolidate_report().unwrap();
+    assert_eq!(report.superseded, values.len() - 1);
+    let expected = ids
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            if index + 1 == ids.len() {
+                ClaimStatus::Active
+            } else {
+                ClaimStatus::Superseded
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(statuses(&store, &ids), expected);
+
+    let second = store.consolidate_report().unwrap();
+    assert_eq!(second.superseded, 0);
+    assert_eq!(statuses(&store, &ids), expected);
+    store.close().unwrap();
+
+    std::fs::remove_file(dir.path().join("db.sqlite")).unwrap();
+    let _ = std::fs::remove_file(dir.path().join("db.sqlite-wal"));
+    let _ = std::fs::remove_file(dir.path().join("db.sqlite-shm"));
+    replay(dir.path(), false).unwrap();
+    let replayed = Store::open(dir.path()).unwrap();
+    assert_eq!(statuses(&replayed, &ids), expected);
+}
+
+#[test]
+fn single_valued_reversion_keeps_the_newest_write_active() {
+    assert_newest_single_valued_claim_survives(&["a", "b", "a"]);
+}
+
+#[test]
+fn single_valued_duplicates_before_a_change_still_leave_the_new_value() {
+    assert_newest_single_valued_claim_survives(&["a", "a", "b"]);
+}
+
+#[test]
+fn single_valued_trailing_duplicates_keep_the_newest_duplicate() {
+    assert_newest_single_valued_claim_survives(&["b", "a", "a"]);
+}
+
+#[test]
+fn single_valued_multiple_reversions_keep_the_newest_write() {
+    assert_newest_single_valued_claim_survives(&["a", "b", "c", "b", "a"]);
+}
+
+#[test]
+fn single_valued_retirement_does_not_revive_an_older_value() {
+    let direct_dir = tempfile::tempdir().unwrap();
+    let direct = Store::open(direct_dir.path()).unwrap();
+    let direct_a = direct
+        .add_claim(ClaimWrite::new("User", "prefers", "a", "chat"))
+        .unwrap();
+    let direct_b = direct
+        .add_claim(ClaimWrite::new("User", "prefers", "b", "chat"))
+        .unwrap();
+    direct.retire_claim(direct_b, "explicitly invalid").unwrap();
+    direct.consolidate_report().unwrap();
+    assert_eq!(
+        statuses(&direct, &[direct_a, direct_b]),
+        vec![ClaimStatus::Superseded, ClaimStatus::Invalidated]
+    );
+
+    let consolidated_dir = tempfile::tempdir().unwrap();
+    let consolidated = Store::open(consolidated_dir.path()).unwrap();
+    let consolidated_a = consolidated
+        .add_claim(ClaimWrite::new("User", "prefers", "a", "chat"))
+        .unwrap();
+    let consolidated_b = consolidated
+        .add_claim(ClaimWrite::new("User", "prefers", "b", "chat"))
+        .unwrap();
+    consolidated.consolidate_report().unwrap();
+    consolidated
+        .retire_claim(consolidated_b, "explicitly invalid")
+        .unwrap();
+    consolidated.consolidate_report().unwrap();
+    assert_eq!(
+        statuses(&consolidated, &[consolidated_a, consolidated_b]),
+        statuses(&direct, &[direct_a, direct_b])
     );
 }
 

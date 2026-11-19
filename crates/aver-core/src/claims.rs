@@ -566,12 +566,24 @@ impl Store {
             let duplicate_ids = self.claim_ids_matching(
                 "SELECT id
                    FROM claims
-                  WHERE id NOT IN (
-                        SELECT MIN(id)
+                  WHERE status = 'ACTIVE'
+                    AND id NOT IN (
+                        SELECT CASE
+                                 WHEN predicate IN (
+                                     SELECT name FROM predicate_types WHERE cardinality = 'single'
+                                     UNION
+                                     SELECT predicate_alias.alias
+                                       FROM predicate_alias
+                                       JOIN predicate_types ON predicate_types.id = predicate_alias.predicate_id
+                                      WHERE predicate_types.cardinality = 'single'
+                                 )
+                                 THEN MAX(CASE WHEN status = 'ACTIVE' THEN id END)
+                                 ELSE MIN(CASE WHEN status = 'ACTIVE' THEN id END)
+                               END
                           FROM claims
                          GROUP BY subject, predicate, object, object_kind, scope, context
+                        HAVING COUNT(CASE WHEN status = 'ACTIVE' THEN 1 END) > 0
                     )
-                    AND status = 'ACTIVE'
                   ORDER BY id",
             )?;
             let duplicate_changed = self.supersede_claim_ids(&duplicate_ids, now)?;
@@ -646,7 +658,19 @@ impl Store {
 
     fn merge_duplicate_source_refs(&self) -> Result<usize, Error> {
         let mut stmt = self.conn.prepare(
-            "SELECT subject, predicate, object, object_kind, scope, context, MIN(id)
+            "SELECT subject, predicate, object, object_kind, scope, context,
+                    CASE
+                      WHEN predicate IN (
+                          SELECT name FROM predicate_types WHERE cardinality = 'single'
+                          UNION
+                          SELECT predicate_alias.alias
+                            FROM predicate_alias
+                            JOIN predicate_types ON predicate_types.id = predicate_alias.predicate_id
+                           WHERE predicate_types.cardinality = 'single'
+                      )
+                      THEN COALESCE(MAX(CASE WHEN status = 'ACTIVE' THEN id END), MIN(id))
+                      ELSE COALESCE(MIN(CASE WHEN status = 'ACTIVE' THEN id END), MIN(id))
+                    END
                FROM claims
               GROUP BY subject, predicate, object, object_kind, scope, context
              HAVING COUNT(*) > 1",

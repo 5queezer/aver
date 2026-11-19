@@ -75,6 +75,7 @@ Consolidation now appends a `reverify_claim` record (`ts`, `claim_id`, `verified
 - **Retired re-assertions do not count.** `verified_at` is taken over the group's ACTIVE and SUPERSEDED rows; a row that was retired (INVALIDATED) is not evidence and cannot refresh the survivor.
 - **Privacy.** The record holds ids and timestamps only. Claim content passed the privacy gate when its own `add_claim` line was written.
 - **Before consolidation** the re-assertion row is itself ACTIVE with a fresh write time, so recency already favours the triple.
+- **Survivor update (2026-11-19).** ADR-0005 now selects the newest ACTIVE row for a single-valued duplicate group so reversions and trailing duplicates retain the latest write. Multi-valued groups select the oldest ACTIVE row rather than the oldest historical row, so a re-assertion after retirement can survive. The reverify rule applies to whichever survivor consolidation selects.
 - **Older binaries** do not know the `reverify_claim` kind: strict replay stops with `replay: unknown record kind: reverify_claim`, lenient replay quarantines the line and the claim keeps its earlier verification time. A log that contains the record needs this version or later to replay strictly.
 
 Not part of this amendment: read logging, access counters, and ACT-R base-level activation. Recall remains a pure read; age comes only from write-side records.

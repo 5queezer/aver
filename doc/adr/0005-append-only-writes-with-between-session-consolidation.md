@@ -46,3 +46,11 @@ If consolidation crashes, replay from the last checkpoint. The log is the source
 - (−) Stale facts persist between consolidation runs.
 - (−) Two-stage write means "did the agent actually remember it?" is ambiguous between `appended_to_log` and `consolidated_into_graph`. Tools must surface this.
 - (−) Long log + replay can become slow at scale; need checkpointing and segment compaction.
+
+## Amendment (2026-11-19): newest active single-valued survivor
+
+The original duplicate pass kept the oldest row in every exact-triple group. For a single-valued pair whose values run A → B → A, that superseded the newest A as a duplicate; the conflict pass then treated that already-superseded A as a newer replacement for B, leaving no ACTIVE claim.
+
+Consolidation now keeps the newest ACTIVE row in a single-valued duplicate group and the oldest ACTIVE row in a multi-valued group. The multi-valued change lets a re-assertion after retirement survive instead of selecting a retired historical row. Single-valued conflict replacement considers newer claims regardless of status, so retiring the newest value does not revive an older value differently depending on consolidation timing. For sequences without explicit retirement this leaves exactly one ACTIVE claim per single-valued `(subject, predicate, scope, context)` pair: the newest by write order. A → A → B still leaves B, B → A → A leaves the newest A, and multi-valued accumulation is otherwise unchanged.
+
+Lifecycle outcomes remain explicit append-only records; replay applies those records rather than recomputing consolidation. A store already consolidated by the old rule is not silently repaired by running the new consolidation: in particular, an all-SUPERSEDED A → B → A pair has no ACTIVE row to select. Re-assert the current value through the normal claim-write path and consolidate again to create a new ACTIVE latest row. No migration or history rewrite is required.
